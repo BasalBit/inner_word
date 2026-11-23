@@ -190,7 +190,11 @@ fn a_message_waits_for_the_host_before_it_is_sent(cx: &mut TestAppContext) {
     cx.run_until_parked();
     let sent: Vec<String> = ws.fake.sent().into_iter().map(|sent| sent.text).collect();
     assert_eq!(sent.len(), 2, "{sent:?}");
-    assert!(sent[0].contains("Chapter 1 as the host has it."), "{}", sent[0]);
+    assert!(
+        sent[0].contains("Chapter 1 as the host has it."),
+        "{}",
+        sent[0]
+    );
     assert!(sent[0].ends_with("What is it now?"), "{}", sent[0]);
     assert!(sent[1].ends_with("And the rest?"), "{}", sent[1]);
     ws.panel.read_with(cx, |panel, cx| {
@@ -212,8 +216,9 @@ fn a_message_waits_for_the_host_before_it_is_sent(cx: &mut TestAppContext) {
         assert!(!panel.is_holding_a_message());
         assert_eq!(panel.composer().read(cx).text(cx), "Never mind");
     });
-    ws.panel
-        .update(cx, |panel, cx| panel.composer().update(cx, |c, cx| c.set_text("", cx)));
+    ws.panel.update(cx, |panel, cx| {
+        panel.composer().update(cx, |c, cx| c.set_text("", cx))
+    });
 
     // Another document while it waits: the message was about the other one.
     ws.send("About chapter one", cx);
@@ -225,15 +230,21 @@ fn a_message_waits_for_the_host_before_it_is_sent(cx: &mut TestAppContext) {
         assert!(panel.transcript().is_empty());
         assert_eq!(panel.composer().read(cx).text(cx), "About chapter one");
     });
-    ws.panel
-        .update(cx, |panel, cx| panel.composer().update(cx, |c, cx| c.set_text("", cx)));
+    ws.panel.update(cx, |panel, cx| {
+        panel.composer().update(cx, |c, cx| c.set_text("", cx))
+    });
 
     // Nothing to wait for: the message goes at once.
     waits.set(false);
     ws.fake.reply("At once.");
     ws.send("Now?", cx);
     assert_eq!(ws.fake.sent().len(), 3);
-    assert!(ws.fake.last_sent().unwrap().contains("Chapter 2 begins here."));
+    assert!(
+        ws.fake
+            .last_sent()
+            .unwrap()
+            .contains("Chapter 2 begins here.")
+    );
 }
 
 // ----- errors and the other states ---------------------------------------------------

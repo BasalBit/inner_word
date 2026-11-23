@@ -32,16 +32,29 @@ pub enum Message {
     /// The scene is on the canvas (after the first load and after every reload): the
     /// version of Excalidraw, how many elements, and the `ContentStamp` of the stored scene
     /// it loaded (the session's base).
-    Ready { excalidraw: String, elements: u64, stamp: String },
+    Ready {
+        excalidraw: String,
+        elements: u64,
+        stamp: String,
+    },
     /// The drawing changed: the scene as the page has it (`elements`, `appState`, `files`
     /// without `file` and without `dataURL`), and its rev.
     Scene { rev: u64, scene: Box<RawValue> },
     /// One slice of a scene longer than one message: `count` slices of one `rev`, `index`
     /// from 0, whose texts joined are the scene's JSON. A newer `rev` drops an unfinished set.
-    ScenePart { rev: u64, index: u32, count: u32, text: String },
+    ScenePart {
+        rev: u64,
+        index: u32,
+        count: u32,
+        text: String,
+    },
     /// A picture the app has not had (a paste), before the first scene that names it.
     /// `mime_type` is a hint only: the bytes decide what is stored.
-    File { id: String, mime_type: String, data_url: String },
+    File {
+        id: String,
+        mime_type: String,
+        data_url: String,
+    },
     /// What the page holds that the app may not have yet.
     Status(Status),
     /// The shape library changed: Excalidraw's `LibraryItems` and the library's own counter.
@@ -52,7 +65,11 @@ pub enum Message {
     /// it stored and says it is too large to keep (4.15), as for one over
     /// `MAX_LIBRARY_BYTES`; the page does not count it as posted, so `collect` brings it
     /// whole at the end.
-    Library { lrev: u64, items: Box<RawValue>, too_large: bool },
+    Library {
+        lrev: u64,
+        items: Box<RawValue>,
+        too_large: bool,
+    },
     /// Excalidraw's `?` or its menu's Keyboard Shortcuts: the app opens its list of shortcuts
     /// at "On a whiteboard" (and nothing else).
     Help,
@@ -68,17 +85,33 @@ impl Message {
             serde_json::to_string(value).unwrap_or_else(|_| "\"\"".to_string())
         }
         match self {
-            Message::Ready { excalidraw, elements, stamp } => format!(
+            Message::Ready {
+                excalidraw,
+                elements,
+                stamp,
+            } => format!(
                 r#"{{"v":1,"kind":"ready","excalidraw":{},"elements":{elements},"stamp":{}}}"#,
                 text(excalidraw),
                 text(stamp)
             ),
-            Message::Scene { rev, scene } => format!(r#"{{"v":1,"kind":"scene","rev":{rev},"scene":{}}}"#, scene.get()),
-            Message::ScenePart { rev, index, count, text: part } => format!(
+            Message::Scene { rev, scene } => format!(
+                r#"{{"v":1,"kind":"scene","rev":{rev},"scene":{}}}"#,
+                scene.get()
+            ),
+            Message::ScenePart {
+                rev,
+                index,
+                count,
+                text: part,
+            } => format!(
                 r#"{{"v":1,"kind":"scenePart","rev":{rev},"index":{index},"count":{count},"text":{}}}"#,
                 text(part)
             ),
-            Message::File { id, mime_type, data_url } => format!(
+            Message::File {
+                id,
+                mime_type,
+                data_url,
+            } => format!(
                 r#"{{"v":1,"kind":"file","id":{},"mimeType":{},"dataURL":{}}}"#,
                 text(id),
                 text(mime_type),
@@ -88,10 +121,25 @@ impl Message {
                 let fields = serde_json::to_string(status).unwrap_or_else(|_| "{}".to_string());
                 format!(r#"{{"v":1,"kind":"status",{}"#, &fields[1..])
             }
-            Message::Library { lrev, too_large: true, .. } => format!(r#"{{"v":1,"kind":"library","lrev":{lrev},"items":null,"tooLarge":true}}"#),
-            Message::Library { lrev, items, too_large: false } => format!(r#"{{"v":1,"kind":"library","lrev":{lrev},"items":{}}}"#, items.get()),
+            Message::Library {
+                lrev,
+                too_large: true,
+                ..
+            } => {
+                format!(r#"{{"v":1,"kind":"library","lrev":{lrev},"items":null,"tooLarge":true}}"#)
+            }
+            Message::Library {
+                lrev,
+                items,
+                too_large: false,
+            } => format!(
+                r#"{{"v":1,"kind":"library","lrev":{lrev},"items":{}}}"#,
+                items.get()
+            ),
             Message::Help => r#"{"v":1,"kind":"help"}"#.to_string(),
-            Message::Error { message } => format!(r#"{{"v":1,"kind":"error","message":{}}}"#, text(message)),
+            Message::Error { message } => {
+                format!(r#"{{"v":1,"kind":"error","message":{}}}"#, text(message))
+            }
         }
     }
 }
@@ -180,12 +228,18 @@ struct WireStatus {
 }
 
 fn number<'de, D: Deserializer<'de>>(deserializer: D) -> Result<f64, D::Error> {
-    Ok(Option::<f64>::deserialize(deserializer)?.filter(|n| n.is_finite()).unwrap_or(0.0))
+    Ok(Option::<f64>::deserialize(deserializer)?
+        .filter(|n| n.is_finite())
+        .unwrap_or(0.0))
 }
 
 fn count<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u64, D::Error> {
     let value = Option::<f64>::deserialize(deserializer)?.unwrap_or(0.0);
-    Ok(if value.is_finite() && value > 0.0 { value as u64 } else { 0 })
+    Ok(if value.is_finite() && value > 0.0 {
+        value as u64
+    } else {
+        0
+    })
 }
 
 impl From<WireStatus> for Status {
@@ -214,7 +268,11 @@ impl From<&Status> for WireStatus {
             posted: status.posted,
             editing: status.editing,
             composing: status.composing,
-            pointer: if status.pointer_down { Pointer::Down } else { Pointer::Up },
+            pointer: if status.pointer_down {
+                Pointer::Down
+            } else {
+                Pointer::Up
+            },
             zoom: status.zoom,
             scroll_x: status.scroll_x,
             scroll_y: status.scroll_y,
@@ -269,13 +327,21 @@ struct Head {
 pub fn parse(body: &str) -> Result<Message, String> {
     let mended = well_formed(body);
     let body: &str = &mended;
-    let head: Head = serde_json::from_str(body).map_err(|error| format!("a message of the whiteboard is not one: {error}"))?;
+    let head: Head = serde_json::from_str(body)
+        .map_err(|error| format!("a message of the whiteboard is not one: {error}"))?;
     match head.v {
         Some(VERSION) => {}
-        Some(other) => return Err(format!("a message of the whiteboard has version {other}, this app reads {VERSION}")),
+        Some(other) => {
+            return Err(format!(
+                "a message of the whiteboard has version {other}, this app reads {VERSION}"
+            ));
+        }
         None => return Err("a message of the whiteboard has no version".to_string()),
     }
-    let kind = head.kind.as_deref().ok_or("a message of the whiteboard has no kind")?;
+    let kind = head
+        .kind
+        .as_deref()
+        .ok_or("a message of the whiteboard has no kind")?;
     let needs = |field: &str| format!("a {kind} message of the whiteboard has no {field}");
     Ok(match kind {
         "ready" => Message::Ready {
@@ -297,7 +363,9 @@ pub fn parse(body: &str) -> Result<Message, String> {
             let index = head.index.ok_or_else(|| needs("index"))?;
             let count = head.count.ok_or_else(|| needs("count"))?;
             if count == 0 || index >= count {
-                return Err(format!("a scenePart message of the whiteboard is part {index} of {count}"));
+                return Err(format!(
+                    "a scenePart message of the whiteboard is part {index} of {count}"
+                ));
             }
             Message::ScenePart {
                 rev: head.rev.ok_or_else(|| needs("rev"))?,
@@ -307,32 +375,48 @@ pub fn parse(body: &str) -> Result<Message, String> {
             }
         }
         "file" => Message::File {
-            id: head.id.filter(|id| !id.is_empty()).ok_or_else(|| needs("id"))?,
+            id: head
+                .id
+                .filter(|id| !id.is_empty())
+                .ok_or_else(|| needs("id"))?,
             mime_type: head.mime_type.unwrap_or_default(),
             data_url: head.data_url.ok_or_else(|| needs("dataURL"))?,
         },
-        "status" => Message::Status(serde_json::from_str(body).map_err(|error| format!("a status message of the whiteboard cannot be read: {error}"))?),
+        "status" => Message::Status(serde_json::from_str(body).map_err(|error| {
+            format!("a status message of the whiteboard cannot be read: {error}")
+        })?),
         "library" => {
             let lrev = head.lrev.ok_or_else(|| needs("lrev"))?;
             if head.too_large == Some(true) {
                 Message::Library {
                     lrev,
-                    items: RawValue::from_string("null".to_string()).map_err(|error| error.to_string())?,
+                    items: RawValue::from_string("null".to_string())
+                        .map_err(|error| error.to_string())?,
                     too_large: true,
                 }
             } else {
                 let items = head.items.ok_or_else(|| needs("items"))?;
                 if !items.get().trim_start().starts_with('[') {
-                    return Err("a library message of the whiteboard holds no list of items".to_string());
+                    return Err(
+                        "a library message of the whiteboard holds no list of items".to_string()
+                    );
                 }
-                Message::Library { lrev, items, too_large: false }
+                Message::Library {
+                    lrev,
+                    items,
+                    too_large: false,
+                }
             }
         }
         "help" => Message::Help,
         "error" => Message::Error {
             message: head.message.unwrap_or_default(),
         },
-        other => return Err(format!("a message of the whiteboard of an unknown kind: {other}")),
+        other => {
+            return Err(format!(
+                "a message of the whiteboard of an unknown kind: {other}"
+            ));
+        }
     })
 }
 
@@ -358,7 +442,9 @@ pub(crate) fn well_formed(text: &str) -> std::borrow::Cow<'_, str> {
         }
         let unit = |at: usize| -> Option<u16> {
             let hex = text.get(at + 2..at + 6)?;
-            u16::from_str_radix(hex, 16).ok().filter(|_| hex.bytes().all(|b| b.is_ascii_hexdigit()))
+            u16::from_str_radix(hex, 16)
+                .ok()
+                .filter(|_| hex.bytes().all(|b| b.is_ascii_hexdigit()))
         };
         let Some(first) = unit(i) else {
             i += 2;

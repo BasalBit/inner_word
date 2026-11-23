@@ -88,9 +88,7 @@ pub(crate) fn parse_lenient(text: &str) -> Result<(Value, bool), serde_json::Err
 
 /// The warning for a value [`parse_lenient`] cut.
 pub(crate) fn cut_warning(what: &str) -> String {
-    format!(
-        "Data of the {what} nested deeper than {MAX_DEPTH} levels was left out (read as null)."
-    )
+    format!("Data of the {what} nested deeper than {MAX_DEPTH} levels was left out (read as null).")
 }
 
 /// JSON text with every array or object that opens below `max` open containers replaced by

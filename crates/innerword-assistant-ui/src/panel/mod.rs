@@ -799,10 +799,7 @@ impl AssistantPanel {
             held.texts.push(text);
             return;
         }
-        let task = self
-            .before_send
-            .as_ref()
-            .and_then(|hook| hook(window, cx));
+        let task = self.before_send.as_ref().and_then(|hook| hook(window, cx));
         if let Some(task) = task {
             let wait = cx.spawn_in(window, async move |this, cx| {
                 task.await;

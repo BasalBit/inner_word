@@ -31,8 +31,8 @@ pub mod metrics;
 
 mod delta;
 mod file_hex;
-mod frames;
 mod fractional;
+mod frames;
 mod geometry;
 mod json;
 mod library;

@@ -11,14 +11,18 @@
 //! changes nothing, and must answer when the page could not start). [`EXPORT_LAYOUT`] and
 //! [`CONVERT_SKELETONS`] are the export page's (`export.html`).
 
-use serde::de::{self, Deserializer};
 use serde::Deserialize;
+use serde::de::{self, Deserializer};
 use serde_json::json;
 use serde_json::value::RawValue;
 
 macro_rules! body {
     ($name:literal) => {
-        concat!("return await window.innerwordBoard.call(\"", $name, "\", arg);")
+        concat!(
+            "return await window.innerwordBoard.call(\"",
+            $name,
+            "\", arg);"
+        )
     };
 }
 
@@ -149,7 +153,11 @@ pub fn insert_pictures_argument(pictures: &[PictureToInsert], at: Option<(f64, f
 /// `{"elements": <elements_json>, "select": select, "editText": "<id>" or null}`:
 /// `elements_json` is a JSON array of Excalidraw elements (an element whose id the canvas
 /// has replaces its copy; the others are added on top).
-pub fn insert_elements_argument(elements_json: &str, select: bool, edit_text: Option<&str>) -> String {
+pub fn insert_elements_argument(
+    elements_json: &str,
+    select: bool,
+    edit_text: Option<&str>,
+) -> String {
     format!(
         r#"{{"elements":{},"select":{select},"editText":{}}}"#,
         elements_json,
@@ -204,7 +212,8 @@ pub fn convert_skeletons_argument(skeletons_json: &str) -> String {
 
 /// Reads the answer of a call.
 pub fn answer<'a, T: Deserialize<'a>>(text: &'a str) -> Result<T, String> {
-    serde_json::from_str(text).map_err(|error| format!("the whiteboard's answer cannot be read: {error}"))
+    serde_json::from_str(text)
+        .map_err(|error| format!("the whiteboard's answer cannot be read: {error}"))
 }
 
 /// The scene of a [`COLLECT`] answer.
@@ -230,7 +239,9 @@ impl<'de> Deserialize<'de> for CollectedScene {
         } else if text.starts_with('{') {
             Ok(CollectedScene::Whole(raw))
         } else {
-            Err(de::Error::custom("a collected scene is null, \"parts\" or an object"))
+            Err(de::Error::custom(
+                "a collected scene is null, \"parts\" or an object",
+            ))
         }
     }
 }

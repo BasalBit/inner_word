@@ -451,7 +451,10 @@ fn a_link_is_kept_only_for_the_web_mail_and_the_drawing_s_own_elements() {
         ("https://example.com/a", true),
         ("HTTP://example.com", true),
         ("mailto:someone@example.com", true),
-        ("innerword-page://board-4-1700000000000/index.html?element=abc", true),
+        (
+            "innerword-page://board-4-1700000000000/index.html?element=abc",
+            true,
+        ),
         ("null/index.html?element=abc", true),
         ("example.com", true),
         ("smb://attacker.example/share", false),

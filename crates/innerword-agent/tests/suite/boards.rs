@@ -1177,7 +1177,10 @@ fn a_change_that_undoes_another_of_the_request_is_kept() {
 
     // The same with a move back by as much.
     let frame = x("backend");
-    update(r#"[{"id":"backend","dx":40},{"id":"api","dx":-40}]"#, claude());
+    update(
+        r#"[{"id":"backend","dx":40},{"id":"api","dx":-40}]"#,
+        claude(),
+    );
     assert_eq!(x("backend"), frame + 40.0);
     assert_eq!(x("api"), api, "api moved with its frame and back");
     assert_eq!(x("db"), db + 80.0);

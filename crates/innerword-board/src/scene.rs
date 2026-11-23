@@ -355,7 +355,10 @@ pub(crate) fn link_is_kept(link: &str) -> bool {
         return true;
     };
     let scheme = &cleaned[..colon];
-    let is_scheme = scheme.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
+    let is_scheme = scheme
+        .chars()
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic())
         && scheme
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'));
@@ -431,8 +434,7 @@ fn read_app_state(value: Option<&Value>) -> Map<String, Value> {
 /// A scene's JSON as an object; `true` when a value nested too deep was read as `null`
 /// ([`json::parse_lenient`]).
 fn parse_object(json: &str) -> Result<(Map<String, Value>, bool), SceneError> {
-    let (value, cut) =
-        json::parse_lenient(json).map_err(|e| SceneError::NotJson(e.to_string()))?;
+    let (value, cut) = json::parse_lenient(json).map_err(|e| SceneError::NotJson(e.to_string()))?;
     match value {
         Value::Object(map) => Ok((map, cut)),
         _ => Err(SceneError::NotAScene("it is not an object".into())),

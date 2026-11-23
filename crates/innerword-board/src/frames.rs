@@ -32,7 +32,12 @@ const SLACK: f64 = 0.5;
 pub(crate) fn name_bounds(frame: &Element) -> [f64; 4] {
     let lines = frame
         .name()
-        .map(|name| name.replace("\r\n", "\n").replace('\r', "\n").split('\n').count())
+        .map(|name| {
+            name.replace("\r\n", "\n")
+                .replace('\r', "\n")
+                .split('\n')
+                .count()
+        })
         .unwrap_or(1)
         .max(1);
     let height = lines as f64 * NAME_FONT_SIZE * NAME_LINE_HEIGHT;
@@ -70,7 +75,12 @@ impl Scene {
         let mut join = |b: [f64; 4]| {
             acc = Some(match acc {
                 None => b,
-                Some(a) => [a[0].min(b[0]), a[1].min(b[1]), a[2].max(b[2]), a[3].max(b[3])],
+                Some(a) => [
+                    a[0].min(b[0]),
+                    a[1].min(b[1]),
+                    a[2].max(b[2]),
+                    a[3].max(b[3]),
+                ],
             });
         };
         for element in self.elements().iter().filter(|e| is_root(e, &frames)) {
@@ -98,10 +108,12 @@ fn inside(element: &Element, frame: &Element) -> bool {
     };
     let (fx, fy, fw, fh) = (frame.x(), frame.y(), frame.width(), frame.height());
     let center = (fx + fw / 2.0, fy + fh / 2.0);
-    [(x1, y1), (x2, y1), (x2, y2), (x1, y2)].iter().all(|&corner| {
-        let (px, py) = rotate(corner, center, -frame.angle());
-        px >= fx - SLACK && px <= fx + fw + SLACK && py >= fy - SLACK && py <= fy + fh + SLACK
-    })
+    [(x1, y1), (x2, y1), (x2, y2), (x1, y2)]
+        .iter()
+        .all(|&corner| {
+            let (px, py) = rotate(corner, center, -frame.angle());
+            px >= fx - SLACK && px <= fx + fw + SLACK && py >= fy - SLACK && py <= fy + fh + SLACK
+        })
 }
 
 /// The warnings of an operation that left elements sticking out of their frames (section

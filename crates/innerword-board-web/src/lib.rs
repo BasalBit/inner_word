@@ -114,7 +114,8 @@ impl Assets {
     /// or release, and the tests). There is no variable that points it elsewhere: what runs
     /// in a whiteboard's view is what was signed into the app.
     pub fn find() -> Result<Assets, String> {
-        let executable = std::env::current_exe().map_err(|error| missing(&format!("where this program is: {error}")))?;
+        let executable = std::env::current_exe()
+            .map_err(|error| missing(&format!("where this program is: {error}")))?;
         Assets::find_for(&executable)
     }
 
@@ -138,12 +139,20 @@ impl Assets {
         let manifest_path = root.join(MANIFEST);
         let text = std::fs::read_to_string(&manifest_path)
             .map_err(|error| missing(&format!("{}: {error}", manifest_path.display())))?;
-        let manifest: Manifest = serde_json::from_str(&text)
-            .map_err(|error| missing(&format!("{} cannot be read: {error}", manifest_path.display())))?;
+        let manifest: Manifest = serde_json::from_str(&text).map_err(|error| {
+            missing(&format!(
+                "{} cannot be read: {error}",
+                manifest_path.display()
+            ))
+        })?;
         let mut files = BTreeMap::new();
         for file in manifest.files {
             if !is_plain_relative(&file.path) {
-                return Err(missing(&format!("{} names a path outside its folder: {}", manifest_path.display(), file.path)));
+                return Err(missing(&format!(
+                    "{} names a path outside its folder: {}",
+                    manifest_path.display(),
+                    file.path
+                )));
             }
             files.insert(
                 file.path,
@@ -182,7 +191,11 @@ impl Assets {
             } else {
                 Err(io::Error::new(
                     io::ErrorKind::InvalidData,
-                    format!("{path} is {} bytes, and the whiteboard's manifest says {}", bytes.len(), info.bytes),
+                    format!(
+                        "{path} is {} bytes, and the whiteboard's manifest says {}",
+                        bytes.len(),
+                        info.bytes
+                    ),
                 ))
             }
         }))
@@ -205,12 +218,15 @@ fn app_bundle_contents(executable: &Path) -> Option<PathBuf> {
     let contents = macos.parent()?;
     let app = contents.parent()?;
     let is_app = app.extension().is_some_and(|extension| extension == "app");
-    (macos.file_name()? == "MacOS" && contents.file_name()? == "Contents" && is_app).then(|| contents.to_path_buf())
+    (macos.file_name()? == "MacOS" && contents.file_name()? == "Contents" && is_app)
+        .then(|| contents.to_path_buf())
 }
 
 fn is_plain_relative(path: &str) -> bool {
     !path.is_empty()
         && !path.starts_with('/')
         && !path.contains('\\')
-        && path.split('/').all(|part| !part.is_empty() && part != "." && part != "..")
+        && path
+            .split('/')
+            .all(|part| !part.is_empty() && part != "." && part != "..")
 }

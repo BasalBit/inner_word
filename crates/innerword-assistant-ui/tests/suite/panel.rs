@@ -135,6 +135,107 @@ fn an_answer_streams_in_and_is_stopped(cx: &mut TestAppContext) {
         .read_with(cx, |panel, _| assert!(!panel.is_answering()));
 }
 
+/// The host can bring the document up to date before it is read for a
+/// message (`set_before_send`): the message waits for the host's task, and
+/// carries the document as it is when the task ends. More messages wait
+/// behind it in order; Stop, or another document, puts the text back.
+#[gpui::test]
+fn a_message_waits_for_the_host_before_it_is_sent(cx: &mut TestAppContext) {
+    use std::{cell::Cell, rc::Rc, time::Duration};
+
+    let (ws, cx) = open_panel(cx);
+    let waits = Rc::new(Cell::new(true));
+    ws.panel.update(cx, |panel, _| {
+        let waits = waits.clone();
+        let editor = ws.editor.downgrade();
+        panel.set_before_send(move |_, cx| {
+            if !waits.get() {
+                return None;
+            }
+            let editor = editor.clone();
+            let timer = cx.background_executor().timer(Duration::from_millis(500));
+            Some(cx.spawn(async move |cx| {
+                timer.await;
+                // What the host held elsewhere reaches the source.
+                editor
+                    .update(cx, |editor, cx| {
+                        editor.set_document(
+                            innerword_core::Document::from_blocks(vec![
+                                innerword_core::Block::paragraph("Chapter 1 as the host has it."),
+                            ]),
+                            cx,
+                        )
+                    })
+                    .ok();
+            }))
+        });
+    });
+
+    // Sent: nothing goes yet, the composer offers Stop.
+    ws.fake.reply("Seen.");
+    ws.send("What is it now?", cx);
+    assert!(ws.fake.sent().is_empty());
+    ws.panel.read_with(cx, |panel, cx| {
+        assert!(panel.is_holding_a_message());
+        assert!(panel.transcript().is_empty());
+        assert!(panel.composer().read(cx).is_busy());
+    });
+    // A second message waits behind it.
+    ws.fake.reply("Seen again.");
+    ws.send("And the rest?", cx);
+    assert!(ws.fake.sent().is_empty());
+
+    // The host's task ends: both go, in order, with the document as it is then.
+    cx.executor().advance_clock(Duration::from_millis(500));
+    cx.run_until_parked();
+    let sent: Vec<String> = ws.fake.sent().into_iter().map(|sent| sent.text).collect();
+    assert_eq!(sent.len(), 2, "{sent:?}");
+    assert!(sent[0].contains("Chapter 1 as the host has it."), "{}", sent[0]);
+    assert!(sent[0].ends_with("What is it now?"), "{}", sent[0]);
+    assert!(sent[1].ends_with("And the rest?"), "{}", sent[1]);
+    ws.panel.read_with(cx, |panel, cx| {
+        assert!(!panel.is_holding_a_message());
+        assert!(!panel.composer().read(cx).is_busy());
+    });
+    assert_eq!(
+        ws.texts(cx),
+        ["What is it now?", "Seen.", "And the rest?", "Seen again."]
+    );
+
+    // Stop while it waits: nothing is sent, the text is back in the composer.
+    ws.send("Never mind", cx);
+    ws.panel.update(cx, |panel, cx| panel.stop(cx));
+    cx.executor().advance_clock(Duration::from_millis(500));
+    cx.run_until_parked();
+    assert_eq!(ws.fake.sent().len(), 2);
+    ws.panel.read_with(cx, |panel, cx| {
+        assert!(!panel.is_holding_a_message());
+        assert_eq!(panel.composer().read(cx).text(cx), "Never mind");
+    });
+    ws.panel
+        .update(cx, |panel, cx| panel.composer().update(cx, |c, cx| c.set_text("", cx)));
+
+    // Another document while it waits: the message was about the other one.
+    ws.send("About chapter one", cx);
+    ws.open_chapter(2, cx);
+    cx.executor().advance_clock(Duration::from_millis(500));
+    cx.run_until_parked();
+    assert_eq!(ws.fake.sent().len(), 2);
+    ws.panel.read_with(cx, |panel, cx| {
+        assert!(panel.transcript().is_empty());
+        assert_eq!(panel.composer().read(cx).text(cx), "About chapter one");
+    });
+    ws.panel
+        .update(cx, |panel, cx| panel.composer().update(cx, |c, cx| c.set_text("", cx)));
+
+    // Nothing to wait for: the message goes at once.
+    waits.set(false);
+    ws.fake.reply("At once.");
+    ws.send("Now?", cx);
+    assert_eq!(ws.fake.sent().len(), 3);
+    assert!(ws.fake.last_sent().unwrap().contains("Chapter 2 begins here."));
+}
+
 // ----- errors and the other states ---------------------------------------------------
 
 #[gpui::test]

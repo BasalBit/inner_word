@@ -15,6 +15,7 @@
 //! |---|---|
 //! | says which document is open and hands over its stored conversation | [`AssistantPanel::set_document`], [`AssistantPanel::set_document_title`] |
 //! | hands over the document's text when a message is sent | [`AssistantPanel::set_document_source`] |
+//! | brings the document up to date before it is read for a message, when that takes a moment | [`AssistantPanel::set_before_send`] |
 //! | lists the library for the picker of the context row | [`AssistantPanel::set_library_source`] |
 //! | says whether there is a caret to insert at and a selection to replace | [`AssistantPanel::set_apply_state`] |
 //! | says what it knows about the agent | [`AssistantPanel::set_availability`] |
@@ -216,6 +217,17 @@ type DocumentSource = Box<dyn Fn(&App) -> Option<OpenDocument>>;
 /// Lists the documents and folders of the library.
 type LibrarySource = Box<dyn Fn(&App) -> Vec<Attachment>>;
 
+/// What the host does before the open document is read for a message
+/// ([`AssistantPanel::set_before_send`]).
+type BeforeSend = Box<dyn Fn(&mut Window, &mut App) -> Option<Task<()>>>;
+
+/// Messages that wait for the host's task of [`AssistantPanel::set_before_send`]
+/// before the document is read and they are sent, in the order they were sent.
+struct HeldMessages {
+    texts: Vec<String>,
+    _wait: Task<()>,
+}
+
 /// One conversation and the agent behind it.
 struct Chat {
     /// Names the chat for the task that reads its events.
@@ -257,6 +269,9 @@ pub struct AssistantPanel {
     document: Option<DocumentRef>,
     document_source: Option<DocumentSource>,
     library_source: Option<LibrarySource>,
+    before_send: Option<BeforeSend>,
+    /// Messages sent while the host's task before sending runs.
+    held: Option<HeldMessages>,
     messages: Entity<MessageList>,
     composer: Entity<Composer>,
     privacy_notice: bool,
@@ -358,6 +373,8 @@ impl AssistantPanel {
             document: None,
             document_source: None,
             library_source: None,
+            before_send: None,
+            held: None,
             messages,
             composer,
             privacy_notice: options.privacy_notice,
@@ -447,6 +464,13 @@ impl AssistantPanel {
     /// Whether an answer of the shown conversation is being written.
     pub fn is_answering(&self) -> bool {
         self.chat.session.is_answering()
+    }
+
+    /// Whether a message was sent and waits for the host's task before
+    /// sending ([`AssistantPanel::set_before_send`]): it is not in the
+    /// conversation yet.
+    pub fn is_holding_a_message(&self) -> bool {
+        self.held.is_some()
     }
 
     /// The documents whose conversation is still being answered although
@@ -613,6 +637,9 @@ impl AssistantPanel {
         // program ends with it.)
         self.cleared = None;
         self.waiting_to_send = None;
+        // A message that waited for the host was about the other document:
+        // it is not sent, and what was typed goes back into the composer.
+        self.give_back_held(cx);
         self.close_context_picker(window, cx);
         self.context_index = 0;
         // Another conversation: its messages have the same ids.
@@ -629,6 +656,25 @@ impl AssistantPanel {
             document.title = title;
             cx.notify();
         }
+    }
+
+    /// What the host does before the open document is read for a message,
+    /// when it needs a moment to bring it up to date (what the source
+    /// reads is held somewhere that has not handed over everything yet).
+    ///
+    /// `hook` is called as a message is sent. `None`: nothing to wait for,
+    /// the message goes at once. A task: the message waits for it, and is
+    /// sent (the document read from the source then) when the task ends.
+    /// The panel sets no limit; the task must end, and the host decides how
+    /// long it may take. Meanwhile the message is not in the conversation,
+    /// the composer offers Stop (which puts the text back), and more
+    /// messages wait behind it in order. Another document opened meanwhile
+    /// puts the text back into the composer too: it was about the other.
+    pub fn set_before_send(
+        &mut self,
+        hook: impl Fn(&mut Window, &mut App) -> Option<Task<()>> + 'static,
+    ) {
+        self.before_send = Some(Box::new(hook));
     }
 
     /// Where the panel gets the open document from when a message is
@@ -748,6 +794,57 @@ impl AssistantPanel {
     }
 
     fn send_now(&mut self, text: String, window: &mut Window, cx: &mut Context<Self>) {
+        // Behind a message that waits for the host, in order.
+        if let Some(held) = &mut self.held {
+            held.texts.push(text);
+            return;
+        }
+        let task = self
+            .before_send
+            .as_ref()
+            .and_then(|hook| hook(window, cx));
+        if let Some(task) = task {
+            let wait = cx.spawn_in(window, async move |this, cx| {
+                task.await;
+                this.update_in(cx, |this, window, cx| this.send_held(window, cx))
+                    .ok();
+            });
+            self.held = Some(HeldMessages {
+                texts: vec![text],
+                _wait: wait,
+            });
+            self.sync(window, cx);
+            return;
+        }
+        self.ask(text, window, cx);
+    }
+
+    /// The host's task before sending ended: what waited is sent now.
+    fn send_held(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(held) = self.held.take() else {
+            return;
+        };
+        for text in held.texts {
+            self.ask(text, window, cx);
+        }
+        self.sync(window, cx);
+    }
+
+    /// Messages that waited for the host are not sent: their text goes back
+    /// into the composer when it is empty.
+    fn give_back_held(&mut self, cx: &mut Context<Self>) {
+        let Some(held) = self.held.take() else {
+            return;
+        };
+        if self.composer.read(cx).is_blank(cx) {
+            let text = held.texts.join("\n\n");
+            self.composer
+                .update(cx, |composer, cx| composer.set_text(&text, cx));
+        }
+    }
+
+    /// Asks the agent now, with the open document as the source has it.
+    fn ask(&mut self, text: String, window: &mut Window, cx: &mut Context<Self>) {
         if self.privacy_notice {
             self.privacy_notice = false;
             cx.emit(AssistantPanelEvent::PrivacyNoticeAcknowledged);
@@ -777,6 +874,13 @@ impl AssistantPanel {
 
     /// Stops the answer that is being written; what had arrived stays.
     pub fn stop(&mut self, cx: &mut Context<Self>) {
+        if self.held.is_some() {
+            // A message that waits for the host is not sent.
+            self.give_back_held(cx);
+            let busy = self.chat.session.is_answering();
+            self.composer
+                .update(cx, |composer, cx| composer.set_busy(busy, cx));
+        }
         self.chat.session.stop();
         cx.notify();
     }
@@ -1071,7 +1175,7 @@ impl AssistantPanel {
             list.set_empty_state(Some(empty), cx);
             list.set_messages(&messages, window, cx);
         });
-        let busy = self.chat.session.is_answering();
+        let busy = self.chat.session.is_answering() || self.held.is_some();
         let placeholder: SharedString = match &self.document {
             Some(_) => "Ask about this document".into(),
             None => "Ask the assistant".into(),

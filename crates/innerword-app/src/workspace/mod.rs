@@ -130,7 +130,7 @@ use crate::{
 pub use assistant::{library_attachments, library_tool_server};
 pub use assistant_draw::{
     ASK_AGAIN, ASSISTANT_DRAWING_LABEL, BOARD_BUSY, CHANGED_MEANWHILE, CHANGES_A_WHITEBOARD,
-    CHANGES_NOTHING, CLOSED_BEFORE_DRAWN, KEPT_AS_A_VERSION, LOADED_AGAIN, NO_VERSION,
+    CHANGES_NOTHING, CLOSED_BEFORE_DRAWN, KEPT_AS_A_VERSION, LOADED_AGAIN, NO_VERSION, NOT_OPENED,
     NOT_SAVED_FIRST, NOT_UNDONE, ONLY_GONE, OPEN_A_DOCUMENT, OPEN_A_WHITEBOARD, PUT_BESIDE,
     PUT_IN_VIEW, SHOWN_IN_THE_SIDE_CHAT, drew_sentence, gone_sentence, made_sentence,
     new_board_names_missing, origin_note,
@@ -1155,6 +1155,16 @@ impl Workspace {
                 Self::board_title_of(command);
             } else if page_open {
                 Self::page_title_of(command);
+            } else if command.action_name()
+                == gpui::Action::name(&innerword_assistant_ui::actions::DrawAnswer)
+            {
+                // Over a document the drawing makes a new whiteboard: the
+                // palette says so, the list's title names both meanings.
+                let old = std::mem::replace(
+                    &mut command.title,
+                    innerword_assistant_ui::NEW_BOARD_FROM_ANSWER_TITLE.into(),
+                );
+                command.keywords.push(old);
             }
         };
         self.modal_layer.update(cx, |layer, cx| {

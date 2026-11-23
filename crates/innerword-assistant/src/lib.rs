@@ -79,9 +79,9 @@ pub use context::{
     quick_prompt, side_prompt, with_history,
 };
 pub use drawing::{
-    DRAWING_INFO, Drawing, DrawingBlock, DrawingError, DrawingProblem, DrawingTarget, ElementName,
-    ElementNames, answer_drawing, drawing_blocks, drawing_fits, drawing_history_note,
-    drawing_sentence, escape_markdown, shown_markdown, without_drawings,
+    DRAWING_INFO, DRAWN_TOGETHER, Drawing, DrawingBlock, DrawingError, DrawingProblem,
+    DrawingTarget, ElementName, ElementNames, answer_drawing, drawing_blocks, drawing_fits,
+    drawing_history_note, drawing_sentence, escape_markdown, shown_markdown, without_drawings,
 };
 pub use events::{EventSink, EventStream, event_channel};
 pub use fake::{FakeBackend, FakeReply, FakeSent, fake_catalog, fake_info};

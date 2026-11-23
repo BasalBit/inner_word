@@ -231,11 +231,12 @@ pub mod pickers;
 pub use actions::{
     ANSWER_EDITOR_FLAG, ActivateSelected, AddContext, CATEGORY, CHAT_EDITOR_FLAG, COMPOSER_CONTEXT,
     COMPOSER_EDITOR_FLAG, CONTEXT_ROW_CONTEXT, ChooseEffort, ChooseModel, ClearChat,
-    CloseAssistant, CopyAnswer, CopyMessage, DismissChat, DrawAnswer, FocusComposer, FocusNextArea,
-    FocusPreviousArea, HEADER_CONTEXT, InsertAtCaret, MESSAGES_CONTEXT, NewChat, NextControl,
-    PANEL_CONTEXT, PressControl, PreviousControl, RemoveContext, ReplaceSelection,
-    SIDE_EDITOR_FLAG, SelectFirstMessage, SelectLastMessage, SelectNextMessage,
-    SelectPreviousMessage, StopAnswer, commands, key_bindings,
+    CloseAssistant, CopyAnswer, CopyMessage, DRAW_ANSWER_TITLE, DismissChat, DrawAnswer,
+    FocusComposer, FocusNextArea, FocusPreviousArea, HEADER_CONTEXT, InsertAtCaret,
+    MESSAGES_CONTEXT, NEW_BOARD_FROM_ANSWER_TITLE, NewChat, NextControl, PANEL_CONTEXT,
+    PressControl, PreviousControl, RemoveContext, ReplaceSelection, SIDE_EDITOR_FLAG,
+    SelectFirstMessage, SelectLastMessage, SelectNextMessage, SelectPreviousMessage, StopAnswer,
+    commands, key_bindings,
 };
 pub use composer::{COMPOSER_MAX_HEIGHT, Composer, ComposerEvent, ComposerOptions};
 pub use markdown::{AnswerFont, AnswerStyle, answer_document, answer_plain_text};
@@ -247,8 +248,8 @@ pub use notice::{Notice, NoticeKind, NoticeRow, notice_row};
 pub use panel::{
     ACTION_COPY, ACTION_DRAW, ACTION_INSERT, ACTION_REPLACE, ApplyKind, AssistantPanel,
     AssistantPanelEvent, AssistantPanelOptions, DRAW_AGAIN_WITHIN, DRAWING_UNAVAILABLE,
-    DRAWN_ALREADY, DocumentRef, HeaderControl, MADE_ALREADY, NO_DRAWING, ONLY_A_DRAWING, PanelArea,
-    PanelNotice, STILL_WRITTEN,
+    DRAWN_ALREADY, DocumentRef, HeaderControl, MADE_ALREADY, NO_ANSWER_YET, NO_DRAWING,
+    ONLY_A_DRAWING, PanelArea, PanelNotice, STILL_WRITTEN,
     context::{ContextPicker, ContextPickerDelegate},
 };
 pub use pickers::{

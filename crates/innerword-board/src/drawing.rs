@@ -61,6 +61,11 @@ pub enum DrawingError {
     Picture { element: usize },
     /// A list over `limits::MAX_REQUEST_ELEMENTS`: `list` is "add", "update" or "remove".
     TooLarge { list: &'static str, limit: usize },
+    /// Two elements of its `add` have the id `id`.
+    IdTwice { id: String },
+    /// Its `add` gives `id`, which a drawing before it (an earlier block of the answer)
+    /// adds already: the blocks are drawn together, and the converter takes an id once.
+    AddedAgain { id: String },
 }
 
 impl std::fmt::Display for DrawingError {
@@ -93,6 +98,10 @@ impl std::fmt::Display for DrawingError {
                 };
                 write!(f, "it {verb} more than {} elements", limit_words(*limit))
             }
+            DrawingError::IdTwice { id } => {
+                write!(f, "it adds two elements with the id {}", cut(id, 40))
+            }
+            DrawingError::AddedAgain { id } => write!(f, "it adds {} again", cut(id, 40)),
         }
     }
 }
@@ -234,6 +243,7 @@ impl Drawing {
         };
 
         let mut skeletons = Vec::with_capacity(add.len());
+        let mut added: HashSet<String> = HashSet::new();
         for (n, item) in add.into_iter().enumerate() {
             let Value::Object(map) = item else {
                 return Err(not_a_drawing(format!(
@@ -251,6 +261,11 @@ impl Drawing {
             }
             if let Some(id) = map.get("id") {
                 check_id(id)?;
+                if let Some(id) = id.as_str()
+                    && !added.insert(id.to_string())
+                {
+                    return Err(DrawingError::IdTwice { id: id.to_string() });
+                }
             }
             check_references(&map)?;
             skeletons.push(Skeleton(map));
@@ -356,6 +371,15 @@ impl Drawing {
                     .count();
                 (count > 0).then_some((*kind, count))
             })
+            .collect()
+    }
+
+    /// The ids its `add` gives its elements, in order (an element without one is left
+    /// out).
+    pub fn added_ids(&self) -> Vec<&str> {
+        self.add
+            .iter()
+            .filter_map(|s| s.0.get("id").and_then(Value::as_str))
             .collect()
     }
 
@@ -541,14 +565,55 @@ pub enum DrawError {
         changed: Vec<String>,
         named: Vec<String>,
     },
-    /// The converter's refusal: a field, a value, the whiteboard's limits for agents.
+    /// The converter's refusal of one entry of the drawing: `list` is "add" or "update",
+    /// `index` the entry's place in that list (of the blocks joined), with the field and
+    /// the converter's words.
+    Entry {
+        list: &'static str,
+        index: usize,
+        field: Option<String>,
+        message: String,
+    },
+    /// The converter's refusal of the drawing as a whole: the whiteboard's limits for
+    /// agents, and what no entry is named for.
     Board(BoardError),
 }
 
-/// "api", "api and db", "a, b, c, d, e and 3 more", with "is" or "are".
-fn ids_and_verb(ids: &[String]) -> (String, &'static str) {
+impl DrawError {
+    /// A refusal of the converter about the entry `index` of `list` (its index there, as
+    /// the converter was given the list): [`DrawError::Entry`] for an entry it names,
+    /// `index` mapping it to the drawing's own list; else [`DrawError::Board`].
+    fn of_entry(
+        list: &'static str,
+        index: impl Fn(usize) -> Option<usize>,
+    ) -> impl Fn(BoardError) -> DrawError {
+        move |error| match error {
+            BoardError::Invalid {
+                element: Some(n),
+                field,
+                message,
+            } => match index(n) {
+                Some(index) => DrawError::Entry {
+                    list,
+                    index,
+                    field,
+                    message,
+                },
+                None => DrawError::Board(BoardError::Invalid {
+                    element: None,
+                    field,
+                    message,
+                }),
+            },
+            other => DrawError::Board(other),
+        }
+    }
+}
+
+/// "api", "api and db", "a, b, c, d, e and 3 more".
+fn ids_listed(ids: &[String]) -> String {
     let shown: Vec<&str> = ids.iter().take(5).map(String::as_str).collect();
-    let list = if ids.len() > 5 {
+    if ids.len() > 5 {
         format!("{} and {} more", shown.join(", "), ids.len() - 5)
     } else if shown.len() > 1 {
         format!(
@@ -558,31 +623,48 @@ fn ids_and_verb(ids: &[String]) -> (String, &'static str) {
         )
     } else {
         shown.join("")
-    };
-    (list, if ids.len() == 1 { "is" } else { "are" })
+    }
 }
 
-/// The open whiteboard's words: "the answer changes api and db, which are no longer on
-/// the whiteboard" / "the answer joins arrows or frames to cache, which is no longer on
-/// the whiteboard"; [`BoardError`]'s words.
+/// The open whiteboard's words: "the answer changes api and db, which the whiteboard does
+/// not have" / "the answer joins arrows or frames to cache, which the whiteboard does not
+/// have" (an id may have been removed meanwhile, or never been there: the model may have
+/// invented it); "the element at index 3 of add (fillStyle): …"; [`BoardError`]'s words.
 impl std::fmt::Display for DrawError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             DrawError::Gone { changed, named } => {
                 let mut clauses = Vec::new();
                 if !changed.is_empty() {
-                    let (list, verb) = ids_and_verb(changed);
                     clauses.push(format!(
-                        "the answer changes {list}, which {verb} no longer on the whiteboard"
+                        "the answer changes {}, which the whiteboard does not have",
+                        ids_listed(changed)
                     ));
                 }
                 if !named.is_empty() {
-                    let (list, verb) = ids_and_verb(named);
                     clauses.push(format!(
-                        "the answer joins arrows or frames to {list}, which {verb} no longer on the whiteboard"
+                        "the answer joins arrows or frames to {}, which the whiteboard does not have",
+                        ids_listed(named)
                     ));
                 }
                 f.write_str(&clauses.join("; "))
+            }
+            DrawError::Entry {
+                list,
+                index,
+                field,
+                message,
+            } => {
+                let what = if *list == "update" {
+                    "the change"
+                } else {
+                    "the element"
+                };
+                write!(f, "{what} at index {index} of {list}")?;
+                if let Some(field) = field {
+                    write!(f, " ({field})")?;
+                }
+                write!(f, ": {message}")
             }
             DrawError::Board(error) => error.fmt(f),
         }
@@ -811,7 +893,9 @@ pub fn draw(
     let added = if skeletons.is_empty() {
         Vec::new()
     } else {
-        crate::add(&mut work, &skeletons, &Pictures::new(), making)?.elements
+        crate::add(&mut work, &skeletons, &Pictures::new(), making)
+            .map_err(DrawError::of_entry("add", Some))?
+            .elements
     };
     let added_ids: Vec<String> = added
         .iter()
@@ -859,17 +943,22 @@ pub fn draw(
     let mut unchanged = Vec::new();
     if !drawing.update.is_empty() {
         let before = work.clone();
-        crate::update(&mut work, &drawing.update, making)?;
-        let kept =
-            crate::changes_that_change(&drawing.update, &before, &work, |scene, changes| {
-                crate::update(scene, changes, making).map(|_| ())
-            })?;
-        let effective: Vec<ElementChange> = drawing
-            .update
+        crate::update(&mut work, &drawing.update, making)
+            .map_err(DrawError::of_entry("update", Some))?;
+        // The runs judged here are slices of `update`: an index of theirs names no entry.
+        let kept = crate::changes_that_change(&drawing.update, &before, &work, |scene, changes| {
+            crate::update(scene, changes, making).map(|_| ())
+        })
+        .map_err(DrawError::of_entry("update", |_| None))?;
+        let effective_at: Vec<usize> = kept
             .iter()
-            .zip(&kept)
+            .enumerate()
             .filter(|(_, kept)| **kept)
-            .map(|(change, _)| change.clone())
+            .map(|(n, _)| n)
+            .collect();
+        let effective: Vec<ElementChange> = effective_at
+            .iter()
+            .map(|n| drawing.update[*n].clone())
             .collect();
         unchanged = kept
             .iter()
@@ -879,7 +968,11 @@ pub fn draw(
             .collect();
         work = before;
         if !effective.is_empty() {
-            let updated = crate::update(&mut work, &effective, making)?;
+            let updated =
+                crate::update(&mut work, &effective, making)
+                    .map_err(DrawError::of_entry("update", |n| {
+                        effective_at.get(n).copied()
+                    }))?;
             changed = updated.changed;
             warnings.extend(updated.warnings);
         }

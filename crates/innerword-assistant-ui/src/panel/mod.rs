@@ -108,6 +108,8 @@ pub const DRAW_AGAIN_WITHIN: Duration = Duration::from_secs(5);
 pub const DRAWING_UNAVAILABLE: &str = "Open a whiteboard or a document to draw the answer.";
 /// What the key and the command say for an answer without a drawing.
 pub const NO_DRAWING: &str = "The answer has no drawing.";
+/// What they say while the conversation has no answer.
+pub const NO_ANSWER_YET: &str = "There is no answer to draw yet.";
 /// What they say for an answer that is still being written.
 pub const STILL_WRITTEN: &str = "The answer is still being written.";
 /// What they say at the first press for an answer drawn on a whiteboard
@@ -1423,9 +1425,16 @@ impl AssistantPanel {
         match self.draw_target(window, cx) {
             Some(message) => self.draw(message, true, cx),
             None => {
+                let answered = self
+                    .transcript()
+                    .messages
+                    .iter()
+                    .any(|message| message.role == Role::Assistant);
                 let why = match self.drawing_target() {
                     DrawingTarget::None => self.drawing_unavailable(),
-                    _ => NO_DRAWING.into(),
+                    // A question is marked: it has no drawing.
+                    _ if answered => NO_DRAWING.into(),
+                    _ => NO_ANSWER_YET.into(),
                 };
                 show_toast(Toast::new(why), cx);
                 false

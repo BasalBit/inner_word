@@ -3482,7 +3482,7 @@ mod drawings {
         let all = desk.cx.update(|_, cx| commands::all(cx));
         assert!(
             all.iter()
-                .any(|command| command.title.as_ref() == "New whiteboard from answer")
+                .any(|command| command.title.as_ref() == innerword_assistant_ui::DRAW_ANSWER_TITLE)
         );
     }
 }

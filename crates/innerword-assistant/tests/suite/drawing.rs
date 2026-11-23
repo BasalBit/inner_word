@@ -395,7 +395,7 @@ fn the_summary_says_what_the_drawing_does() {
     let sentence = drawing_sentence(&named, DrawingTarget::OpenWhiteboard, Some(&names()));
     assert_eq!(
         sentence,
-        "Drawing: changes 4 elements (the rectangle “API”, the frame “Back\\*end\\* the \\[server\\]\\(https://x\\.y\\) side…”, an arrow and 1 more); removes a picture."
+        "Drawing: changes 4 elements (the rectangle “API”, the frame “Back\\*end\\* the \\[server\\]\\(https://x\\.y\\) side…”, an arrow and 1 more); removes a picture; the whiteboard has no zz."
     );
 
     // Links by host, at most three, and a link removed.
@@ -413,6 +413,105 @@ fn the_summary_says_what_the_drawing_does() {
     );
 }
 
+/// An id of a change or a removal that the whiteboard does not have is said in the line,
+/// before the press (a change of it is refused there).
+#[test]
+fn the_line_says_which_ids_the_whiteboard_does_not_have() {
+    let d = drawing(
+        r#"{"update": [{"id": "api", "dx": 1}, {"id": "my_api", "dx": 1}], "remove": ["old-one", "pic"]}"#,
+    );
+    assert_eq!(
+        drawing_sentence(&d, DrawingTarget::OpenWhiteboard, Some(&names())),
+        "Drawing: changes the rectangle “API” and my\\_api; removes old\\-one and a picture; the whiteboard has no my\\_api and old\\-one."
+    );
+    // Without the names (the host gave none) nothing is said about it.
+    assert_eq!(
+        drawing_sentence(&d, DrawingTarget::OpenWhiteboard, None),
+        "Drawing: changes api and my\\_api; removes old\\-one and pic."
+    );
+}
+
+/// A link is named by the host the converter and a browser read; one the converter would
+/// refuse is never left out of the line.
+#[test]
+fn a_link_is_named_by_the_host_a_browser_opens() {
+    let d = drawing(
+        r#"{"add": [{"type": "text", "x": 0, "y": 0, "text": "a", "link": "https://good.example@evil.example/"}]}"#,
+    );
+    assert_eq!(
+        drawing_sentence(&d, DrawingTarget::OpenWhiteboard, None),
+        "Drawing: adds a text; links to evil\\.example."
+    );
+    // Read here, not drawn: the converter refuses both at the press, and the line says
+    // the whole address rather than nothing.
+    let d = drawing(
+        r#"{"add": [{"type": "text", "x": 0, "y": 0, "text": "a", "link": "https:///evil.example"}]}"#,
+    );
+    assert_eq!(
+        drawing_sentence(&d, DrawingTarget::OpenWhiteboard, None),
+        "Drawing: adds a text; links to https:///evil\\.example."
+    );
+    let d = drawing(
+        r#"{"add": [{"type": "text", "x": 0, "y": 0, "text": "a", "link": "https://evil.example\\@good.example/"}]}"#,
+    );
+    assert_eq!(
+        drawing_sentence(&d, DrawingTarget::OpenWhiteboard, None),
+        "Drawing: adds a text; links to evil\\.example."
+    );
+}
+
+/// Several blocks are drawn by one press: a second block says so, and one that adds an id
+/// a block above adds cannot be drawn, which is said before the press.
+#[test]
+fn several_blocks_are_said_to_be_drawn_together() {
+    let text = format!(
+        "{}\n{}",
+        answer(
+            "Option A:",
+            r#"[{"type": "rectangle", "id": "a", "x": 0, "y": 0}]"#,
+            ""
+        ),
+        answer(
+            "Option B:",
+            r#"[{"type": "ellipse", "id": "b", "x": 0, "y": 0}]"#,
+            ""
+        )
+    );
+    let shown = shown_markdown(&text, false, DrawingTarget::OpenWhiteboard, None);
+    assert_eq!(
+        shown,
+        "Option A:\n\n*Drawing: adds a rectangle.*\n\nOption B:\n\n*Drawing: adds an ellipse. Drawn together with the drawing above.*"
+    );
+    let again = format!(
+        "{}\n{}",
+        answer(
+            "Option A:",
+            r#"[{"type": "rectangle", "id": "cache", "x": 0, "y": 0}]"#,
+            ""
+        ),
+        answer(
+            "Option B:",
+            r#"[{"type": "ellipse", "id": "cache", "x": 0, "y": 0}]"#,
+            ""
+        )
+    );
+    let shown = shown_markdown(&again, false, DrawingTarget::OpenWhiteboard, None);
+    assert!(
+        shown.ends_with("*Drawing that cannot be used: it adds cache again.*"),
+        "{shown}"
+    );
+    let problem = answer_drawing(&again).unwrap().unwrap_err();
+    assert_eq!(
+        problem,
+        DrawingProblem::Unreadable {
+            block: Some(1),
+            of: 2,
+            error: DrawingError::AddedAgain { id: "cache".into() }
+        }
+    );
+    assert_eq!(problem.reason(), "its second block adds cache again");
+}
+
 #[test]
 fn the_history_note_says_what_the_drawing_did() {
     let d = drawing(BLOCK);
@@ -426,6 +525,15 @@ fn the_history_note_says_what_the_drawing_did() {
     assert_eq!(
         drawing_history_note(&all),
         "[Inner Word replaced a whiteboard block here: it added a frame, changed a and removed b, titled “Plan”.]"
+    );
+    // Plain text to the model: the ids and hosts as written, never escaped as Markdown.
+    let ids = drawing(
+        r#"{"add": [{"type": "text", "x": 0, "y": 0, "text": "a", "link": "https://my-site.example.com/x"}],
+            "update": [{"id": "Xk3aB9c_dEfGhIjK1mN0p", "dx": 1}], "remove": ["a-b_c"]}"#,
+    );
+    assert_eq!(
+        drawing_history_note(&ids),
+        "[Inner Word replaced a whiteboard block here: it added a text, changed Xk3aB9c_dEfGhIjK1mN0p, removed a-b_c and linked to my-site.example.com.]"
     );
 }
 

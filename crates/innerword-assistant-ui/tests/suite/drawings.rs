@@ -12,8 +12,8 @@ use innerword_assistant::{
 };
 use innerword_assistant_ui::{
     ACTION_COPY, ACTION_DRAW, ACTION_INSERT, ActionState, ApplyKind, AssistantPanelEvent,
-    DRAWING_UNAVAILABLE, DRAWN_ALREADY, DocumentRef, DrawAnswer, MADE_ALREADY, NO_DRAWING,
-    ONLY_A_DRAWING, PanelArea, STILL_WRITTEN,
+    DRAWING_UNAVAILABLE, DRAWN_ALREADY, DocumentRef, DrawAnswer, MADE_ALREADY, NO_ANSWER_YET,
+    NO_DRAWING, ONLY_A_DRAWING, PanelArea, STILL_WRITTEN,
 };
 
 use super::support::{
@@ -585,6 +585,35 @@ fn where_nothing_can_be_drawn_there_is_no_button_and_the_key_says_why(cx: &mut T
     cx.simulate_keystrokes("cmd-shift-d");
     assert!(draws(&ws.take_events(cx)).is_empty());
     assert_eq!(last_toast(&ws, cx).as_deref(), Some(NO_DRAWING));
+}
+
+#[gpui::test]
+fn with_no_answer_yet_the_key_says_so(cx: &mut TestAppContext) {
+    let (ws, cx) = open_panel(cx);
+    offer_new_boards(&ws, cx);
+    ws.panel
+        .update_in(cx, |panel, window, cx| panel.focus(window, cx));
+    cx.run_until_parked();
+    ws.take_events(cx);
+    cx.simulate_keystrokes("cmd-shift-d");
+    assert!(draws(&ws.take_events(cx)).is_empty());
+    assert_eq!(last_toast(&ws, cx).as_deref(), Some(NO_ANSWER_YET));
+}
+
+/// The list of shortcuts searches titles only: the key's row is found by "draw" and
+/// names both of its meanings.
+#[test]
+fn the_drawing_command_is_titled_by_both_meanings() {
+    let command = innerword_assistant_ui::commands()
+        .into_iter()
+        .find(|command| command.action_name() == gpui::Action::name(&DrawAnswer))
+        .unwrap();
+    assert_eq!(
+        command.title.as_ref(),
+        innerword_assistant_ui::DRAW_ANSWER_TITLE
+    );
+    assert!(command.title.to_lowercase().starts_with("draw"));
+    assert!(command.title.contains("new whiteboard"));
 }
 
 // ----- the conversation of each item ---------------------------------------------------

@@ -320,6 +320,15 @@ impl At {
                         "a link must be an address that starts with http://, https:// or mailto:",
                     ));
                 }
+                if lower.starts_with("http") && text.contains('\\') {
+                    return Err(self.invalid(field, "a link must not hold a backslash"));
+                }
+                if link_host(text).is_empty() {
+                    return Err(self.invalid(
+                        field,
+                        "a link must name a host (https://example.com/…) or an address (mailto:ada@example.com)",
+                    ));
+                }
                 Ok(Some(Some(text.to_string())))
             }
             Some(_) => Err(self.invalid(field, "a link must be a string, or null")),
@@ -450,4 +459,40 @@ pub fn is_id(text: &str) -> bool {
         && text
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+}
+
+/// The host a link leads to, as the assistant's line names it and as [`At::link`] judges it:
+/// for `mailto:` the address (up to `?` or `#`); for `http(s)://` the authority (up to `/`,
+/// `?` or `#`) without the user before its last `@` and without a port; lowercased. Empty
+/// when there is none, and a link with an empty host is refused, as is an `http(s)` link
+/// with a backslash (a browser reads it as `/`, which would put the host elsewhere) or a
+/// `%` in its host (a browser decodes it), so the converter never takes a link whose host
+/// a browser reads otherwise than this.
+pub fn link_host(link: &str) -> String {
+    let link = link.trim();
+    if let Some(rest) = link
+        .get(..7)
+        .filter(|head| head.eq_ignore_ascii_case("mailto:"))
+        .map(|_| &link[7..])
+    {
+        return rest
+            .split(['?', '#'])
+            .next()
+            .unwrap_or("")
+            .trim()
+            .to_lowercase();
+    }
+    let rest = link.split_once("://").map_or(link, |(_, rest)| rest);
+    let authority = rest.split(['/', '\\', '?', '#']).next().unwrap_or("");
+    let host = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, host)| host);
+    let host = match host.rsplit_once(':') {
+        Some((name, port)) if port.bytes().all(|b| b.is_ascii_digit()) => name,
+        _ => host,
+    };
+    if host.contains('%') || host.chars().any(char::is_whitespace) {
+        return String::new();
+    }
+    host.to_lowercase()
 }

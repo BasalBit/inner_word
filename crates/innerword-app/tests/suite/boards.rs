@@ -3404,8 +3404,8 @@ mod drawings {
         let said = desk.toast_starting("Nothing was drawn").expect("a toast");
         assert_eq!(
             said,
-            "Nothing was drawn: the answer changes cache, which is no longer on the whiteboard; \
-             the answer joins arrows or frames to queue, which is no longer on the whiteboard. \
+            "Nothing was drawn: the answer changes cache, which the whiteboard does not have; \
+             the answer joins arrows or frames to queue, which the whiteboard does not have. \
              Ask again: the assistant is sent the whiteboard as it is now."
         );
         assert!(desk.pages.adopted().is_empty());
@@ -3490,12 +3490,18 @@ mod drawings {
         desk.cx.simulate_keystrokes("cmd-shift-d");
         desk.cx.run_until_parked();
         let said = desk.toast_starting("Nothing was drawn: ").expect("a toast");
+        // The entry is named with its list: a drawing has two with indexes.
+        assert!(
+            said.starts_with("Nothing was drawn: the element at index 0 of add (link): "),
+            "{said}"
+        );
         assert!(said.contains("http://, https:// or mailto:"), "{said}");
         let panel = desk.side();
         let offered = panel.read_with(desk.cx, |panel, cx| panel.composer().read(cx).text(cx));
         assert!(
-            offered.starts_with("Your drawing could not be used: ")
-                && offered.ends_with(". Please write it again."),
+            offered.starts_with(
+                "Your drawing could not be used: the element at index 0 of add (link): "
+            ) && offered.ends_with(". Please write it again."),
             "{offered}"
         );
         assert!(desk.pages.adopted().is_empty());
@@ -3640,6 +3646,45 @@ mod drawings {
         assert_eq!(after, undos, "nothing was undone");
     }
 
+    /// The page's revs start again at every load: after a reload the
+    /// writer's first stroke is at a rev below the drawing's, and the
+    /// toast's Undo must not take that stroke out.
+    #[gpui::test]
+    fn the_toast_offers_no_undo_after_the_view_loaded_again(cx: &mut TestAppContext) {
+        let mut desk = desk(cx);
+        desk.ask(&answer_with(DB_AND_BLUE));
+        desk.cx.simulate_keystrokes("cmd-shift-d");
+        desk.cx.run_until_parked();
+        assert!(desk.toast_starting("Drew on").is_some());
+        desk.cx.update(|window, cx| {
+            window.dispatch_action(Box::new(innerword_app::actions::ReloadPage), cx)
+        });
+        desk.cx.run_until_parked();
+        desk.pages.board_ready();
+        settle(desk.cx);
+        let mut elements = api();
+        elements.extend(shape(
+            "rectangle",
+            "mine",
+            (100.0, 500.0, 100.0, 50.0),
+            "a5",
+            None,
+        ));
+        desk.pages.draw(&scene(&elements));
+        desk.cx.run_until_parked();
+        desk.press_toast("Drew on");
+        assert!(desk.has_toast(NOT_UNDONE), "{:?}", desk.toasts());
+        assert!(
+            !desk
+                .pages
+                .board_calls()
+                .iter()
+                .any(|call| call.starts_with("undo")),
+            "nothing was undone: {:?}",
+            desk.pages.board_calls()
+        );
+    }
+
     #[gpui::test]
     fn a_whiteboard_that_is_not_ready_is_not_drawn_on(cx: &mut TestAppContext) {
         let mut desk = desk(cx);
@@ -3755,7 +3800,9 @@ mod drawings {
             let command = desk.cx.update(|_, cx| {
                 innerword_app::commands::all(cx)
                     .into_iter()
-                    .find(|command| command.title.as_ref() == "New whiteboard from answer")
+                    .find(|command| {
+                        command.title.as_ref() == innerword_assistant_ui::DRAW_ANSWER_TITLE
+                    })
                     .expect("the command")
             });
             desk.workspace

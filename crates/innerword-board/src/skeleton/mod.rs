@@ -7,7 +7,7 @@ pub(crate) mod make;
 mod remove;
 mod update;
 
-pub use fields::is_id;
+pub use fields::{is_id, link_host};
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 

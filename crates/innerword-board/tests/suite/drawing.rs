@@ -348,8 +348,10 @@ fn a_drawing_adds_changes_and_removes_whole_or_not_at_all() {
         &mut making(),
     )
     .unwrap_err();
-    assert!(matches!(error, DrawError::Board(_)), "{error:?}");
-    assert!(error.to_string().contains("fillStyle"), "{error}");
+    assert_eq!(
+        error.to_string(),
+        "the change at index 0 of update (fillStyle): fillStyle must be one of hachure, cross-hatch, solid, zigzag"
+    );
     assert_eq!(scene.to_stored(), before.to_stored());
 }
 
@@ -380,9 +382,122 @@ fn changing_what_is_gone_draws_nothing() {
     );
     assert_eq!(
         error.to_string(),
-        "the answer changes zz and yy, which are no longer on the whiteboard"
+        "the answer changes zz and yy, which the whiteboard does not have"
     );
     assert_eq!(after.to_stored(), before.to_stored());
+}
+
+/// A refusal of the converter names the list its entry is in: a drawing has two lists
+/// with indexes, and the writer and the model asked to write it again must know which.
+#[test]
+fn a_refused_entry_is_named_with_its_list() {
+    let before = board();
+    let (after, result) = apply(
+        &before,
+        r#"{"add": [{"type": "text", "x": 0, "y": 0, "text": "x"},
+                    {"type": "rectangle", "x": 0, "y": 0, "fillStyle": "dots"}]}"#,
+        None,
+    );
+    let error = result.unwrap_err();
+    assert!(matches!(
+        error,
+        DrawError::Entry {
+            list: "add",
+            index: 1,
+            ..
+        }
+    ));
+    assert_eq!(
+        error.to_string(),
+        "the element at index 1 of add (fillStyle): fillStyle must be one of hachure, cross-hatch, solid, zigzag"
+    );
+    assert_eq!(after.to_stored(), before.to_stored());
+
+    let (_, result) = apply(
+        &before,
+        r#"{"update": [{"id": "cache", "dx": 10}, {"id": "api", "label": {"text": "Gateway"}}]}"#,
+        None,
+    );
+    let error = result.unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .starts_with("the change at index 1 of update (label): "),
+        "{error}"
+    );
+
+    // Two blocks that both add `cache2`: the second one's place in the joined add.
+    let joined = Drawing::join(vec![
+        read(r#"[{"type": "rectangle", "id": "cache2", "x": 0, "y": 0}]"#),
+        read(r#"[{"type": "rectangle", "id": "cache2", "x": 0, "y": 0}]"#),
+    ])
+    .unwrap();
+    let mut scene = before.clone();
+    let error = draw(&mut scene, &joined, None, &mut making()).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .starts_with("the element at index 1 of add (id): "),
+        "{error}"
+    );
+}
+
+#[test]
+fn an_id_added_twice_is_refused_when_read() {
+    assert_eq!(
+        refused(
+            r#"[{"type": "rectangle", "id": "cache", "x": 0, "y": 0}, {"type": "ellipse", "id": "cache", "x": 0, "y": 0}]"#
+        ),
+        DrawingError::IdTwice { id: "cache".into() }
+    );
+    assert_eq!(
+        DrawingError::IdTwice { id: "cache".into() }.to_string(),
+        "it adds two elements with the id cache"
+    );
+    assert_eq!(
+        DrawingError::AddedAgain { id: "cache".into() }.to_string(),
+        "it adds cache again"
+    );
+    assert_eq!(
+        read(r#"[{"type": "rectangle", "id": "a", "x": 0, "y": 0}, {"type": "text", "x": 0, "y": 0, "text": "t"}, {"type": "ellipse", "id": "b", "x": 0, "y": 0}]"#)
+            .added_ids(),
+        vec!["a", "b"]
+    );
+}
+
+/// A link is taken only when the host the line names is the host a browser opens.
+#[test]
+fn a_link_whose_host_a_browser_reads_otherwise_is_refused() {
+    for link in [
+        "https:///evil.example",
+        "https://evil.example\\@good.example/",
+        "http://\\evil.example",
+        "https://user@/x",
+        "https://:80/",
+        "https://evil%2Eexample/",
+        "mailto:",
+    ] {
+        let json =
+            serde_json::json!([{"type": "rectangle", "x": 0, "y": 0, "link": link}]).to_string();
+        let (_, result) = apply(&board(), &json, None);
+        let error = result.unwrap_err();
+        assert!(
+            matches!(&error, DrawError::Entry { list: "add", index: 0, field: Some(field), .. } if field == "link"),
+            "{link}: {error}"
+        );
+    }
+    for (link, host) in [
+        ("https://Example.com/a?b", "example.com"),
+        ("http://user:pw@a.org:8080/", "a.org"),
+        ("https://good.example@evil.example/", "evil.example"),
+        ("https://[::1]:8080/", "[::1]"),
+        ("mailto:Ada@Example.org?subject=x", "ada@example.org"),
+    ] {
+        assert_eq!(innerword_board::link_host(link), host, "{link}");
+        let json =
+            serde_json::json!([{"type": "rectangle", "x": 0, "y": 0, "link": link}]).to_string();
+        apply(&board(), &json, None).1.unwrap();
+    }
 }
 
 #[test]
@@ -404,7 +519,7 @@ fn an_arrow_to_what_is_gone_draws_nothing() {
     );
     assert_eq!(
         error.to_string(),
-        "the answer joins arrows or frames to cache2 and gone, which are no longer on the whiteboard"
+        "the answer joins arrows or frames to cache2 and gone, which the whiteboard does not have"
     );
 }
 
@@ -425,7 +540,7 @@ fn a_change_that_joins_to_what_is_gone_draws_nothing() {
     );
     assert_eq!(
         error.to_string(),
-        "the answer joins arrows or frames to zz, which is no longer on the whiteboard"
+        "the answer joins arrows or frames to zz, which the whiteboard does not have"
     );
     // A change joined to a new element of the same drawing is drawn.
     let (after, result) = apply(

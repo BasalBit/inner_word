@@ -131,7 +131,8 @@ The elements are Excalidraw's element skeletons, JSON objects with Excalidraw's 
 - \"frame\" holds elements: \"children\": [\"api\", \"db\"] and a \"name\"; without a size it is fitted around them.
 - Any element may have \"strokeColor\" and \"backgroundColor\" (\"#1971c2\", \"#a5d8ff\", \"transparent\"), \"fillStyle\" (\"solid\", \"hachure\", \"cross-hatch\"), \"strokeWidth\" (1, 2 or 4), \"strokeStyle\" (\"solid\", \"dashed\", \"dotted\"), \"roughness\" (0 neat, 1, 2 sketchy), \"opacity\" (0 to 100), \"angle\" (in radians) and \"link\" (an http, https or mailto address).
 - A drawing cannot bring a picture: there is no \"image\" element.
-Leave room: 60 to 120 between shapes, rows and columns lined up, few colours.";
+Leave room: 60 to 120 between shapes, rows and columns lined up, few colours.
+The block holds plain JSON (no comments, no trailing commas), and its fences start their own lines, never inside a list item or a quote.";
 
 /// The paragraph both sections end their instructions with: what the history's note is.
 const HISTORY_NOTE_PARAGRAPH: &str = "\
@@ -198,7 +199,7 @@ The writer does not see the JSON: in its place the app shows one line that says 
 
 {DRAWING_ELEMENTS}
 
-\"update\" changes elements of the whiteboard by the ids of the listing: {{\"id\": \"api\", \"dx\": 40, \"dy\": 0}} moves one (\"x\" and \"y\" move it to a place); a change may also set \"width\", \"height\", \"angle\", \"text\" (of a text, or the label of a shape or an arrow), \"fontSize\", \"name\" (of a frame), \"start\" or \"end\" (an arrow joined to another element), \"link\" (null removes it) and any style field above. A label, the ends of arrows and what a frame holds follow by themselves. \"remove\" takes ids: a shape goes with its label and the arrows joined to it stay; a frame goes and what it held stays.
+\"update\" changes elements of the whiteboard by the ids of the listing: {{\"id\": \"api\", \"dx\": 40, \"dy\": 0}} moves one (\"x\" and \"y\" move it to a place); a change may also set \"width\", \"height\", \"angle\", \"text\" (of a text, or the label of a shape or an arrow: a change never has \"label\"), \"fontSize\", \"name\" (of a frame), \"start\" or \"end\" (an arrow joined to another element), \"link\" (null removes it) and any style field above. A label, the ends of arrows and what a frame holds follow by themselves. \"remove\" takes ids: a shape goes with its label and the arrows joined to it stay; a frame goes and what it held stays.
 
 Positions are the whiteboard's own, as the listing gives them: x grows to the right and y downwards, in pixels at 100 %; \"at (x, y)\" is an element's top left corner, and the listing's first line gives the drawn area. Give new elements ids the listing does not have. A drawing that stands on its own goes beside what is drawn, 100 or more to the right of or below the drawn area; one that would cover the drawing is moved by the app to free space.
 
@@ -385,6 +386,13 @@ the pictures on it. It cannot be changed by you: only its owner draws on it, in 
         let new = drawing_prompt(DrawingTarget::NewWhiteboard).unwrap();
         assert!(board.chars().count() <= 4_600, "{}", board.chars().count());
         assert!(new.chars().count() <= 3_600, "{}", new.chars().count());
+        // The slips a model makes most, said in both (a block read as no JSON, a change
+        // refused at the press, a fence not found).
+        for section in [&board, &new] {
+            assert!(section.contains("plain JSON (no comments, no trailing commas)"));
+            assert!(section.contains("never inside a list item or a quote"));
+        }
+        assert!(board.contains("a change never has \"label\""));
         for target in TARGETS {
             assert_eq!(
                 side_system_prompt(true, target).chars().count(),

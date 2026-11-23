@@ -372,6 +372,11 @@ pub(crate) struct BoardState {
     /// The adopt of an answer's drawing that the view has not answered
     /// (5.4): its answer moves the keyboard and says what was drawn.
     pub(crate) assistant_drawing: Option<super::assistant_draw::PendingDrawing>,
+    /// How many times the page posted `ready` in this session: the revs of
+    /// the page start again at 0 at every load, so a rev means something
+    /// only with the load it was counted in (the toast's Undo of an
+    /// answer's drawing).
+    loads: u64,
 }
 
 impl BoardState {
@@ -394,6 +399,11 @@ impl BoardState {
     /// alone, not on the next session of the same whiteboard.
     pub(crate) fn session(&self) -> u64 {
         self.session
+    }
+
+    /// How many times the page posted `ready` in this session.
+    pub(crate) fn loads(&self) -> u64 {
+        self.loads
     }
 
     /// The number of the adopt the view is asked and has not answered.
@@ -840,6 +850,7 @@ impl Workspace {
             ready_in: None,
             drawing_pending: false,
             assistant_drawing: None,
+            loads: 0,
         };
         let mut board = Box::new(board);
         board.seed_pictures(&scene);
@@ -888,6 +899,7 @@ impl Workspace {
                 // A (re)load starts a new count of revs.
                 board.ready_in = Some(board.loading_since.elapsed());
                 board.ready = true;
+                board.loads += 1;
                 board.base_rev = 0;
                 board.saved = 0;
                 board.floor = 0;

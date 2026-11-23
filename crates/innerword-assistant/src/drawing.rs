@@ -8,7 +8,7 @@
 //! whiteboard, or a new whiteboard beside the open document.
 
 use std::borrow::Cow;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::hash::{Hash, Hasher};
 use std::ops::Range;
 use std::sync::Mutex;
@@ -276,12 +276,22 @@ pub fn answer_drawing(markdown: &str) -> Option<Result<Drawing, DrawingProblem>>
     }
     let of = blocks.len();
     let mut drawings = Vec::with_capacity(of);
+    let mut added: HashSet<String> = HashSet::new();
     for (n, block) in blocks.iter().enumerate() {
         if !block.closed {
             return Some(Err(DrawingProblem::NotFinished { block: n, of }));
         }
         match read_block(&block.body) {
-            Ok(drawing) => drawings.push(drawing),
+            Ok(drawing) => {
+                if let Some(error) = added_again(&drawing, &mut added) {
+                    return Some(Err(DrawingProblem::Unreadable {
+                        block: Some(n),
+                        of,
+                        error,
+                    }));
+                }
+                drawings.push(drawing)
+            }
             Err(error) => {
                 return Some(Err(DrawingProblem::Unreadable {
                     block: Some(n),
@@ -301,6 +311,17 @@ pub fn answer_drawing(markdown: &str) -> Option<Result<Drawing, DrawingProblem>>
             error,
         }),
     )
+}
+
+/// [`DrawingError::AddedAgain`] for the first id `drawing` adds that `added` (the ids the
+/// blocks before it add) has; else `None`, its ids put into `added`.
+fn added_again(drawing: &Drawing, added: &mut HashSet<String>) -> Option<DrawingError> {
+    let ids = drawing.added_ids();
+    if let Some(id) = ids.iter().find(|id| added.contains(**id)) {
+        return Some(DrawingError::AddedAgain { id: id.to_string() });
+    }
+    added.extend(ids.into_iter().map(str::to_string));
+    None
 }
 
 /// Whether `drawing` can be applied for `target`: `NotHere` for `None`,
@@ -473,7 +494,9 @@ pub fn shown_markdown<'a>(
             Cow::Borrowed(text)
         };
     }
-    Cow::Owned(replace_blocks(text, &blocks, |_, block| {
+    // The ids the blocks above add: a block that adds one again cannot be drawn with them.
+    let mut added: HashSet<String> = HashSet::new();
+    Cow::Owned(replace_blocks(text, &blocks, |n, block| {
         let line = if !block.closed {
             if streaming {
                 "Drawing…".to_string()
@@ -485,7 +508,18 @@ pub fn shown_markdown<'a>(
             }
         } else {
             match read_block(&block.body) {
-                Ok(drawing) => drawing_sentence(&drawing, target, names),
+                Ok(drawing) => match added_again(&drawing, &mut added) {
+                    Some(error) => format!(
+                        "Drawing that cannot be used: {}.",
+                        escape_markdown(&error.to_string())
+                    ),
+                    // One press draws every block of the answer: a second block says so.
+                    None if n > 0 => format!(
+                        "{} {DRAWN_TOGETHER}",
+                        drawing_sentence(&drawing, target, names)
+                    ),
+                    None => drawing_sentence(&drawing, target, names),
+                },
                 Err(error) => format!(
                     "Drawing that cannot be used: {}.",
                     escape_markdown(&error.to_string())
@@ -495,6 +529,9 @@ pub fn shown_markdown<'a>(
         Some(format!("*{line}*"))
     }))
 }
+
+/// After the line of a second or later block of an answer: one press draws them all.
+pub const DRAWN_TOGETHER: &str = "Drawn together with the drawing above.";
 
 /// The noun of an added type, for one and for many.
 fn noun(kind: &str) -> (&'static str, &'static str) {
@@ -549,11 +586,22 @@ fn one_line(text: &str, max: usize) -> String {
     }
 }
 
+/// What the model wrote, as Markdown that reads as plain text (`markdown`, the shown
+/// line) or as it is (the history note: plain text sent to the model, which must get the
+/// ids it wrote back as they are).
+fn written(text: &str, markdown: bool) -> String {
+    if markdown {
+        escape_markdown(text)
+    } else {
+        text.to_string()
+    }
+}
+
 /// An element as the line names it: "the rectangle “API”", "a picture", "an arrow", or
-/// its id, escaped.
-fn element_words(id: &str, names: Option<&dyn ElementNames>) -> String {
+/// its id (escaped where `markdown`).
+fn element_words(id: &str, names: Option<&dyn ElementNames>, markdown: bool) -> String {
     let Some(name) = names.and_then(|names| names.name(id)) else {
-        return escape_markdown(id);
+        return written(id, markdown);
     };
     let kind = name.kind.as_str();
     if kind == "image" {
@@ -568,18 +616,18 @@ fn element_words(id: &str, names: Option<&dyn ElementNames>) -> String {
     match name.text.as_deref().map(|text| one_line(text, 40)) {
         Some(text) if !text.is_empty() => {
             let bare = one.split_once(' ').map_or(one, |(_, rest)| rest);
-            format!("the {bare} “{}”", escape_markdown(&text))
+            format!("the {bare} “{}”", written(&text, markdown))
         }
         _ => one.to_string(),
     }
 }
 
 /// Up to three elements, then "and N more"; "7 elements (api, db, cache and 4 more)".
-fn elements_words(ids: &[String], names: Option<&dyn ElementNames>) -> String {
+fn elements_words(ids: &[String], names: Option<&dyn ElementNames>, markdown: bool) -> String {
     let named: Vec<String> = ids
         .iter()
         .take(3)
-        .map(|id| element_words(id, names))
+        .map(|id| element_words(id, names, markdown))
         .collect();
     if ids.len() <= 3 {
         return and_list(&named);
@@ -594,32 +642,21 @@ fn elements_words(ids: &[String], names: Option<&dyn ElementNames>) -> String {
 }
 
 /// An address by its host (`mailto:` by its address), lowercased, without a port or a
-/// user.
+/// user: the converter's own reading ([`innerword_board::link_host`]), so a link it takes
+/// always has the host this line names.
 fn host_of(link: &str) -> String {
-    let lower = link.trim();
-    if let Some(rest) = lower
-        .get(..7)
-        .filter(|head| head.eq_ignore_ascii_case("mailto:"))
-        .map(|_| &lower[7..])
-    {
-        return rest.split(['?', '#']).next().unwrap_or("").to_lowercase();
-    }
-    let rest = lower.split_once("://").map_or(lower, |(_, rest)| rest);
-    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
-    let host = authority
-        .rsplit_once('@')
-        .map_or(authority, |(_, host)| host);
-    let host = match host.rsplit_once(':') {
-        Some((name, port)) if port.bytes().all(|b| b.is_ascii_digit()) && !name.is_empty() => name,
-        _ => host,
-    };
-    host.to_lowercase()
+    innerword_board::link_host(link)
 }
 
 /// The parts of a drawing in words, in the present (`past` false) or the past, with the
-/// names of the open whiteboard's elements when given; nothing escaped but what the model
-/// wrote.
-fn parts(drawing: &Drawing, past: bool, names: Option<&dyn ElementNames>) -> Vec<String> {
+/// names of the open whiteboard's elements when given; what the model wrote escaped as
+/// Markdown where `markdown` (the shown line), and as it is otherwise (the history note).
+fn parts(
+    drawing: &Drawing,
+    past: bool,
+    names: Option<&dyn ElementNames>,
+    markdown: bool,
+) -> Vec<String> {
     let verb = |present: &str, past_form: &str| if past { past_form } else { present }.to_string();
     let mut out = Vec::new();
     if let Some(added) = added_words(drawing) {
@@ -630,7 +667,7 @@ fn parts(drawing: &Drawing, past: bool, names: Option<&dyn ElementNames>) -> Vec
         out.push(format!(
             "{} {}",
             verb("changes", "changed"),
-            elements_words(&changed, names)
+            elements_words(&changed, names, markdown)
         ));
     }
     let removed = drawing.removed_ids();
@@ -638,19 +675,24 @@ fn parts(drawing: &Drawing, past: bool, names: Option<&dyn ElementNames>) -> Vec
         out.push(format!(
             "{} {}",
             verb("removes", "removed"),
-            elements_words(&removed, names)
+            elements_words(&removed, names, markdown)
         ));
     }
     let (set, unset) = drawing.links();
     let mut hosts: Vec<String> = Vec::new();
     for link in &set {
-        let host = host_of(link);
-        if !host.is_empty() && !hosts.contains(&host) {
+        // The converter takes no link without a host; should one come all the same, the
+        // line names the whole address, never nothing.
+        let mut host = host_of(link);
+        if host.is_empty() {
+            host = one_line(link, 60);
+        }
+        if !hosts.contains(&host) {
             hosts.push(host);
         }
     }
     if !hosts.is_empty() {
-        let shown: Vec<String> = hosts.iter().take(3).map(|h| escape_markdown(h)).collect();
+        let shown: Vec<String> = hosts.iter().take(3).map(|h| written(h, markdown)).collect();
         let list = if hosts.len() <= 3 {
             and_list(&shown)
         } else {
@@ -663,8 +705,31 @@ fn parts(drawing: &Drawing, past: bool, names: Option<&dyn ElementNames>) -> Vec
         out.push(format!(
             "{} the {noun} of {}",
             verb("removes", "removed"),
-            elements_words(&unset, names)
+            elements_words(&unset, names, markdown)
         ));
+    }
+    // With the whiteboard's names: the ids it changes or removes that the whiteboard does
+    // not have (a change of one is refused at the press; a removal is left out).
+    if let Some(names) = names {
+        let mut missing: Vec<String> = Vec::new();
+        for id in changed.iter().chain(&removed) {
+            if names.name(id).is_none() && !missing.contains(id) {
+                missing.push(id.clone());
+            }
+        }
+        if !missing.is_empty() {
+            let shown: Vec<String> = missing
+                .iter()
+                .take(3)
+                .map(|id| written(id, markdown))
+                .collect();
+            let list = if missing.len() <= 3 {
+                and_list(&shown)
+            } else {
+                format!("{} and {} more", shown.join(", "), missing.len() - 3)
+            };
+            out.push(format!("the whiteboard has no {list}"));
+        }
     }
     out
 }
@@ -677,7 +742,7 @@ pub fn drawing_sentence(
     target: DrawingTarget,
     names: Option<&dyn ElementNames>,
 ) -> String {
-    let parts = parts(drawing, false, names);
+    let parts = parts(drawing, false, names, true);
     let mut out = String::from("Drawing: ");
     if parts.is_empty() {
         out.push_str("nothing");
@@ -699,7 +764,7 @@ pub fn drawing_sentence(
 /// The note an answer's drawing becomes in the history (section 3.5): "[Inner Word
 /// replaced a whiteboard block here: it added an ellipse and an arrow and changed api.]"
 pub fn drawing_history_note(drawing: &Drawing) -> String {
-    let parts = parts(drawing, true, None);
+    let parts = parts(drawing, true, None, false);
     let mut what = if parts.is_empty() {
         "it held nothing".to_string()
     } else {
@@ -772,6 +837,12 @@ mod tests {
 
     #[test]
     fn hosts() {
+        // What a browser reads elsewhere gives no host, and the converter refuses it.
+        assert_eq!(host_of("https:///evil.example"), "");
+        assert_eq!(
+            host_of("https://evil.example\\@good.example/"),
+            "evil.example"
+        );
         assert_eq!(host_of("https://Example.com/a?b"), "example.com");
         assert_eq!(host_of("http://user:pw@a.org:8080/"), "a.org");
         assert_eq!(

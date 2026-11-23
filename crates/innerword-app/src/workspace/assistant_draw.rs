@@ -69,6 +69,8 @@ pub const OPEN_A_DOCUMENT: &str = "Open a document to make a whiteboard from the
 /// The toast's Undo after the writer drew.
 pub const NOT_UNDONE: &str =
     "Not undone: the whiteboard has changed since. Version History has it as it was.";
+/// After [`made_sentence`] when the new whiteboard could not be opened.
+pub const NOT_OPENED: &str = "It could not be opened: it is in the library.";
 /// A drawing that stands on its own put elsewhere, in view.
 pub const PUT_IN_VIEW: &str = "It was put where it is free and in view.";
 /// One put beside the drawing (no room in view).
@@ -368,6 +370,20 @@ impl Workspace {
             refuse(self, NOT_SAVED_FIRST.to_string(), cx);
             return;
         }
+        if self
+            .board()
+            .is_some_and(|board| board.adopt_in_flight().is_some())
+        {
+            // The flush found the row changed under the app, merged, saved
+            // and sent that merge to the view: a second adopt now would
+            // leave the first answer unmatched.
+            if let Some(board) = self.board_of_mut(id) {
+                board.drawing_pending = false;
+            }
+            self.report_drawing(format!("nothing: {BOARD_BUSY}"));
+            self.show_toast(Toast::new(BOARD_BUSY).duration(Duration::from_secs(5)), cx);
+            return;
+        }
         let Some((base, stamp, rev)) = self
             .board()
             .map(|board| (board.base.clone(), board.stamp, board.status.rev))
@@ -405,7 +421,7 @@ impl Workspace {
                 refuse(self, format!("Nothing was drawn: {error}. {ASK_AGAIN}"), cx);
                 return;
             }
-            Err(DrawError::Board(error)) => {
+            Err(error) => {
                 refuse(self, format!("Nothing was drawn: {error}."), cx);
                 self.offer_to_ask_again(&error.to_string(), cx);
                 return;
@@ -628,13 +644,18 @@ impl Workspace {
             words.push_str(&sentence);
         }
         let mut toast = Toast::new(words).success().duration(DRAWN_TOAST);
-        if let Some(rev) = undo_rev {
+        let loads = self.board().map(|board| board.loads());
+        if let (Some(rev), Some(loads)) = (undo_rev, loads) {
             let workspace = cx.weak_entity();
+            let at = DrawnAt {
+                id,
+                session,
+                loads,
+                rev,
+            };
             toast = toast.on_action("Undo", move |_, cx| {
                 workspace
-                    .update(cx, |workspace, cx| {
-                        workspace.undo_assistant_drawing(id, rev, cx)
-                    })
+                    .update(cx, |workspace, cx| workspace.undo_assistant_drawing(at, cx))
                     .ok();
             });
         }
@@ -644,15 +665,23 @@ impl Workspace {
 
     /// The toast's Undo: one step of the whiteboard's own undo, while the
     /// canvas is at the rev the drawing's adopt answered (the writer has not
-    /// drawn since); otherwise it says so.
-    pub fn undo_assistant_drawing(&mut self, id: DocumentId, rev: u64, cx: &mut Context<Self>) {
-        let holds = self.open_board_id() == Some(id)
-            && self.board().is_some_and(|board| board.status.rev <= rev);
+    /// drawn since) in the same session and the same load of the page (its
+    /// revs start again at 0 at every load, and a reload or a whiteboard
+    /// opened again has none of the drawing in its undo); otherwise it says
+    /// so.
+    pub(crate) fn undo_assistant_drawing(&mut self, at: DrawnAt, cx: &mut Context<Self>) {
+        let holds = self.open_board_id() == Some(at.id)
+            && self.board().is_some_and(|board| {
+                board.session() == at.session
+                    && board.loads() == at.loads
+                    && board.ready
+                    && board.status.rev <= at.rev
+            });
         if !holds {
             self.show_toast(Toast::new(NOT_UNDONE).duration(Duration::from_secs(6)), cx);
             return;
         }
-        drop(self.board_call(id, calls::UNDO, calls::steps_argument(1)));
+        drop(self.board_call(at.id, calls::UNDO, calls::steps_argument(1)));
     }
 
     /// The converter refused the drawing: the composer, when it is empty, is
@@ -715,7 +744,7 @@ impl Workspace {
                 self.drew_nothing(new_board_names_missing(&missing), cx);
                 return None;
             }
-            Err(DrawError::Board(error)) => {
+            Err(error) => {
                 self.drew_nothing(format!("Nothing was drawn: {error}."), cx);
                 self.offer_to_ask_again(&error.to_string(), cx);
                 return None;
@@ -795,6 +824,12 @@ impl Workspace {
             change.as_secs_f64() * 1000.0,
         ));
         if !self.open_document(id, true, window, cx) {
+            // It is in the library all the same: the writer is told where.
+            let words = format!(
+                "{} {NOT_OPENED}",
+                made_sentence(&title, folder_name.as_deref())
+            );
+            self.show_toast(Toast::new(words).duration(DRAWN_TOAST), cx);
             return Some(id);
         }
         let mut words = made_sentence(&title, folder_name.as_deref());
@@ -818,6 +853,16 @@ impl Workspace {
         self.show_toast(toast, cx);
         Some(id)
     }
+}
+
+/// Where the adopt of an answer's drawing was answered: the whiteboard, its
+/// session, the load of its page and the rev the canvas was at.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct DrawnAt {
+    id: DocumentId,
+    session: u64,
+    loads: u64,
+    rev: u64,
 }
 
 /// Why the version and the save of a drawing did not happen.

@@ -184,6 +184,15 @@ pub fn key_bindings() -> Vec<KeyBinding> {
     ]
 }
 
+/// The title of [`DrawAnswer`] in the list of shortcuts, which searches
+/// titles only: it names both of the key's meanings, as the zoom's
+/// "Automatic" does. The palette names the one that applies ("Draw answer on
+/// whiteboard" on a whiteboard, [`NEW_BOARD_FROM_ANSWER_TITLE`] over a
+/// document), with this title among its keywords.
+pub const DRAW_ANSWER_TITLE: &str = "Draw answer (on the whiteboard, or as a new whiteboard)";
+/// The palette's title of [`DrawAnswer`] over a document.
+pub const NEW_BOARD_FROM_ANSWER_TITLE: &str = "New whiteboard from answer";
+
 /// The commands of the side chat for the command palette and the shortcuts
 /// overlay. They act on the side chat of the window, wherever the keyboard
 /// is, once the app has made them reach it (see the crate docs).
@@ -225,7 +234,7 @@ pub fn commands() -> Vec<CommandDescriptor> {
         ]),
         CommandDescriptor::new("Replace selection with answer", CATEGORY, ReplaceSelection)
             .keywords(["assistant", "apply"]),
-        CommandDescriptor::new("New whiteboard from answer", CATEGORY, DrawAnswer).keywords([
+        CommandDescriptor::new(DRAW_ANSWER_TITLE, CATEGORY, DrawAnswer).keywords([
             "assistant",
             "draw",
             "drawing",

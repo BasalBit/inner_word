@@ -62,7 +62,7 @@ pub use making::{HashedMaking, Making};
 pub use scene::{Element, ElementType, FileEntry, Parsed, Scene, SceneError};
 pub use skeleton::{
     Added, AddedElement, BoardError, ElementChange, Picture, Pictures, Removed, Skeleton, Updated,
-    add, is_id, picture_paths, remove, update,
+    add, is_id, link_host, picture_paths, remove, update,
 };
 pub use svg::sniff_svg;
 pub use unchanged::changes_that_change;

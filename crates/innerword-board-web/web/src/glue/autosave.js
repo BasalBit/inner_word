@@ -55,8 +55,13 @@ function pictureOnItsWay(elements) {
   return elements.some((e) => !e.isDeleted && e.type === "image" && e.status === "pending" && e.fileId && !files[e.fileId]?.dataURL);
 }
 
-/** Posts the scene now when the app has not been given this rev. */
-export function postNow() {
+/**
+ * Posts the scene now when the app has not been given this rev. A picture Excalidraw is
+ * still reading (a paste) is waited for, up to five seconds, unless `force`: the page is
+ * being hidden or going, and then the scene goes as it is (the app's `files` call asks for
+ * a picture it names that the app has not had).
+ */
+export function postNow({ force = false } = {}) {
   clearTimers();
   if (!board.isReady) return;
   const rev = currentRev();
@@ -65,10 +70,10 @@ export function postNow() {
     return;
   }
   const elements = board.api.getSceneElementsIncludingDeleted();
-  if (pictureOnItsWay(elements)) {
+  if (!force && pictureOnItsWay(elements)) {
     if (!pictureWaitSince) pictureWaitSince = Date.now();
     if (Date.now() - pictureWaitSince < PICTURE_PATIENCE_MS) {
-      pictureTimer = setTimeout(postNow, 100);
+      pictureTimer = setTimeout(() => postNow(), 100);
       return;
     }
   }
@@ -233,14 +238,15 @@ export function installGestureTracking({ onHidden }) {
     },
     true,
   );
+  // At once, whatever is on its way: a timer set now may never run.
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "hidden") {
-      postNow();
+      postNow({ force: true });
       onHidden();
     }
   });
   window.addEventListener("pagehide", () => {
-    postNow();
+    postNow({ force: true });
     onHidden();
   });
 }

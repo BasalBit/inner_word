@@ -1,7 +1,7 @@
 // Excalidraw's shape library, kept by the app in the library's settings (4.15): served as
 // library.json at the load, posted as `library` when it changes, and the `library` call.
 import { getLibraryItemsHash } from "@excalidraw/excalidraw";
-import { post, wellFormed } from "./bridge.js";
+import { MAX_MESSAGE_BYTES, fitsIn, postText, wellFormed } from "./bridge.js";
 import { loadFontsFor } from "./fonts.js";
 import { board, boundsOf, randomId, randomInteger, selectedIds, viewCenter } from "./scene.js";
 
@@ -45,11 +45,23 @@ export function libraryChanged(items) {
   library.timer = setTimeout(postLibrary, POST_AFTER_MS);
 }
 
+/**
+ * Posts the library when it changed since its last post. A library longer than one message
+ * is posted as `{"items": null, "tooLarge": true}` (the view would drop the whole message,
+ * and the app would never hear of it), so that the app keeps the library it stored and
+ * tells the writer it is too large to keep; it does not count as posted, and `collect`
+ * still brings it whole.
+ */
 export function postLibrary() {
   clearTimeout(library.timer);
   library.timer = null;
   if (library.lrev <= library.posted) return;
-  if (post("library", { lrev: library.lrev, items: library.items })) library.posted = library.lrev;
+  const text = wellFormed(JSON.stringify({ v: 1, kind: "library", lrev: library.lrev, items: library.items }));
+  if (!fitsIn(text, MAX_MESSAGE_BYTES)) {
+    postText(`{"v":1,"kind":"library","lrev":${library.lrev},"items":null,"tooLarge":true}`);
+    return;
+  }
+  if (postText(text)) library.posted = library.lrev;
 }
 
 /** For `collect`: the library when it changed since its last post (and it counts as posted). */

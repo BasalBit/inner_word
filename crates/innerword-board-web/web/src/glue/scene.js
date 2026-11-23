@@ -173,13 +173,25 @@ export function randomId() {
   return id;
 }
 
-/** Elements ordered by fractional index as Excalidraw orders them (ties by id); an element
- * without an index keeps its place after those that have one. */
-export function orderByIndex(elements) {
+/**
+ * Elements ordered by fractional index as Excalidraw orders them; an element without an
+ * index keeps its place after those that have one. Two with one index are ordered by id,
+ * except that an element whose id is in `lastInTies` comes after one whose id is not: the
+ * merges of edit.js hand that list to Excalidraw, which gives the second of the two a new
+ * index, and that is then the incoming element, never the canvas's own.
+ */
+export function orderByIndex(elements, lastInTies = null) {
   const indexed = [];
   const rest = [];
   for (const element of elements) (typeof element.index === "string" ? indexed : rest).push(element);
-  indexed.sort((a, b) => (a.index < b.index ? -1 : a.index > b.index ? 1 : a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  indexed.sort((a, b) => {
+    if (a.index !== b.index) return a.index < b.index ? -1 : 1;
+    if (lastInTies) {
+      const lateA = lastInTies.has(a.id);
+      if (lateA !== lastInTies.has(b.id)) return lateA ? 1 : -1;
+    }
+    return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+  });
   return indexed.concat(rest);
 }
 

@@ -304,8 +304,10 @@ function lockfilePackages() {
   return names;
 }
 
-function notices(metafile, fontEntries) {
-  const inBundle = new Map(); // name@version -> { name, version, dir }
+/** Every package with code in the bundle, as esbuild's metafile shows it: name@version ->
+ * { name, version, dir, files }. */
+function packagesInTheMetafile(metafile) {
+  const inBundle = new Map();
   for (const output of Object.values(metafile.outputs)) {
     for (const [input, { bytesInOutput }] of Object.entries(output.inputs)) {
       if (!bytesInOutput) continue;
@@ -317,6 +319,26 @@ function notices(metafile, fontEntries) {
       inBundle.get(key).files.add(path.join(WEB, input));
     }
   }
+  return inBundle;
+}
+
+/** What the bundle holds, for BUILD-INFO: every package of the metafile (name@version) and,
+ * for each that carries others inside its own files (read in its source maps), their
+ * names. Written before, and apart from, the notices, so that a test can hold NOTICES.txt
+ * against it. */
+function whatTheBundleHolds(metafile) {
+  const inBundle = packagesInTheMetafile(metafile);
+  const carried = {};
+  for (const [key, pkg] of [...inBundle.entries()].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) {
+    const names = new Set();
+    for (const f of pkg.files) for (const name of packagesOfSourceMap(f)) names.add(name);
+    if (names.size) carried[key] = [...names].sort();
+  }
+  return { packages: [...inBundle.keys()].sort(), carried };
+}
+
+function notices(metafile, fontEntries) {
+  const inBundle = packagesInTheMetafile(metafile); // name@version -> { name, version, dir, files }
 
   const declared = readJson(path.join(WEB, "bundled-inside.json")).carriers;
   const textsOfOurs = readJson(path.join(WEB, "bundled-inside.json")).textsOfOurs ?? {};
@@ -542,6 +564,7 @@ async function build(out) {
   const fontEntries = copyFonts(out);
   fs.writeFileSync(path.join(out, "font-metrics.json"), jsonText(fontMetrics(out)));
 
+  const holds = whatTheBundleHolds(result.metafile);
   const notice = notices(result.metafile, fontEntries);
   fs.writeFileSync(path.join(out, "NOTICES.txt"), notice.text);
 
@@ -579,6 +602,8 @@ async function build(out) {
     ],
     mermaidChunks,
     packages: notice.packages,
+    metafilePackages: holds.packages,
+    carriedInside: holds.carried,
   };
   fs.writeFileSync(path.join(out, "BUILD-INFO.json"), jsonText(buildInfo));
 

@@ -47,3 +47,21 @@ fn the_keys_of_section_4_7() {
         assert!(!is_whiteboard_key(keys), "{keys}");
     }
 }
+
+#[test]
+fn a_shifted_punctuation_key_has_two_spellings_to_bind() {
+    // What the doc of WHITEBOARD_KEYS asks the app to bind: every spelling of each key.
+    let spellings = |keys: &str| Keystroke::parse(keys).unwrap().spellings();
+    assert_eq!(spellings("cmd-shift-,"), ["cmd-<", "cmd-shift-,"]);
+    assert_eq!(spellings("cmd-shift-."), ["cmd->", "cmd-shift-."]);
+    assert_eq!(spellings("cmd-d"), ["cmd-d"]);
+    let mut more_than_one = Vec::new();
+    for key in WHITEBOARD_KEYS {
+        let all = spellings(key.keys);
+        assert_eq!(all.last().map(String::as_str), Some(key.keys), "the normal form is the last spelling of {}", key.keys);
+        if all.len() > 1 {
+            more_than_one.push(key.keys);
+        }
+    }
+    assert_eq!(more_than_one, ["cmd-shift-,", "cmd-shift-."], "the keys with a second spelling");
+}

@@ -3,8 +3,8 @@
   "files": [
     {
       "path": "BUILD-INFO.json",
-      "bytes": 12528,
-      "sha256": "4bd169c50e17e4d44c379c1adf30af5d4c3634691b8743825e5f86978d7ad4f6",
+      "bytes": 16820,
+      "sha256": "81987b5258a56ddd1dce2b9117af2674a40d398ec366dde3392260fd822d7b77",
       "type": "application/json"
     },
     {
@@ -783,8 +783,8 @@
     },
     {
       "path": "assets/main.js",
-      "bytes": 801418,
-      "sha256": "84dae09ee03611bc87410b3a545df244a81b3b4bf3446a8e326b0ca27c856bda",
+      "bytes": 802901,
+      "sha256": "e31c2dd8c1067fa9d535e597ad24d0ba3ad64a7d3a3a64f15fe7372f64c862bd",
       "type": "text/javascript; charset=utf-8"
     },
     {

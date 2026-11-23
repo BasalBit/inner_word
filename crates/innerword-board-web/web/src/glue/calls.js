@@ -16,18 +16,24 @@ const VERSION = "0.18.1";
 
 let queue = Promise.resolve();
 
+/** Calls answered at once, outside the queue and before `ready`: what they read is never
+ * changed by them, and the scripted `state` line must not hang behind a call that waits
+ * for a start that failed. */
+const AT_ONCE = new Set(["state"]);
+
 /** Defines window.innerwordBoard with the calls of this page. `needsReady`: the calls wait
- * until the page posted `ready` (all but `state`). */
+ * until the page posted `ready` (all but those in AT_ONCE). */
 export function defineCalls(calls, { needsReady }) {
   const call = (name, argText) => {
     const run = async () => {
       const fn = Object.prototype.hasOwnProperty.call(calls, name) ? calls[name] : null;
       if (!fn) throw new Error(`the whiteboard has no call named ${name}`);
       const arg = argText === undefined || argText === null || argText === "" ? {} : typeof argText === "string" ? JSON.parse(argText) : argText;
-      if (needsReady && name !== "state") await board.ready;
+      if (needsReady && !AT_ONCE.has(name)) await board.ready;
       const answer = await fn(arg ?? {});
       return typeof answer === "string" ? answer : wellFormed(JSON.stringify(answer ?? {}));
     };
+    if (AT_ONCE.has(name)) return run();
     const result = queue.then(run, run);
     queue = result.then(
       () => undefined,

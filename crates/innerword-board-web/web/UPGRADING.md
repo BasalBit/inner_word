@@ -23,6 +23,11 @@ bundled) and change what moved.
      `'wasm-unsafe-eval'` and no eval: without the patches the subsetter fails and every font
      goes into the PDF whole.
    - The table of font families (`{Virgil:1,Helvetica:2,…}`) must be found once.
+
+   The test `nothing_in_the_bundle_evaluates_a_string` counts what is left exactly: lodash's
+   `Function("return this")` (6 copies) and chevrotain's dead `(0,eval)(t)` after a
+   `return` (1). A new count is a new way to run a string: read it before changing the
+   number.
 3. `bundled-inside.json`: the build reads the source maps of the packages that carry others
    inside their files (`@mermaid-js/parser`, `mermaid`) and fails on one it does not list. A
    carrier is named with its version: a new version of it fails until its entry is read
@@ -59,10 +64,21 @@ bundled) and change what moved.
   `library.js`).
 - **`restoreElements`**: it raises the version of an element whose local copy is newer, so
   the glue never passes it the canvas's elements as local ones (`edit.js`); it repairs
-  bindings only within the list it is given, so `adopt` and inserts restore the whole merged
-  list; it drops invisibly small elements; `refreshDimensions` acts only with
-  `repairBindings`. `updateScene` repairs fractional indices itself (`syncInvalidIndices` in
-  `Scene.replaceAllElements`); the glue orders by index first.
+  bindings only within the list it is given, so `adopt` and inserts restore the incoming
+  elements with copies of the canvas elements they name (container, frame, the ends of a
+  binding, what is bound to them) and keep only the incoming ones; it drops invisibly small
+  elements and deletes an empty text, which is why it never sees the canvas's own elements.
+  `refreshDimensions` acts only with `repairBindings`. `updateScene` repairs fractional
+  indices itself (`syncInvalidIndices` in `Scene.replaceAllElements`, mutating the second of
+  two elements with one index); the glue orders by index first, the canvas's element before
+  an incoming one.
+- **A gesture under way** (the reason the merges of `edit.js` keep every element they do
+  not name as the very object Excalidraw has): a freehand stroke, a shape being drawn and a
+  line's next point are extended with `mutateElement` on `appState.newElement`
+  (`onPointerMoveFromPointerDownHandler` in `dist/dev/index.js`), and `updateScene` with
+  `captureUpdate` leaves uncommitted local elements out of the undo step
+  (`store.filterUncomittedElements`). Read both again; B3's WebKit cases (an adopt during a
+  stroke, right after one began, and while a new text is typed) hold it.
 - **Fonts**: Excalidraw adds its faces to `document.fonts` only when it loads fonts for an
   export (`Fonts.loadElementsFonts`), which is how `fonts.js` loads them before text is
   measured (`exportToCanvas` onto one pixel).

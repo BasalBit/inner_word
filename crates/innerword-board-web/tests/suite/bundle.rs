@@ -196,9 +196,27 @@ fn the_two_pages_load_the_same_script() {
 fn the_notices_name_every_package_and_every_font() {
     let notices = std::fs::read_to_string(dist().join(innerword_board_web::NOTICES)).unwrap();
     let info = read_json(&dist().join("BUILD-INFO.json"));
-    for package in info["packages"].as_array().unwrap() {
-        assert!(notices.contains(package.as_str().unwrap()), "NOTICES.txt does not name {package}");
+    // Every package esbuild's metafile shows with code in the bundle (written by build.mjs
+    // apart from the notices, before any license is read), on a line of its own.
+    let packages = info["metafilePackages"].as_array().unwrap();
+    assert!(packages.len() >= 40, "only {} packages in the metafile", packages.len());
+    for package in packages {
+        let (name, version) = package.as_str().unwrap().rsplit_once('@').unwrap();
+        assert!(notices.lines().any(|l| l.starts_with(&format!("{name} {version}: "))), "NOTICES.txt does not name {name} {version}");
     }
+    // Every package a package carries inside its own files (its source maps), under it.
+    let mut carried = 0;
+    for (carrier, names) in info["carriedInside"].as_object().unwrap() {
+        let (carrier_name, carrier_version) = carrier.rsplit_once('@').unwrap();
+        assert!(packages.iter().any(|p| p == carrier), "{carrier} carries packages and is not in the metafile");
+        for name in names.as_array().unwrap() {
+            let name = name.as_str().unwrap();
+            let inside = format!("(inside {carrier_name} {carrier_version}");
+            assert!(notices.lines().any(|l| l.starts_with(&format!("{name} ")) && l.contains(&inside)), "NOTICES.txt does not name {name} inside {carrier}");
+            carried += 1;
+        }
+    }
+    assert!(carried >= 10, "only {carried} packages carried inside others");
     for folder in std::fs::read_dir(dist().join("fonts")).unwrap() {
         let folder = folder.unwrap().file_name().to_string_lossy().into_owned();
         assert!(notices.contains(&format!("fonts/{folder}/")), "NOTICES.txt does not name the font folder {folder}");
@@ -254,16 +272,64 @@ fn mermaid_ships_whole() {
     assert!(all.contains("flowchart") && all.contains("sequenceDiagram"));
 }
 
+/// Where `name` stands as an identifier of its own in minified code (not part of a longer
+/// name, not a property after a dot), with the text that follows it.
+fn identifier_uses<'a>(text: &'a str, name: &str) -> Vec<&'a str> {
+    let part = |c: u8| c.is_ascii_alphanumeric() || c == b'_' || c == b'$';
+    let bytes = text.as_bytes();
+    let mut found = Vec::new();
+    let mut from = 0;
+    while let Some(at) = text[from..].find(name).map(|i| i + from) {
+        let end = at + name.len();
+        let before = at.checked_sub(1).map(|i| bytes[i]);
+        let after = bytes.get(end).copied();
+        if !before.is_some_and(|c| part(c) || c == b'.') && !after.is_some_and(part) {
+            found.push(&text[end..(end + 40).min(text.len())]);
+        }
+        from = end;
+    }
+    found
+}
+
 #[test]
 fn nothing_in_the_bundle_evaluates_a_string() {
     // The live view's policy has no eval, and the export page's only WebAssembly's: the
-    // font subsetter's `new Function`s are patched out at the build. (lodash's
-    // `Function("return this")` is never reached in a window or a worker: `self` is there.)
+    // font subsetter's `new Function`s are patched out at the build. What is left is
+    // counted exactly, so that a new one (an upgrade of a package) fails here and is read.
+    let mut function_calls = 0;
+    let mut evals = Vec::new();
     for file in files_under(&dist().join("assets")) {
+        if !file.ends_with(".js") {
+            continue;
+        }
         let text = std::fs::read_to_string(dist().join("assets").join(&file)).unwrap();
         assert!(!text.contains("new Function"), "{file} has new Function");
         assert!(!text.contains("(Function,"), "{file} builds a Function");
+        for timer in ["setTimeout(", "setInterval("] {
+            for quote in ['"', '\'', '`'] {
+                assert!(!text.contains(&format!("{timer}{quote}")), "{file} runs a string in {timer}");
+            }
+        }
+        for quote in ['"', '\'', '`'] {
+            assert!(!text.contains(&format!(".constructor({quote}")), "{file} makes a function of a string");
+        }
+        for after in identifier_uses(&text, "Function") {
+            if after.starts_with('(') {
+                // lodash's `Function("return this")()`, never reached in a window or a
+                // worker: `self` is there and is taken first.
+                assert!(after.starts_with(r#"("return this")()"#), "{file} calls Function{after}");
+                function_calls += 1;
+            }
+        }
+        for after in identifier_uses(&text, "eval") {
+            evals.push(format!("{file}: eval{after}"));
+        }
     }
+    assert_eq!(function_calls, 6, "lodash's Function(\"return this\"), one per copy of it in the bundle");
+    // chevrotain's toFastProperties: `return t; (0,eval)(t)`, after its `return` and given
+    // an object, never a string.
+    assert_eq!(evals.len(), 1, "{evals:#?}");
+    assert!(evals[0].contains("eval)(") && evals[0].contains(r#""toFastProperties""#), "{evals:#?}");
 }
 
 #[test]

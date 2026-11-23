@@ -16,5 +16,7 @@ site/** linguist-documentation
 docs/** linguist-documentation
 
 # The whiteboard's built folder: minified JavaScript, fonts and lists the build writes, reviewed
-# through its sources and `node build.mjs --check`, not line by line.
-crates/innerword-board-web/dist/** -diff linguist-generated
+# through its sources and `node build.mjs --check`, not line by line. Its bytes are kept
+# exactly as written (-text: no line ending is ever converted), because MANIFEST.json names
+# every file with its size and SHA-256 and the app refuses a file that differs.
+crates/innerword-board-web/dist/** -diff -text linguist-generated

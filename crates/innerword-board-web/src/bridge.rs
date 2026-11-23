@@ -20,6 +20,11 @@ pub const MAX_MESSAGE_BYTES: usize = 24 * 1024 * 1024;
 pub const PART_BYTES: usize = 16 * 1024 * 1024;
 /// The version of the messages (`"v"`).
 pub const VERSION: u64 = 1;
+/// The start of the one [`Message::Error`] the page posts when it cannot start (`board.json`
+/// missing or not a stored scene, Excalidraw failing to mount): it then never posts
+/// [`Message::Ready`], and the app shows that the whiteboard stopped working instead of a
+/// canvas, rather than waiting for a `ready` that does not come.
+pub const START_FAILED: &str = "the whiteboard could not start";
 
 /// One message of the page.
 #[derive(Debug)]
@@ -40,7 +45,14 @@ pub enum Message {
     /// What the page holds that the app may not have yet.
     Status(Status),
     /// The shape library changed: Excalidraw's `LibraryItems` and the library's own counter.
-    Library { lrev: u64, items: Box<RawValue> },
+    ///
+    /// `too_large`: the library is longer than one message ([`MAX_MESSAGE_BYTES`]), and
+    /// `items` is then JSON `null` (which `innerword_board::ShapeLibrary::from_view`
+    /// refuses, so it can never be stored as an empty library). The app keeps the library
+    /// it stored and says it is too large to keep (4.15), as for one over
+    /// `MAX_LIBRARY_BYTES`; the page does not count it as posted, so `collect` brings it
+    /// whole at the end.
+    Library { lrev: u64, items: Box<RawValue>, too_large: bool },
     /// Excalidraw's `?` or its menu's Keyboard Shortcuts: the app opens its list of shortcuts
     /// at "On a whiteboard" (and nothing else).
     Help,
@@ -76,7 +88,8 @@ impl Message {
                 let fields = serde_json::to_string(status).unwrap_or_else(|_| "{}".to_string());
                 format!(r#"{{"v":1,"kind":"status",{}"#, &fields[1..])
             }
-            Message::Library { lrev, items } => format!(r#"{{"v":1,"kind":"library","lrev":{lrev},"items":{}}}"#, items.get()),
+            Message::Library { lrev, too_large: true, .. } => format!(r#"{{"v":1,"kind":"library","lrev":{lrev},"items":null,"tooLarge":true}}"#),
+            Message::Library { lrev, items, too_large: false } => format!(r#"{{"v":1,"kind":"library","lrev":{lrev},"items":{}}}"#, items.get()),
             Message::Help => r#"{"v":1,"kind":"help"}"#.to_string(),
             Message::Error { message } => format!(r#"{{"v":1,"kind":"error","message":{}}}"#, text(message)),
         }
@@ -231,6 +244,8 @@ struct Head {
     data_url: Option<String>,
     lrev: Option<u64>,
     items: Option<Box<RawValue>>,
+    #[serde(rename = "tooLarge")]
+    too_large: Option<bool>,
     message: Option<String>,
     excalidraw: Option<String>,
     elements: Option<u64>,
@@ -286,13 +301,19 @@ pub fn parse(body: &str) -> Result<Message, String> {
         },
         "status" => Message::Status(serde_json::from_str(body).map_err(|error| format!("a status message of the whiteboard cannot be read: {error}"))?),
         "library" => {
-            let items = head.items.ok_or_else(|| needs("items"))?;
-            if !items.get().trim_start().starts_with('[') {
-                return Err("a library message of the whiteboard holds no list of items".to_string());
-            }
-            Message::Library {
-                lrev: head.lrev.ok_or_else(|| needs("lrev"))?,
-                items,
+            let lrev = head.lrev.ok_or_else(|| needs("lrev"))?;
+            if head.too_large == Some(true) {
+                Message::Library {
+                    lrev,
+                    items: RawValue::from_string("null".to_string()).map_err(|error| error.to_string())?,
+                    too_large: true,
+                }
+            } else {
+                let items = head.items.ok_or_else(|| needs("items"))?;
+                if !items.get().trim_start().starts_with('[') {
+                    return Err("a library message of the whiteboard holds no list of items".to_string());
+                }
+                Message::Library { lrev, items, too_large: false }
             }
         }
         "help" => Message::Help,

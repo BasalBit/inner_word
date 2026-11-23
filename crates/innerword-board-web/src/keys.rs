@@ -20,6 +20,14 @@ const fn key(keys: &'static str, what: &'static str) -> BoardKey {
 }
 
 /// Every key of section 4.7's table, read again in 0.18.1.
+///
+/// Each is written once, in `innerword_keymap`'s normal form. **Bind each in every spelling
+/// `innerword_keymap::Keystroke::spellings` gives for it, not in this text alone**: shift with
+/// a digit or a punctuation key reaches GPUI as the shifted character without the shift
+/// flag, so `cmd-shift-,` and `cmd-shift-.` arrive as `cmd-<` and `cmd->` on a US keyboard,
+/// and a binding of the normal form alone would never match, letting the window's "smaller
+/// or larger text" run on a whiteboard. (This crate depends on nothing of ours, so it
+/// cannot call the keymap itself; its tests hold the two spellings of those keys.)
 pub const WHITEBOARD_KEYS: &[BoardKey] = &[
     key("cmd-z", "Undo"),
     key("cmd-shift-z", "Redo"),

@@ -172,6 +172,15 @@ async function mounted() {
   await frame();
 }
 
+/** The stored scene of board.json, or null when it is not there as the app writes it: a
+ * string `stamp` and a `scene` that is an object with a list of `elements`. */
+function storedScene(stored) {
+  if (!stored || typeof stored !== "object" || typeof stored.stamp !== "string") return null;
+  const scene = stored.scene;
+  if (!scene || typeof scene !== "object" || Array.isArray(scene) || !Array.isArray(scene.elements)) return null;
+  return scene;
+}
+
 /** The scroll and zoom the writer last looked at, when they belong to this scene. */
 function viewOf(view, stamp) {
   if (!view || typeof view !== "object" || !stamp || view.at !== stamp) return null;
@@ -186,9 +195,13 @@ export async function startBoard() {
   installGestureTracking({ onHidden: postLibrary });
 
   const [stored, storedLibrary] = await Promise.all([fetchJson("./board.json"), fetchJson("./library.json")]);
-  const stamp = typeof stored?.stamp === "string" ? stored.stamp : "";
-  const scene = stored?.scene && typeof stored.scene === "object" ? stored.scene : {};
-  const elements = (Array.isArray(scene.elements) ? scene.elements : []).filter((e) => e && !e.isDeleted && !NEVER_KEPT.has(e.type));
+  // The app always serves board.json (4.3). Without a stored scene to start from, the page
+  // does not start: an empty canvas that posted `ready` would be taken for the drawing, and
+  // the writer's first stroke saved over it. The app shows its "stopped working" instead.
+  const scene = storedScene(stored);
+  if (!scene) throw new Error("board.json could not be read: there is no stored scene to start from");
+  const stamp = stored.stamp;
+  const elements = scene.elements.filter((e) => e && !e.isDeleted && !NEVER_KEPT.has(e.type));
 
   const files = await loadPictures(scene.files);
   for (const id of Object.keys(scene.files ?? {})) board.filesKnown.add(id);

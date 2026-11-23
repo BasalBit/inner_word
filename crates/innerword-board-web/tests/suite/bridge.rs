@@ -115,15 +115,39 @@ fn a_status_is_written_as_the_page_writes_it() {
 }
 
 #[test]
+fn the_start_that_failed_is_said_in_the_words_of_the_rust_half() {
+    let board = std::fs::read_to_string(super::web().join("src/glue/board.jsx")).unwrap();
+    assert!(board.contains(&format!("reportError(`{}: ${{error?.message ?? error}}`)", innerword_board_web::bridge::START_FAILED)));
+    // A board.json that is not a stored scene is a start that failed, not an empty canvas.
+    assert!(board.contains(r#"if (!scene) throw new Error("board.json could not be read"#));
+}
+
+#[test]
 fn library_help_and_error() {
     match parse(r#"{"v":1,"kind":"library","lrev":3,"items":[{"id":"i","status":"unpublished","elements":[],"created":1}]}"#).unwrap() {
-        Message::Library { lrev, items } => {
+        Message::Library { lrev, items, too_large } => {
             assert_eq!(lrev, 3);
             assert!(items.get().starts_with("[{"));
+            assert!(!too_large);
         }
         other => panic!("{other:?}"),
     }
     assert!(parse(r#"{"v":1,"kind":"library","lrev":3,"items":{}}"#).is_err());
+    // Longer than one message: the page says so, and its items are null, never a list that
+    // could be stored as the library (as the glue writes it).
+    let glue = std::fs::read_to_string(super::web().join("src/glue/library.js")).unwrap();
+    assert!(glue.contains(r#"`{"v":1,"kind":"library","lrev":${library.lrev},"items":null,"tooLarge":true}`"#));
+    match parse(r#"{"v":1,"kind":"library","lrev":4,"items":null,"tooLarge":true}"#).unwrap() {
+        Message::Library { lrev, items, too_large } => {
+            assert_eq!((lrev, items.get(), too_large), (4, "null", true));
+            assert!(innerword_board::ShapeLibrary::from_view(items.get()).is_err(), "null is never a library");
+        }
+        other => panic!("{other:?}"),
+    }
+    assert!(matches!(
+        parse(r#"{"v":1,"kind":"library","lrev":4,"tooLarge":true}"#).unwrap(),
+        Message::Library { too_large: true, .. }
+    ));
     assert!(matches!(parse(r#"{"v":1,"kind":"help"}"#).unwrap(), Message::Help));
     match parse(r#"{"v":1,"kind":"error","message":"a promise was rejected: x"}"#).unwrap() {
         Message::Error { message } => assert_eq!(message, "a promise was rejected: x"),
@@ -177,7 +201,12 @@ fn every_message_written_reads_back() {
         Message::ScenePart { rev: 7, index: 0, count: 2, text: "{\"elem".into() },
         Message::File { id: "f".into(), mime_type: "image/png".into(), data_url: "data:image/png;base64,AA==".into() },
         Message::Status(Status { rev: 1, posted: 1, zoom: 2.0, ..Status::default() }),
-        Message::Library { lrev: 1, items },
+        Message::Library { lrev: 1, items, too_large: false },
+        Message::Library {
+            lrev: 2,
+            items: serde_json::value::RawValue::from_string("null".to_string()).unwrap(),
+            too_large: true,
+        },
         Message::Help,
         Message::Error { message: "line\nbreak".into() },
     ];

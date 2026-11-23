@@ -2911,3 +2911,86 @@ fn the_side_chat_over_a_whiteboard_sends_its_listing(cx: &mut TestAppContext) {
     let sent = fake.last_sent().expect("a message was sent");
     assert!(sent.contains("Drawn after the answer"), "{sent}");
 }
+
+/// A message sent over a whiteboard waits for what its page holds and has
+/// not posted (spec 6.6): the page is asked as the message is sent, and the
+/// message carries what it handed over. A page that does not answer holds
+/// the message back for at most a second; then it goes with what the app
+/// holds.
+#[gpui::test]
+fn a_message_over_a_whiteboard_waits_for_what_its_page_holds(cx: &mut TestAppContext) {
+    let fake = FakeBackend::new();
+    init(cx);
+    install(&fake, cx);
+    let pages = cx.update(innerword_app::pages::use_fake);
+    let library = library(cx);
+    let (workspace, vcx) = open_workspace(&library, cx);
+    vcx.run_until_parked();
+    workspace
+        .update_in(vcx, |w, window, cx| w.new_board(Some("Plan"), window, cx))
+        .expect("a whiteboard is made");
+    vcx.run_until_parked();
+    pages.board_ready();
+    pages.draw(&board_scene(&[board_text("title", "System overview", 0.0)]));
+    vcx.run_until_parked();
+
+    // The side chat has the keyboard before anything is left unposted, so
+    // only sending can ask the page.
+    vcx.simulate_keystrokes("cmd-3");
+    vcx.run_until_parked();
+    assert!(side_has_keyboard(&workspace, vcx));
+    let panel = side(&workspace, vcx);
+
+    // A text the page has not posted, and a message sent at once.
+    pages.draw_unposted(&board_scene(&[
+        board_text("title", "System overview", 0.0),
+        board_text("late", "Written just now", 60.0),
+    ]));
+    let asked = pages.collects_asked();
+    fake.reply("Two texts.");
+    panel.update_in(vcx, |panel, window, cx| {
+        panel.send("What does it say?", window, cx)
+    });
+    vcx.run_until_parked();
+    assert_eq!(pages.collects_asked(), asked + 1, "the page was asked");
+    let sent = fake.last_sent().expect("a message was sent");
+    assert!(sent.contains("System overview"), "{sent}");
+    assert!(sent.contains("Written just now"), "{sent}");
+    assert!(sent.ends_with("What does it say?"), "{sent}");
+
+    // Nothing is held back: the page is not asked, the message goes.
+    let asked = pages.collects_asked();
+    let count = fake.sent().len();
+    fake.reply("Still two.");
+    panel.update_in(vcx, |panel, window, cx| panel.send("Sure?", window, cx));
+    vcx.run_until_parked();
+    assert_eq!(pages.collects_asked(), asked, "nothing to ask");
+    assert_eq!(fake.sent().len(), count + 1);
+
+    // A page that does not answer: the message waits a second, then goes
+    // with what the app holds.
+    pages.hold_collects();
+    pages.draw_unposted(&board_scene(&[
+        board_text("title", "System overview", 0.0),
+        board_text("late", "Written just now", 60.0),
+        board_text("lost", "Never handed over", 120.0),
+    ]));
+    let count = fake.sent().len();
+    fake.reply("Two, still.");
+    panel.update_in(vcx, |panel, window, cx| panel.send("And now?", window, cx));
+    vcx.run_until_parked();
+    assert_eq!(fake.sent().len(), count, "the message waits for the page");
+    assert!(panel.read_with(vcx, |panel, _| panel.is_holding_a_message()));
+    vcx.executor()
+        .advance_clock(innerword_app::boards::VIEW_COLLECT_PATIENCE);
+    vcx.run_until_parked();
+    assert_eq!(fake.sent().len(), count + 1, "it went after a second");
+    // What the app holds is what the last message had: the whiteboard is
+    // said to be unchanged, and the text the page kept is not in it.
+    let sent = fake.last_sent().expect("a message was sent");
+    assert!(sent.contains("has not changed since my last message"), "{sent}");
+    assert!(!sent.contains("Never handed over"), "{sent}");
+    assert!(sent.ends_with("And now?"), "{sent}");
+    pages.release_collects();
+    vcx.run_until_parked();
+}

@@ -204,6 +204,7 @@ impl AssistantState {
             quick
         });
         let tools = library_tool_server(library.read(cx), cx);
+        let workspace = cx.weak_entity();
         let side = cx.new(|cx| {
             let mut side = AssistantPanel::new(
                 backend,
@@ -230,6 +231,41 @@ impl AssistantState {
                     source_editor.read(cx),
                     source_library.read(cx),
                 ))
+            });
+            // Over a whiteboard a message waits for what its page holds and
+            // has not posted (a gesture, a text being edited), at most
+            // `VIEW_COLLECT_PATIENCE`, and then goes with what the app holds
+            // (section 6.6). The source cannot ask the workspace (it may be
+            // in the middle of an update), so the hook only looks at what is
+            // open and asks the workspace a moment later.
+            let hook_open = open.clone();
+            side.set_before_send(move |_, cx| {
+                let over_a_board = matches!(
+                    &*hook_open.borrow(),
+                    Some(OpenRef {
+                        page: Some(OpenPage { board: Some(_), .. }),
+                        ..
+                    })
+                );
+                if !over_a_board {
+                    return None;
+                }
+                let workspace = workspace.clone();
+                Some(cx.spawn(async move |cx| {
+                    let collect = workspace
+                        .update(cx, |this, cx| this.collect_for_a_message(cx))
+                        .ok()
+                        .flatten();
+                    if let Some(collect) = collect {
+                        let timer = cx
+                            .background_executor()
+                            .timer(crate::boards::VIEW_COLLECT_PATIENCE);
+                        crate::pages::within(collect, timer).await;
+                    }
+                    workspace
+                        .update(cx, |this, _| this.feed_the_side_chat())
+                        .ok();
+                }))
             });
             let picker_library = library.clone();
             side.set_library_source(move |cx| library_attachments(picker_library.read(cx)));
@@ -920,6 +956,29 @@ impl Workspace {
                 this.collect_board(id, cx).detach();
             }
         });
+    }
+
+    /// A message of the side chat is about to be sent over the open
+    /// whiteboard: when its page holds more than it posted, the page is
+    /// asked for it. The answer resolves when what it handed over is taken
+    /// in and saved; whoever waits sets the limit (the side chat: at most
+    /// [`crate::boards::VIEW_COLLECT_PATIENCE`]). The collect itself goes on
+    /// when nobody waits any more. `None`: nothing to wait for.
+    pub(crate) fn collect_for_a_message(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> Option<crate::pages::Answer<bool>> {
+        let id = self.open_board_id()?;
+        let holds_more = self
+            .board()
+            .is_some_and(|board| board.ready && board.status.holds_more());
+        if !holds_more {
+            return None;
+        }
+        let collect = self.collect_board(id, cx);
+        let (done, answer) = crate::pages::answer();
+        cx.spawn(async move |_, _| done.send(collect.await)).detach();
+        Some(answer)
     }
 
     /// Shows the side chat (with the keyboard in it) or hides it.

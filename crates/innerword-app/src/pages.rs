@@ -1325,6 +1325,8 @@ pub struct FakeView {
     pub(crate) pages: Rc<FakePages>,
     /// The whiteboard it shows, when it shows one.
     pub(crate) board: Option<DocumentId>,
+    /// What the whiteboard's source serves (a reload loads it again).
+    pub(crate) board_cell: Option<crate::boards::SharedCell>,
     serial: u64,
 }
 
@@ -1356,6 +1358,7 @@ impl FakeView {
         FakeView {
             pages,
             board: None,
+            board_cell: None,
             serial,
         }
     }
@@ -1436,6 +1439,16 @@ impl FakeView {
 
     pub fn reload(&self) {
         self.pages.state.borrow_mut().reloads += 1;
+        // A whiteboard loads what its source serves now, and posts `ready`
+        // when the test says so.
+        if let Some(cell) = &self.board_cell
+            && let Ok(cell) = cell.lock()
+        {
+            self.pages
+                .board
+                .borrow_mut()
+                .reload(&cell.board_json(), &cell.library);
+        }
     }
 
     pub fn evaluate(&self, script: &str) {

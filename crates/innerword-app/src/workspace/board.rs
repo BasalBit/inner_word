@@ -25,7 +25,10 @@
 
 use std::{
     collections::{HashMap, HashSet},
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
     time::{Duration, Instant},
 };
 
@@ -47,7 +50,9 @@ use innerword_ui::{ContextMenu, ContextMenuItem, Toast};
 use super::{
     EditCommand, Workspace,
     page::{PageSession, PageState, PageViewHandle, WebItem},
-    saver::{BoardSaveJob, BoardSaveOutcome, NotPrepared, StoredPictures},
+    saver::{
+        BoardSaveJob, BoardSaveOutcome, NotPrepared, StoredPictures, WrittenBoard, WrittenSlot,
+    },
     session::{RETRY_DELAY, SNAPSHOT_INTERVAL},
 };
 use crate::{
@@ -121,6 +126,92 @@ pub const LIBRARY_TOO_LARGE: &str = "The shape library is too large to keep (ove
 /// A scene over the soft limit.
 pub const LARGE_BOARD: &str = "Large: saving this whiteboard takes longer";
 
+/// A call of the app's own (run as the glue's calls are, in the page's
+/// world): until [`OPEN_TEXT`] releases them (or two seconds pass), the
+/// keys the writer types without `cmd` or `ctrl` are held, not handed to
+/// Excalidraw, which would take them for shortcuts on the selection while
+/// a new text is not open for typing yet (`shift-h` flips it). A key event
+/// a script makes passes.
+pub(crate) const HOLD_KEYS: &str = r#"
+const now = window.__innerwordHeldKeys;
+if (now) { now.extend(); return "{}"; }
+const held = [];
+const swallow = (event) => {
+  if (!event.isTrusted || event.metaKey || event.ctrlKey) return;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  if (event.type === "keydown") {
+    held.push({ key: event.key, code: event.code, shiftKey: event.shiftKey, altKey: event.altKey });
+  }
+};
+let timer = 0;
+const hold = {
+  extend() {
+    clearTimeout(timer);
+    timer = setTimeout(() => hold.release(), 2000);
+  },
+  release() {
+    clearTimeout(timer);
+    window.removeEventListener("keydown", swallow, true);
+    window.removeEventListener("keypress", swallow, true);
+    if (window.__innerwordHeldKeys === hold) window.__innerwordHeldKeys = null;
+    const editing = () => {
+      const active = document.activeElement;
+      return active instanceof HTMLTextAreaElement && active.classList.contains("excalidraw-wysiwyg") ? active : null;
+    };
+    for (const key of held) {
+      const editor = editing();
+      if (editor) {
+        if ([...key.key].length === 1) { document.execCommand("insertText", false, key.key); continue; }
+        if (key.key === "Enter") { document.execCommand("insertText", false, "\n"); continue; }
+        if (key.key === "Backspace") { document.execCommand("delete"); continue; }
+        if (key.key === "Delete") { document.execCommand("forwardDelete"); continue; }
+      }
+      const target = editor ?? document.querySelector(".excalidraw") ?? document;
+      target.dispatchEvent(new KeyboardEvent("keydown", { ...key, bubbles: true, cancelable: true }));
+    }
+    held.length = 0;
+  },
+};
+window.addEventListener("keydown", swallow, true);
+window.addEventListener("keypress", swallow, true);
+window.__innerwordHeldKeys = hold;
+hold.extend();
+return "{}";
+"#;
+
+/// A call of the app's own: `{"id": <a text's id> or null}`. Opens the
+/// text for typing as `enter` on it does, once Excalidraw has drawn it
+/// selected (two frames after the insert), waits for its editor (a second
+/// at most), then releases the keys [`HOLD_KEYS`] held into it. Answers
+/// `{"editing": bool}`.
+pub(crate) const OPEN_TEXT: &str = r#"
+const { id } = JSON.parse(arg || "{}");
+const editing = () => {
+  const active = document.activeElement;
+  return active instanceof HTMLTextAreaElement && active.classList.contains("excalidraw-wysiwyg") ? active : null;
+};
+if (id) {
+  const frame = () => new Promise((resolve) => requestAnimationFrame(() => resolve()));
+  await frame();
+  await frame();
+  if (!editing()) {
+    const target = document.querySelector(".excalidraw") ?? document;
+    target.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", bubbles: true, cancelable: true }));
+  }
+  const until = Date.now() + 1000;
+  while (!editing() && Date.now() < until) await new Promise((resolve) => setTimeout(resolve, 16));
+}
+const hold = window.__innerwordHeldKeys;
+if (hold) hold.release();
+return JSON.stringify({ editing: !!editing() });
+"#;
+
+/// The argument of [`OPEN_TEXT`].
+pub(crate) fn open_text_argument(id: Option<&str>) -> String {
+    serde_json::json!({ "id": id }).to_string()
+}
+
 /// How soon after a post the whiteboard is saved: the page posts at the end
 /// of a gesture already, this only gathers a burst of them.
 pub const BOARD_SAVE_DELAY: Duration = Duration::from_millis(150);
@@ -171,11 +262,23 @@ pub enum Recovered {
 /// A background save of a whiteboard that has not answered yet.
 pub(crate) struct BoardInFlight {
     seq: u64,
+    /// The rev it saves.
+    rev: u64,
+    /// What it wrote, once it did (read by a synchronous save that settles
+    /// the background before the answer came).
+    written: WrittenSlot,
     _task: Task<()>,
 }
 
+/// The number of the next session of a whiteboard: a task that outlives a
+/// session acts on that session only, not on the next one of the same
+/// whiteboard.
+static SESSIONS: AtomicU64 = AtomicU64::new(1);
+
 /// The board half of an open web item (section 4.6, "What the app holds").
 pub(crate) struct BoardState {
+    /// This session's number ([`SESSIONS`]).
+    session: u64,
     /// What the view's source serves, kept up to date.
     pub cell: SharedCell,
     /// The stamp of the stored scene the view's scene descends from.
@@ -198,6 +301,21 @@ pub(crate) struct BoardState {
     pending_post: Option<Held>,
     /// Posts below this rev are dropped (they left the page before a merge).
     pub floor: u64,
+    /// While an outside write is adopted: the stored scene the writer's
+    /// scene descends from (the base before the outside write), and the
+    /// scene the app held when it started. A failed adopt, and a flush while
+    /// it is answered, merge them with the stored scene in Rust.
+    adopt_before: Option<Arc<str>>,
+    adopt_writer: Option<Held>,
+    /// The number of the newest adopt: the answer of an older one (or of
+    /// one sent to a page that has loaded again since) is not acted on.
+    adopt_seq: u64,
+    /// The newest counter of the shape library taken from this view: the
+    /// glue's counter starts at 0 at every load of a view.
+    library_lrev: u64,
+    /// A search to make once the page is ready (a whiteboard opened from a
+    /// hit of the library search: the view is made at its first frame).
+    pending_search: Option<String>,
     pub status: Status,
     pub pictures: HashMap<String, Picture>,
     pub in_flight: Option<BoardInFlight>,
@@ -218,6 +336,16 @@ pub(crate) struct BoardState {
 }
 
 impl BoardState {
+    /// The page loads again: an adopt it was asked is never answered, and
+    /// what was posted for it is in the save that came first.
+    fn forget_adopt(&mut self) {
+        self.adopting = false;
+        self.adopt_seq += 1;
+        self.adopt_before = None;
+        self.adopt_writer = None;
+        self.pending_post = None;
+    }
+
     /// Whether the app holds a scene it has not saved.
     pub fn dirty(&self) -> bool {
         self.held.as_ref().is_some_and(|held| held.rev > self.saved)
@@ -305,9 +433,13 @@ pub(crate) struct ClosingBoard {
 /// whiteboard, so the workspace's, not a session's.
 #[derive(Default)]
 pub(crate) struct ShapeLibraryState {
-    /// The newest library the page posted: its counter and its items.
+    /// The newest library a page posted: the number of that post (counted
+    /// here, across views: each view's own counter starts at 0) and its
+    /// items.
     pub held: Option<(u64, Arc<str>)>,
-    /// The counter last stored.
+    /// The number of the last post taken.
+    posts: u64,
+    /// The number of the post last stored.
     pub saved: u64,
     /// The stored setting (`{}` when there is none).
     pub stored: Option<Arc<str>>,
@@ -353,14 +485,21 @@ impl Workspace {
                 WebItem::Page(_) => None,
             };
         }
-        let closing = self.closing_board.as_mut()?;
-        if closing.session.id != id {
-            return None;
-        }
+        let closing = self
+            .closing_boards
+            .iter_mut()
+            .find(|closing| closing.session.id == id)?;
         match &mut closing.session.item {
             WebItem::Board(board) => Some(board),
             WebItem::Page(_) => None,
         }
+    }
+
+    /// The board half of whiteboard `id` while it is still in session
+    /// `session` (a task that outlived it leaves the next session alone).
+    fn board_in_session_mut(&mut self, id: DocumentId, session: u64) -> Option<&mut BoardState> {
+        self.board_of_mut(id)
+            .filter(|board| board.session == session)
     }
 
     fn board_of(&self, id: DocumentId) -> Option<&BoardState> {
@@ -370,10 +509,10 @@ impl Workspace {
                 WebItem::Page(_) => None,
             };
         }
-        let closing = self.closing_board.as_ref()?;
-        if closing.session.id != id {
-            return None;
-        }
+        let closing = self
+            .closing_boards
+            .iter()
+            .find(|closing| closing.session.id == id)?;
         match &closing.session.item {
             WebItem::Board(board) => Some(board),
             WebItem::Page(_) => None,
@@ -385,10 +524,10 @@ impl Workspace {
         if let Some(page) = self.page.as_ref().filter(|page| page.id == id) {
             return Some(page);
         }
-        self.closing_board
-            .as_ref()
+        self.closing_boards
+            .iter()
             .map(|closing| &closing.session)
-            .filter(|session| session.id == id)
+            .find(|session| session.id == id)
     }
 
     /// The status the open whiteboard's page posted last.
@@ -432,11 +571,20 @@ impl Workspace {
         self.board().and_then(|board| board.recovered.clone())
     }
 
-    /// Whether whiteboard `id` is closing (its view parked).
+    /// The whiteboard that is closing (its view parked), the one that began
+    /// to close first when there are several.
     pub fn board_closing(&self) -> Option<DocumentId> {
-        self.closing_board
-            .as_ref()
+        self.closing_boards
+            .first()
             .map(|closing| closing.session.id)
+    }
+
+    /// Every whiteboard that is closing, the first to close first.
+    pub fn boards_closing(&self) -> Vec<DocumentId> {
+        self.closing_boards
+            .iter()
+            .map(|closing| closing.session.id)
+            .collect()
     }
 
     // ----- opening -------------------------------------------------------------------
@@ -451,8 +599,10 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        if let Some(closing) = self.closing_board.as_mut()
-            && closing.session.id == id
+        if let Some(closing) = self
+            .closing_boards
+            .iter_mut()
+            .find(|closing| closing.session.id == id)
         {
             closing.then_open = Some((id, focus));
             return true;
@@ -491,6 +641,9 @@ impl Workspace {
             }
         };
         let stamp = ContentStamp::of(&stored.content);
+        // The view is served the library as stored: a change another view
+        // posted is stored first, or this view would post it away.
+        self.flush_shape_library(cx);
         let library_json = self.shape_library_json(cx);
         let cell: SharedCell = Arc::new(Mutex::new(boards::BoardCell {
             stamp: stamp.to_hex(),
@@ -504,6 +657,7 @@ impl Workspace {
                 .collect(),
         }));
         let board = BoardState {
+            session: SESSIONS.fetch_add(1, Ordering::Relaxed),
             cell: cell.clone(),
             stamp,
             base: Arc::from(stored.content.as_str()),
@@ -515,6 +669,11 @@ impl Workspace {
             adopting: false,
             pending_post: None,
             floor: 0,
+            adopt_before: None,
+            adopt_writer: None,
+            adopt_seq: 0,
+            library_lrev: 0,
+            pending_search: None,
             status: Status::default(),
             pictures: HashMap::new(),
             in_flight: None,
@@ -530,7 +689,7 @@ impl Workspace {
         };
         let mut board = Box::new(board);
         board.seed_pictures(&scene);
-        let made = self.install_board_session(id, &stored, board, cell, &library_json, window, cx);
+        let made = self.install_board_session(id, &stored, board, cell, window, cx);
         if made {
             // The menu bar loses the keys that are the whiteboard's here.
             crate::menus::set_open_item(crate::menus::OpenItemKind::Board, cx);
@@ -582,13 +741,19 @@ impl Workspace {
                 board.status.elements = elements;
                 board.status.rev = 0;
                 board.status.posted = 0;
+                // The glue counts the shape library's changes from 0 again.
+                board.library_lrev = 0;
                 for waiter in board.ready_waiters.drain(..) {
                     waiter.send(());
                 }
+                let search = board.pending_search.take();
                 if let Some(page) = self.page.as_mut().filter(|page| page.id == id)
                     && !matches!(page.state, PageState::Crashed { again: true, .. })
                 {
                     page.state = PageState::Loaded;
+                }
+                if let Some(query) = search {
+                    drop(self.board_call(id, calls::SEARCH, calls::search_argument(Some(&query))));
                 }
             }
             Message::Scene { rev, scene } => {
@@ -646,7 +811,7 @@ impl Workspace {
                 lrev,
                 items,
                 too_large,
-            } => self.shape_library_posted(lrev, items.get(), too_large, cx),
+            } => self.shape_library_posted(id, lrev, items.get(), too_large, cx),
             Message::Help => self.open_shortcuts_on_a_whiteboard(window, cx),
             Message::Error { message } => {
                 eprintln!("Inner Word: the whiteboard's page: {message}");
@@ -848,9 +1013,11 @@ impl Workspace {
             board.large_told = true;
         }
         let job_seq = self.saver.next_seq();
+        let gate = boards::board_save_gate(cx);
         let Some(board) = self.board_of_mut(id) else {
             return;
         };
+        let written: WrittenSlot = Arc::new(Mutex::new(None));
         let job = BoardSaveJob {
             seq: job_seq,
             id,
@@ -863,6 +1030,7 @@ impl Workspace {
                 .view_state()
                 .filter(|json| board.stored_view.as_deref() != Some(json.as_str())),
             snapshot_interval: SNAPSHOT_INTERVAL,
+            written: written.clone(),
         };
         let rev = job.rev;
         let Some(work) = self.saver.work_board(job) else {
@@ -872,6 +1040,10 @@ impl Workspace {
         let background = cx.background_spawn(async move { work() });
         let task = cx.spawn(async move |this, cx| {
             let outcome = background.await;
+            // A test holds the answer here: written, not yet heard of.
+            if let Some(gate) = gate {
+                gate.await;
+            }
             this.update(cx, |this, cx| {
                 this.board_save_finished(id, job_seq, rev, outcome, cx)
             })
@@ -880,6 +1052,8 @@ impl Workspace {
         if let Some(board) = self.board_of_mut(id) {
             board.in_flight = Some(BoardInFlight {
                 seq: job_seq,
+                rev,
+                written,
                 _task: task,
             });
         }
@@ -906,40 +1080,8 @@ impl Workspace {
         board.in_flight = None;
         match outcome {
             BoardSaveOutcome::Superseded => {}
-            BoardSaveOutcome::Saved {
-                meta,
-                stamp,
-                scene,
-                files,
-                view_state,
-                duration,
-            } => {
-                self.last_save = Some(super::SaveCost {
-                    main_thread: Duration::ZERO,
-                    background: Some(duration),
-                    bytes: scene.len(),
-                });
-                let Some(board) = self.board_of_mut(id) else {
-                    return;
-                };
-                board.set_base(stamp, scene, &files);
-                board.base_rev = rev;
-                board.saved = board.saved.max(rev);
-                board.failures_in_a_row = 0;
-                let recovered = board.failure.take().is_some();
-                if let Some(view_state) = view_state {
-                    board.stored_view = Some(view_state);
-                }
-                let again = board.dirty();
-                if let Err(error) = self.library.update(cx, |library, cx| {
-                    library.document_saved_elsewhere(&meta, cx)
-                }) {
-                    eprintln!("Inner Word: could not re-read the library: {error}");
-                }
-                if recovered {
-                    self.show_toast(Toast::new("Saved").success(), cx);
-                }
-                if again {
+            BoardSaveOutcome::Saved(written) => {
+                if self.board_written(id, rev, written, cx) {
                     self.schedule_board_save(id, Duration::ZERO, cx);
                 }
             }
@@ -951,6 +1093,43 @@ impl Workspace {
         cx.notify();
     }
 
+    /// A background save of whiteboard `id` wrote the scene of `rev`: it is
+    /// the base now. Returns whether the app holds a newer scene.
+    fn board_written(
+        &mut self,
+        id: DocumentId,
+        rev: u64,
+        written: WrittenBoard,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        self.last_save = Some(super::SaveCost {
+            main_thread: Duration::ZERO,
+            background: Some(written.duration),
+            bytes: written.scene.len(),
+        });
+        let Some(board) = self.board_of_mut(id) else {
+            return false;
+        };
+        board.set_base(written.stamp, written.scene, &written.files);
+        board.base_rev = rev;
+        board.saved = board.saved.max(rev);
+        board.failures_in_a_row = 0;
+        let recovered = board.failure.take().is_some();
+        if let Some(view_state) = written.view_state {
+            board.stored_view = Some(view_state);
+        }
+        let again = board.dirty();
+        if let Err(error) = self.library.update(cx, |library, cx| {
+            library.document_saved_elsewhere(&written.meta, cx)
+        }) {
+            eprintln!("Inner Word: could not re-read the library: {error}");
+        }
+        if recovered {
+            self.show_toast(Toast::new("Saved").success(), cx);
+        }
+        again
+    }
+
     /// Saves what whiteboard `id`'s session holds, now, on this thread.
     /// Returns `false` when it could not be saved (then it is retried, or a
     /// recovery file has it).
@@ -958,12 +1137,34 @@ impl Workspace {
         self.save_board_asking(id, false, cx)
     }
 
+    /// Settles the background and takes over what the background save in
+    /// flight wrote, if it wrote before its answer came: the row has that
+    /// scene now, so it is the base of the next save.
+    fn settle_board_saves(&mut self, id: DocumentId, cx: &mut Context<Self>) {
+        self.saver.settle();
+        let Some(board) = self.board_of_mut(id) else {
+            return;
+        };
+        let Some(in_flight) = board.in_flight.take() else {
+            return;
+        };
+        let written = in_flight
+            .written
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take();
+        if let Some(written) = written {
+            self.board_written(id, in_flight.rev, written, cx);
+        }
+    }
+
     /// [`Workspace::save_board_now`]; with `ask`, a scene that names pictures
     /// the app does not know asks the page for them first and is saved once
     /// they are there (an autosave), instead of being saved without them (a
-    /// flush, which cannot wait).
+    /// flush, which cannot wait). A flush that finds the row changed merges
+    /// in Rust and never drops what the app holds.
     fn save_board_asking(&mut self, id: DocumentId, ask: bool, cx: &mut Context<Self>) -> bool {
-        self.saver.settle();
+        self.settle_board_saves(id, cx);
         // A picture still being stored: made ready and stored through the
         // library's own connection, so the save names no bytes that are not
         // there (only a quit the system starts meets one).
@@ -971,46 +1172,27 @@ impl Workspace {
         let Some(board) = self.board_of_mut(id) else {
             return true;
         };
-        board.in_flight = None;
         board.save_task = None;
-        if !board.dirty() || board.adopting {
+        if board.adopting {
+            // An autosave waits for the adopt's answer; a flush cannot.
+            if !ask {
+                return self.flush_board_while_adopting(id, cx);
+            }
+            return true;
+        }
+        if !board.dirty() {
             self.save_board_view_state(id, cx);
             return true;
         }
         let Some(held) = board.held.clone() else {
             return true;
         };
-        // An id the page was asked for and did not answer: missing.
-        for picture in board.pictures.values_mut() {
-            if matches!(picture, Picture::Asked) {
-                *picture = Picture::Missing;
-            }
-        }
-        let stored = board.stored_pictures();
-        let mut known: HashSet<String> = board.pictures.keys().cloned().collect();
-        let expect = board.stamp;
-        let prepared = match super::saver::prepare_board(&held.json, &stored, &known) {
-            Ok(prepared) => prepared,
-            Err(NotPrepared::NeedsFiles(ids)) if ask => {
-                self.ask_for_board_files(id, ids, cx);
-                return false;
-            }
-            Err(NotPrepared::NeedsFiles(ids)) => {
-                // Not answered in time: saved without them (their elements
-                // stay and show Excalidraw's missing picture).
-                for unknown in &ids {
-                    board.pictures.insert(unknown.clone(), Picture::Missing);
-                    known.insert(unknown.clone());
-                }
-                match super::saver::prepare_board(&held.json, &stored, &known) {
-                    Ok(prepared) => prepared,
-                    Err(_) => return false,
-                }
-            }
-            Err(NotPrepared::Unsaveable(why)) => {
-                self.board_unsaveable(id, &why, cx);
-                return false;
-            }
+        let prepared = match self.prepare_held_now(id, &held, ask, cx) {
+            Some(prepared) => prepared,
+            None => return false,
+        };
+        let Some(expect) = self.board_of(id).map(|board| board.stamp) else {
+            return true;
         };
         let (result, _) = self.library.update(cx, |library, cx| {
             library.change_outside(
@@ -1047,12 +1229,185 @@ impl Workspace {
                 cx.notify();
                 true
             }
-            Err(innerword_library::StoreError::Stale { .. }) => {
+            Err(innerword_library::StoreError::Stale { .. }) if ask => {
                 self.board_save_was_stale(id, cx);
                 false
             }
+            Err(innerword_library::StoreError::Stale { .. }) => {
+                // A flush: the outside write and the writer's scene are merged
+                // here, saved on the stored scene, and the view takes the
+                // merge (when it stays) as an outside write.
+                let base = self
+                    .board_of(id)
+                    .map(|board| board.base.clone())
+                    .unwrap_or_else(|| Arc::from("{}"));
+                let writer = match Scene::from_stored(&prepared.scene) {
+                    Ok(parsed) => parsed.scene,
+                    Err(_) => return false,
+                };
+                match self.merge_and_save_now(id, &base, &writer, cx) {
+                    Ok(merged) => {
+                        if let Some(board) = self.board_of_mut(id) {
+                            board.saved = board.saved.max(held.rev);
+                            board.failures_in_a_row = 0;
+                            board.failure = None;
+                        }
+                        self.adopt_stored_scene(id, &merged, true, cx);
+                        true
+                    }
+                    Err(message) => {
+                        self.write_board_recovery(id, &message, cx);
+                        self.board_save_failed(id, message, cx);
+                        false
+                    }
+                }
+            }
             Err(error) => {
                 self.board_save_failed(id, error.to_string(), cx);
+                false
+            }
+        }
+    }
+
+    /// The held scene of whiteboard `id` made into what the library stores,
+    /// on this thread; `None` when it is not saved now (asked for pictures,
+    /// or unsaveable and written to the recovery file).
+    fn prepare_held_now(
+        &mut self,
+        id: DocumentId,
+        held: &Held,
+        ask: bool,
+        cx: &mut Context<Self>,
+    ) -> Option<super::saver::PreparedBoard> {
+        let board = self.board_of_mut(id)?;
+        // An id the page was asked for and did not answer: missing.
+        for picture in board.pictures.values_mut() {
+            if matches!(picture, Picture::Asked) {
+                *picture = Picture::Missing;
+            }
+        }
+        let stored = board.stored_pictures();
+        let mut known: HashSet<String> = board.pictures.keys().cloned().collect();
+        match super::saver::prepare_board(&held.json, &stored, &known) {
+            Ok(prepared) => Some(prepared),
+            Err(NotPrepared::NeedsFiles(ids)) if ask => {
+                self.ask_for_board_files(id, ids, cx);
+                None
+            }
+            Err(NotPrepared::NeedsFiles(ids)) => {
+                // Not answered in time: saved without them (their elements
+                // stay and show Excalidraw's missing picture).
+                for unknown in &ids {
+                    board.pictures.insert(unknown.clone(), Picture::Missing);
+                    known.insert(unknown.clone());
+                }
+                super::saver::prepare_board(&held.json, &stored, &known).ok()
+            }
+            Err(NotPrepared::Unsaveable(why)) => {
+                self.board_unsaveable(id, &why, cx);
+                None
+            }
+        }
+    }
+
+    /// Merges `writer` (a scene that descends from the stored scene `base`)
+    /// with the scene stored now by the base rule, in Rust, and saves the
+    /// merge on it (compare-and-swap; tried again on a newer row, three
+    /// times). Answers the stored merge, or why it was not saved.
+    fn merge_and_save_now(
+        &mut self,
+        id: DocumentId,
+        base: &str,
+        writer: &Scene,
+        cx: &mut Context<Self>,
+    ) -> Result<String, String> {
+        let base = Scene::from_stored(base)
+            .map(|parsed| parsed.scene)
+            .unwrap_or_else(|_| Scene::empty());
+        let mut why = String::new();
+        for _ in 0..3 {
+            let stored = self
+                .library
+                .read(cx)
+                .document(id)
+                .map_err(|error| error.to_string())?;
+            let theirs = Scene::from_stored(&stored.content)
+                .map(|parsed| parsed.scene)
+                .map_err(|error| error.to_string())?;
+            let merged = innerword_board::merge(&base, writer, &theirs).scene;
+            let prepared = super::saver::prepared_of(&merged);
+            let expect = ContentStamp::of(&stored.content);
+            let (result, _) = self.library.update(cx, |library, cx| {
+                library.change_outside(
+                    |store| {
+                        let result = store.save_board(id, &prepared.content(), Some(expect));
+                        let changes = if result.is_ok() {
+                            if let Err(error) = store.snapshot_if_stale(id, SNAPSHOT_INTERVAL) {
+                                eprintln!("Inner Word: could not take a version snapshot: {error}");
+                            }
+                            vec![OutsideChange::DocumentSaved(id)]
+                        } else {
+                            Vec::new()
+                        };
+                        (result, changes)
+                    },
+                    cx,
+                )
+            });
+            match result {
+                Ok(_) => return Ok(prepared.scene),
+                Err(innerword_library::StoreError::Stale { .. }) => {
+                    why = "the whiteboard kept changing while it was saved".to_string();
+                }
+                Err(error) => return Err(error.to_string()),
+            }
+        }
+        Err(why)
+    }
+
+    /// A flush while an outside write is being adopted: the newest scene of
+    /// the writer's (posted meanwhile, else held when the adopt began) is
+    /// merged with the stored scene in Rust and saved, so that a session
+    /// that ends now loses neither.
+    fn flush_board_while_adopting(&mut self, id: DocumentId, cx: &mut Context<Self>) -> bool {
+        let Some(board) = self.board_of(id) else {
+            return true;
+        };
+        let Some(writer) = newest_of(board.pending_post.clone(), board.adopt_writer.clone())
+            .filter(|writer| writer.rev > board.saved)
+        else {
+            return true;
+        };
+        let Some(base) = board.adopt_before.clone() else {
+            return true;
+        };
+        let stored = board.stored_pictures();
+        let Ok(parsed) = Scene::from_view(&writer.json, &|file| stored.get(file).cloned()) else {
+            let held = Held {
+                rev: writer.rev,
+                json: writer.json.clone(),
+            };
+            if let Some(board) = self.board_of_mut(id) {
+                board.held = Some(held);
+            }
+            self.write_board_recovery(id, "the drawing could not be read", cx);
+            return false;
+        };
+        match self.merge_and_save_now(id, &base, &parsed.scene, cx) {
+            Ok(merged) => {
+                let stamp = ContentStamp::of(&merged);
+                let files = stored_file_hexes(&merged);
+                if let Some(board) = self.board_of_mut(id) {
+                    board.set_base(stamp, Arc::from(merged.as_str()), &files);
+                    board.saved = board.saved.max(writer.rev);
+                }
+                true
+            }
+            Err(message) => {
+                if let Some(board) = self.board_of_mut(id) {
+                    board.held = Some(writer);
+                }
+                self.write_board_recovery(id, &message, cx);
                 false
             }
         }
@@ -1179,7 +1534,7 @@ impl Workspace {
     /// Takes the stored scene `content` (written by someone else: an agent,
     /// a restored version, a write the app did not take over) into
     /// whiteboard `id`'s view by the base rule, one step of its undo when
-    /// `undoable`. From here until the view answers, its posts are dropped.
+    /// `undoable`. From here until the view answers, its posts wait.
     pub(crate) fn adopt_stored_scene(
         &mut self,
         id: DocumentId,
@@ -1202,25 +1557,37 @@ impl Workspace {
             .unwrap_or_else(|_| Scene::empty());
         let delta = theirs.delta_from(&before);
         let base_rev = board.base_rev;
-        let writer = board.held.clone();
         let stamp = ContentStamp::of(content);
         let files: Vec<String> = theirs
             .stored_files()
             .iter()
             .map(|hex| hex.as_str().to_string())
             .collect();
+        if delta.is_empty() {
+            // No element changed (the row's stamp did): the base is the
+            // stored scene, and what the app holds is saved on it.
+            board.set_base(stamp, Arc::from(content), &files);
+            board.seed_pictures(&theirs);
+            if board.dirty() && !board.adopting {
+                self.schedule_board_save(id, Duration::ZERO, cx);
+            }
+            return;
+        }
+        // The writer's scene descends from the base before this write (the
+        // first one, when another adopt is still answered).
+        if !board.adopting {
+            board.adopt_before = Some(board.base.clone());
+            board.adopt_writer = board.held.clone();
+        }
         board.set_base(stamp, Arc::from(content), &files);
         board.seed_pictures(&theirs);
         board.held = None;
         board.adopting = true;
-        if delta.is_empty() {
-            board.adopting = false;
-            board.floor = board.status.rev;
-            return;
-        }
+        board.adopt_seq += 1;
+        let session = board.session;
+        let seq = board.adopt_seq;
         let argument = delta.to_json(base_rev, undoable);
         let answer = self.board_call(id, calls::ADOPT, argument);
-        let stored_content: Arc<str> = Arc::from(content);
         cx.spawn(async move |this, cx| {
             let answer = match answer {
                 Some(answer) => {
@@ -1233,13 +1600,58 @@ impl Workspace {
                 Some(Ok(text)) => calls::answer::<calls::Adopted>(&text).ok(),
                 _ => None,
             };
-            this.update(cx, |this, cx| match adopted {
-                Some(adopted) => this.board_adopted(id, adopted, cx),
-                None => this.board_adopt_failed(id, before, writer, stored_content, cx),
+            let failed = this
+                .update(cx, |this, cx| {
+                    if !this.adopt_is_current(id, session, seq) {
+                        return false;
+                    }
+                    match adopted {
+                        Some(adopted) => {
+                            this.board_adopted(id, adopted, cx);
+                            false
+                        }
+                        None => true,
+                    }
+                })
+                .unwrap_or(false);
+            if !failed {
+                return;
+            }
+            // The page is asked for what it has not posted (a stroke the
+            // writer finished while the adopt was waited for): it comes in
+            // as a post while the adopt is still on.
+            let collect = this
+                .update(cx, |this, _| {
+                    this.board_call(id, calls::COLLECT, "{}".to_string())
+                })
+                .ok()
+                .flatten();
+            let collected = match collect {
+                Some(collect) => {
+                    let timer = cx
+                        .background_executor()
+                        .timer(boards::VIEW_COLLECT_PATIENCE);
+                    crate::pages::within(collect, timer).await.flatten()
+                }
+                None => None,
+            };
+            this.update(cx, |this, cx| {
+                if !this.adopt_is_current(id, session, seq) {
+                    return;
+                }
+                this.take_collected(id, collected, cx);
+                this.board_adopt_failed(id, cx);
             })
             .ok();
         })
         .detach();
+    }
+
+    /// Whether adopt `seq` of whiteboard `id` in `session` is still the one
+    /// the app waits for.
+    fn adopt_is_current(&mut self, id: DocumentId, session: u64, seq: u64) -> bool {
+        self.board_in_session_mut(id, session)
+            .is_some_and(|board| board.adopting && board.adopt_seq == seq)
     }
 
     /// Whiteboard `id` was written by someone else (an agent's request, a
@@ -1259,6 +1671,8 @@ impl Workspace {
             return;
         };
         board.adopting = false;
+        board.adopt_before = None;
+        board.adopt_writer = None;
         board.floor = adopted.rev;
         board.base_rev = adopted.rev;
         if adopted.same {
@@ -1282,54 +1696,73 @@ impl Workspace {
         cx.notify();
     }
 
-    /// An adopt failed (a script error, a crash, no answer in time): the
-    /// merge is made in Rust from the base, the writer's scene and the
-    /// stored one, saved on the stored one, and the view reloads from it.
-    fn board_adopt_failed(
-        &mut self,
-        id: DocumentId,
-        base: Scene,
-        writer: Option<Held>,
-        theirs_content: Arc<str>,
-        cx: &mut Context<Self>,
-    ) {
+    /// An adopt failed (a script error, a crash, no answer in time) and what
+    /// the page would hand over was collected: the newest of the writer's
+    /// scenes (collected, posted meanwhile, or held when the adopt began) is
+    /// merged in Rust with the stored scene, from the base before the outside
+    /// write, saved on the stored one, and the view loads the merge. Should
+    /// the save fail, the merge goes to the recovery file and the view still
+    /// loads it, on the stored scene's stamp, so that its next post saves it.
+    fn board_adopt_failed(&mut self, id: DocumentId, cx: &mut Context<Self>) {
         let Some(board) = self.board_of_mut(id) else {
             return;
         };
+        let writer = newest_of(board.pending_post.take(), board.adopt_writer.take())
+            .filter(|writer| writer.rev > board.saved);
+        let base = board
+            .adopt_before
+            .take()
+            .unwrap_or_else(|| board.base.clone());
         board.adopting = false;
-        board.pending_post = None;
-        let theirs = Scene::from_stored(&theirs_content)
-            .map(|parsed| parsed.scene)
-            .unwrap_or_else(|_| Scene::empty());
         let stored = board.stored_pictures();
-        let writer_scene = writer
-            .as_ref()
-            .and_then(|held| Scene::from_view(&held.json, &|id| stored.get(id).cloned()).ok())
-            .map(|parsed| parsed.scene);
-        let merged = match writer_scene {
-            Some(writer) => innerword_board::merge(&base, &writer, &theirs).scene,
-            None => theirs,
-        };
-        let prepared = super::saver::prepared_of(&merged);
-        let expect = board.stamp;
-        let (result, _) = self.library.update(cx, |library, cx| {
-            library.change_outside(
-                |store| {
-                    let result = store.save_board(id, &prepared.content(), Some(expect));
-                    let changes = if result.is_ok() {
-                        vec![OutsideChange::DocumentSaved(id)]
-                    } else {
-                        Vec::new()
-                    };
-                    (result, changes)
-                },
-                cx,
-            )
+        let writer_scene = writer.as_ref().and_then(|held| {
+            Scene::from_view(&held.json, &|file| stored.get(file).cloned())
+                .ok()
+                .map(|parsed| parsed.scene)
         });
-        if let Ok(saved) = result {
-            let files: Vec<String> = prepared.files.iter().map(FileId::to_hex).collect();
-            if let Some(board) = self.board_of_mut(id) {
-                board.set_base(saved.stamp, Arc::from(prepared.scene), &files);
+        let Some(writer_scene) = writer_scene else {
+            // Nothing of the writer's to keep: the view loads the stored scene.
+            self.reload_board_view(id, cx);
+            return;
+        };
+        let rev = writer.as_ref().map_or(0, |writer| writer.rev);
+        match self.merge_and_save_now(id, &base, &writer_scene, cx) {
+            Ok(merged) => {
+                let stamp = ContentStamp::of(&merged);
+                let files = stored_file_hexes(&merged);
+                if let Some(board) = self.board_of_mut(id) {
+                    board.set_base(stamp, Arc::from(merged.as_str()), &files);
+                    board.saved = board.saved.max(rev);
+                    board.failure = None;
+                    board.failures_in_a_row = 0;
+                }
+            }
+            Err(message) => {
+                let merged = match self.library.read(cx).document(id) {
+                    Ok(stored) => Scene::from_stored(&stored.content)
+                        .map(|theirs| {
+                            let base = Scene::from_stored(&base)
+                                .map(|parsed| parsed.scene)
+                                .unwrap_or_else(|_| Scene::empty());
+                            innerword_board::merge(&base, &writer_scene, &theirs.scene)
+                                .scene
+                                .to_stored()
+                        })
+                        .unwrap_or_else(|_| writer_scene.to_stored()),
+                    Err(_) => writer_scene.to_stored(),
+                };
+                if let Some(board) = self.board_of_mut(id) {
+                    board.held = Some(Held {
+                        rev,
+                        json: Arc::from(merged.as_str()),
+                    });
+                    board.failure = Some(message.clone());
+                    // The view loads the merge on the stored scene's stamp.
+                    if let Ok(mut cell) = board.cell.lock() {
+                        cell.scene = Arc::from(merged.as_str());
+                    }
+                }
+                self.write_board_recovery(id, &message, cx);
             }
         }
         self.reload_board_view(id, cx);
@@ -1344,7 +1777,10 @@ impl Workspace {
             board.ready = false;
             board.held = None;
             board.saved = 0;
-            board.floor = 0;
+            // Until the new page is ready, nothing the old one posts counts
+            // (its `pagehide` posts the canvas it had).
+            board.floor = u64::MAX;
+            board.forget_adopt();
         }
         page.state = PageState::Loading;
         if let Some(view) = page.view.borrow().as_ref() {
@@ -1451,7 +1887,7 @@ impl Workspace {
         let ids: Vec<DocumentId> = self
             .open_board_id()
             .into_iter()
-            .chain(self.board_closing())
+            .chain(self.boards_closing())
             .collect();
         for id in ids {
             saved &= self.save_board_now(id, cx);
@@ -1462,27 +1898,30 @@ impl Workspace {
 
     // ----- the shape library ------------------------------------------------------------
 
-    /// The page posted the shape library.
+    /// The page of whiteboard `id` posted the shape library with its
+    /// counter `lrev`. The counter is the view's own (it starts at 0 at every
+    /// load), so a post is judged against the posts of the same view: the
+    /// newest post of any view is the library.
     fn shape_library_posted(
         &mut self,
+        id: DocumentId,
         lrev: u64,
         items: &str,
         too_large: bool,
         cx: &mut Context<Self>,
     ) {
+        if let Some(board) = self.board_of_mut(id) {
+            if lrev <= board.library_lrev {
+                return;
+            }
+            board.library_lrev = lrev;
+        }
         if too_large {
             self.shape_library_too_large(cx);
             return;
         }
-        if self
-            .shape_library
-            .held
-            .as_ref()
-            .is_some_and(|(held, _)| *held >= lrev)
-        {
-            return;
-        }
-        self.shape_library.held = Some((lrev, Arc::from(items)));
+        self.shape_library.posts += 1;
+        self.shape_library.held = Some((self.shape_library.posts, Arc::from(items)));
         self.save_shape_library(cx);
     }
 
@@ -1701,7 +2140,7 @@ impl Workspace {
             self.board_file_posted(id, file.id, Arc::from(file.data_url), cx);
         }
         if let Some(library) = collected.library {
-            self.shape_library_posted(library.lrev, library.items.get(), false, cx);
+            self.shape_library_posted(id, library.lrev, library.items.get(), false, cx);
         }
         if let Some(board) = self.board_of_mut(id) {
             board.status = collected.status;
@@ -1737,7 +2176,8 @@ impl Workspace {
     /// The session of a whiteboard ends (another item opened, the whiteboard
     /// closed, trashed or deleted). When its page holds more than it posted,
     /// the view is parked and asked for it, and the session goes only once
-    /// that is saved; otherwise what the app holds is saved at once.
+    /// that is saved; otherwise what the app holds is saved at once. Another
+    /// whiteboard still closing goes on closing beside it.
     pub(crate) fn end_board_session(
         &mut self,
         mut session: PageSession,
@@ -1745,9 +2185,6 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         let id = session.id;
-        // A whiteboard still closing is finished first: one parked view at a
-        // time.
-        self.finish_closing_board_now(window, cx);
         let holds_more = match &session.item {
             WebItem::Board(board) => {
                 (board.ready && board.status.holds_more()) || board.status.too_large
@@ -1761,7 +2198,7 @@ impl Workspace {
             if let Some(view) = session.view.borrow().as_ref() {
                 view.park();
             }
-            self.closing_board = Some(ClosingBoard {
+            self.closing_boards.push(ClosingBoard {
                 session,
                 then_open: None,
                 _task: None,
@@ -1774,31 +2211,52 @@ impl Workspace {
                 })
                 .ok();
             });
-            if let Some(closing) = self.closing_board.as_mut() {
+            if let Some(closing) = self
+                .closing_boards
+                .iter_mut()
+                .find(|closing| closing.session.id == id)
+            {
                 closing._task = Some(task);
             }
             return;
         }
         // Nothing outstanding: as a page's session, after saving what is held
-        // (the session is the closing one for the moment of the save).
-        self.closing_board = Some(ClosingBoard {
+        // (the session is a closing one for the moment of the save).
+        self.closing_boards.push(ClosingBoard {
             session,
             then_open: None,
             _task: None,
         });
-        self.save_board_now(id, cx);
-        self.closing_board = None;
+        if !self.save_board_now(id, cx)
+            && self
+                .board_of(id)
+                .is_some_and(|board| board.dirty() && board.recovered.is_none())
+        {
+            self.write_board_recovery(id, "the whiteboard was closed before it could be saved", cx);
+        }
+        self.closing_boards
+            .retain(|closing| closing.session.id != id);
     }
 
-    /// The closing whiteboard's last scene is saved: its view goes, and the
-    /// item opened meanwhile (the same whiteboard again) opens.
+    /// The closing whiteboard `id`'s last scene is saved: its view goes, and
+    /// the item opened meanwhile (the same whiteboard again) opens.
     fn closing_board_done(&mut self, id: DocumentId, window: &mut Window, cx: &mut Context<Self>) {
-        if self.board_closing() != Some(id) {
-            return;
-        }
-        let Some(mut closing) = self.closing_board.take() else {
+        let Some(index) = self
+            .closing_boards
+            .iter()
+            .position(|closing| closing.session.id == id)
+        else {
             return;
         };
+        if self
+            .board_of(id)
+            .is_some_and(|board| board.dirty() && board.recovered.is_none())
+        {
+            // Not saved (the save failed): its drawing is written to the
+            // recovery file before the view goes.
+            self.write_board_recovery(id, "the whiteboard was closed before it could be saved", cx);
+        }
+        let mut closing = self.closing_boards.remove(index);
         closing.session.release_pictures(window);
         let then_open = closing.then_open.take();
         drop(closing);
@@ -1808,20 +2266,19 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Ends a whiteboard that is closing at once, with what the app holds of
-    /// it (another end comes before its collect answered).
+    /// Ends every whiteboard that is closing at once, with what the app
+    /// holds of it (a close of the window or a quit whose patience ran out).
     pub(crate) fn finish_closing_board_now(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(id) = self.board_closing() else {
-            return;
-        };
-        self.save_board_now(id, cx);
-        self.closing_board_done(id, window, cx);
+        for id in self.boards_closing() {
+            self.save_board_now(id, cx);
+            self.closing_board_done(id, window, cx);
+        }
     }
 
     /// Whether a whiteboard is closing or the open one's page holds more
     /// than it posted (a deliberate end then asks it first).
     pub fn board_holds_more(&self) -> bool {
-        self.closing_board.is_some()
+        !self.closing_boards.is_empty()
             || self
                 .board()
                 .is_some_and(|board| board.ready && board.status.holds_more())
@@ -1863,7 +2320,9 @@ impl Workspace {
 
     /// One of the six Add commands: a new element made from `skeleton` at
     /// the middle of the view, selected (a text: open for typing), made by
-    /// the converter agents use, against the scene the app holds.
+    /// the converter agents use, against the scene the app holds (collected
+    /// first when the page holds more: an arrow that binds two shapes sends
+    /// them too, and the app's copy must be the canvas's).
     pub(crate) fn add_to_board(
         &mut self,
         skeleton: serde_json::Value,
@@ -1877,25 +2336,48 @@ impl Workspace {
             self.say_about_page(STILL_LOADING, cx);
             return;
         }
-        let center = self.board_call(id, calls::CENTER, "{}".to_string());
         let kind = skeleton
             .get("type")
             .and_then(serde_json::Value::as_str)
             .unwrap_or_default()
             .to_string();
+        if kind == "text" {
+            // Keys typed from now until the new text is open for typing are
+            // the text's, not shortcuts on the canvas.
+            drop(self.board_call(id, HOLD_KEYS, "{}".to_string()));
+        }
+        let collect = self
+            .board()
+            .is_some_and(|board| board.status.holds_more())
+            .then(|| self.collect_board(id, cx));
         cx.spawn_in(window, async move |this, cx| {
+            if let Some(collect) = collect {
+                collect.await;
+            }
+            let center = this
+                .update(cx, |this, _| {
+                    this.board_call(id, calls::CENTER, "{}".to_string())
+                })
+                .ok()
+                .flatten();
             let center = match center {
                 Some(center) => center.await.and_then(Result::ok),
                 None => None,
             };
             let center = center.and_then(|text| calls::answer::<calls::Center>(&text).ok());
             this.update_in(cx, |this, window, cx| {
+                if this.open_board_id() != Some(id) {
+                    return;
+                }
                 let (x, y, selected) = match center {
                     Some(center) => (center.x, center.y, center.selected),
                     None => (0.0, 0.0, Vec::new()),
                 };
                 let skeleton = place_skeleton(skeleton, &kind, x, y, &selected);
                 if let Err(why) = this.draw_on_board(vec![skeleton], kind == "text", window, cx) {
+                    if kind == "text" {
+                        drop(this.board_call(id, OPEN_TEXT, open_text_argument(None)));
+                    }
                     this.say_about_page(&format!("Nothing was added: {why}"), cx);
                 }
             })
@@ -1907,7 +2389,8 @@ impl Workspace {
     /// Converts `skeletons` with the converter agents use, against the scene
     /// the app holds, and gives them to the page as the writer's drawing
     /// (`insertElements`, selected; with `edit_text` the first text opens
-    /// for typing). Returns the ids made, or why nothing was.
+    /// for typing, and the keys held since the command came go into it).
+    /// Returns the ids made, or why nothing was.
     pub fn draw_on_board(
         &mut self,
         skeletons: Vec<serde_json::Value>,
@@ -1972,31 +2455,30 @@ impl Workspace {
             calls::INSERT_ELEMENTS,
             calls::insert_elements_argument(&elements, true, None),
         );
-        // A new text opens for typing as `enter` on it does. The glue's own
-        // `editText` sets the selection and presses `enter` in one task,
-        // before Excalidraw rendered the selection (its `enter` then opens
-        // what was selected before): so the app presses `enter` itself once
-        // the new text is selected on screen.
-        if edit_text
-            && added
-                .elements
-                .iter()
-                .any(|element| element.r#type == "text")
-            && let Some(view) = self.board_native_view()
-            && let Some(answer) = answer
-        {
-            let view = view as usize;
-            cx.spawn(async move |_, cx| {
+        // A new text opens for typing as `enter` on it does, once Excalidraw
+        // has drawn it selected (the glue's own `editText` presses `enter`
+        // before that, and its `enter` then opens what was selected before);
+        // the keys held since the command came go into it.
+        let text = edit_text
+            .then(|| {
+                added
+                    .elements
+                    .iter()
+                    .find(|element| element.r#type == "text")
+                    .map(|element| element.id.clone())
+            })
+            .flatten();
+        if let (Some(text), Some(answer)) = (text, answer) {
+            cx.spawn(async move |this, cx| {
                 answer.await;
-                cx.background_executor()
-                    .timer(Duration::from_millis(80))
-                    .await;
-                cx.update(|_| {
-                    crate::board_steps::press(view as *mut std::ffi::c_void, "enter").ok();
+                this.update(cx, |this, _| {
+                    drop(this.board_call(id, OPEN_TEXT, open_text_argument(Some(&text))));
                 })
                 .ok();
             })
             .detach();
+        } else if edit_text {
+            drop(self.board_call(id, OPEN_TEXT, open_text_argument(None)));
         }
         Ok(ids)
     }
@@ -2012,8 +2494,18 @@ impl Workspace {
         self.board_call_and_forget(calls::ZOOM, calls::zoom_argument(zoom));
     }
 
-    /// Find on a whiteboard: Excalidraw's own search, with `query`.
+    /// Find on a whiteboard: Excalidraw's own search, with `query`. Before
+    /// the page is ready (a whiteboard opened from a hit of the library
+    /// search) the query waits for it.
     pub(crate) fn search_board(&mut self, query: Option<&str>) {
+        if let Some(query) = query
+            && let Some(page) = self.page.as_mut()
+            && let WebItem::Board(board) = &mut page.item
+            && !board.ready
+        {
+            board.pending_search = Some(query.to_string());
+            return;
+        }
         self.board_call_and_forget(calls::SEARCH, calls::search_argument(query));
     }
 
@@ -2069,12 +2561,21 @@ impl Workspace {
         let Some(id) = self.open_board_id() else {
             return;
         };
-        self.save_board_now(id, cx);
+        if !self.save_board_now(id, cx)
+            && self
+                .board_of(id)
+                .is_some_and(|board| board.held.is_some() && board.recovered.is_none())
+        {
+            // The view loads the stored scene: what could not be saved is kept
+            // in the recovery file first.
+            self.write_board_recovery(id, "the whiteboard stopped and was loaded again", cx);
+        }
         if let Some(board) = self.board_of_mut(id) {
             board.ready = false;
             board.held = None;
             board.saved = 0;
-            board.floor = 0;
+            board.floor = u64::MAX;
+            board.forget_adopt();
         }
     }
 
@@ -2201,16 +2702,16 @@ impl Workspace {
             } else {
                 "no"
             },
-            if self.closing_board.is_some() {
-                "yes"
-            } else {
+            if self.closing_boards.is_empty() {
                 "no"
+            } else {
+                "yes"
             },
         )
     }
 
     /// The save state of the open whiteboard, as the status bar says it.
-    pub(crate) fn board_save_label(&self) -> Option<(String, bool)> {
+    pub fn board_save_label(&self) -> Option<(String, bool)> {
         let board = self.board()?;
         if let Some(failure) = &board.failure {
             let text = match &board.recovered {
@@ -2232,7 +2733,7 @@ impl Workspace {
     }
 
     /// The element count of the open whiteboard, as the status bar says it.
-    pub(crate) fn board_elements_label(&self) -> Option<String> {
+    pub fn board_elements_label(&self) -> Option<String> {
         let board = self.board()?;
         Some(super::counted(
             board.status.elements as usize,
@@ -2243,7 +2744,7 @@ impl Workspace {
 
     /// The element of an open whiteboard without a page engine: its listing
     /// in a quiet column.
-    pub(crate) fn board_listing_text(&self, cx: &App) -> String {
+    pub fn board_listing_text(&self, cx: &App) -> String {
         let Some(page) = self.page.as_ref() else {
             return String::new();
         };
@@ -2256,6 +2757,28 @@ impl Workspace {
             folder: None,
         })
     }
+}
+
+/// The newer of two scenes of the writer's.
+fn newest_of(a: Option<Held>, b: Option<Held>) -> Option<Held> {
+    match (a, b) {
+        (Some(a), Some(b)) => Some(if a.rev >= b.rev { a } else { b }),
+        (a, b) => a.or(b),
+    }
+}
+
+/// The `FileId`s (hex) a stored scene names.
+fn stored_file_hexes(content: &str) -> Vec<String> {
+    Scene::from_stored(content)
+        .map(|parsed| {
+            parsed
+                .scene
+                .stored_files()
+                .iter()
+                .map(|hex| hex.as_str().to_string())
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// The six Add items, for the menus of a whiteboard.
@@ -2277,6 +2800,7 @@ pub(crate) fn board_title_items(assistant: bool, print: bool) -> Vec<ContextMenu
     use crate::actions::*;
     let mut items = vec![
         ContextMenuItem::action("Shape Library", ToggleShapeLibrary),
+        ContextMenuItem::action("Add Selection to Shape Library", AddToShapeLibrary),
         ContextMenuItem::action("Find on Whiteboard…", tools::Find),
         ContextMenuItem::action("Insert Picture…", innerword_editor::actions::InsertImage),
         ContextMenuItem::action("Zoom to Fit", crate::zoom::FitPage),
@@ -2311,15 +2835,17 @@ fn place_skeleton(
         return skeleton;
     };
     match kind {
-        "arrow" if selected.len() == 2 => {
-            map.insert("start".into(), json!({ "id": selected[0] }));
-            map.insert("end".into(), json!({ "id": selected[1] }));
-        }
         "arrow" => {
+            // The converter wants a place for every arrow; between two
+            // selected shapes it is drawn from the one to the other.
             map.insert("x".into(), json!(x - 100.0));
             map.insert("y".into(), json!(y));
             map.insert("width".into(), json!(200.0));
             map.insert("height".into(), json!(0.0));
+            if selected.len() == 2 {
+                map.insert("start".into(), json!({ "id": selected[0] }));
+                map.insert("end".into(), json!({ "id": selected[1] }));
+            }
         }
         "frame" if !selected.is_empty() => {
             map.insert("children".into(), json!(selected));
@@ -2442,7 +2968,6 @@ impl Workspace {
         stored: &innerword_library::Document,
         mut board: Box<BoardState>,
         cell: SharedCell,
-        library_json: &str,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
@@ -2483,24 +3008,17 @@ impl Workspace {
                 }
                 Err(why) => (None, PageState::Failed(why)),
             },
-            Some(pages::PageEngine::Fake(fake)) => {
-                let board_json = cell
-                    .lock()
-                    .map(|cell| cell.board_json())
-                    .unwrap_or_default();
-                (
-                    Some(super::page::ViewSeed::Fake(pages::FakeView::new_board(
-                        fake,
-                        id,
-                        &host,
-                        &board_json,
-                        library_json,
-                        events,
-                        inbox.clone(),
-                    ))),
-                    PageState::Loading,
-                )
-            }
+            Some(pages::PageEngine::Fake(fake)) => (
+                Some(super::page::ViewSeed::Fake(pages::FakeView::new_board(
+                    fake,
+                    id,
+                    &host,
+                    cell.clone(),
+                    events,
+                    inbox.clone(),
+                ))),
+                PageState::Loading,
+            ),
             None => (None, PageState::Failed(boards::not_shown_sentence(cx))),
         };
         self.install_web_session(
@@ -3214,7 +3732,7 @@ impl Workspace {
             // The whiteboard that was closing saves by itself.
             loop {
                 let closing = this
-                    .update(cx, |this, _| this.closing_board.is_some())
+                    .update(cx, |this, _| !this.closing_boards.is_empty())
                     .unwrap_or(false);
                 if !closing || started.elapsed() > boards::VIEW_COLLECT_PATIENCE {
                     break;

@@ -173,7 +173,7 @@ pub(crate) async fn board_pdf(
 /// The PDF of `input`.
 pub(crate) async fn pdf_of(input: BoardPdfInput) -> Result<innerword_web::PrintedPdf, String> {
     match (input.engine, input.source) {
-        (Some(pages::PageEngine::Fake(fake)), _) => Ok(fake.board_pdf(&input.scene)),
+        (Some(pages::PageEngine::Fake(fake)), _) => fake.make_board_pdf(&input.scene),
         (Some(pages::PageEngine::WebKit), Some(source)) => {
             let (tx, rx) = pages::answer();
             innerword_web::run_script(

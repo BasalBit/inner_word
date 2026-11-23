@@ -62,6 +62,43 @@ pub const VIEW_COLLECT_PATIENCE: std::time::Duration = std::time::Duration::from
 /// and reloads it.
 pub const ADOPT_PATIENCE: std::time::Duration = std::time::Duration::from_secs(3);
 
+/// Answers of background saves of whiteboards held back (tests: a save that
+/// wrote and whose answer has not reached the main thread yet).
+#[derive(Default)]
+struct HeldSaveAnswers {
+    held: bool,
+    waiting: Vec<crate::pages::AnswerTx<()>>,
+}
+
+impl Global for HeldSaveAnswers {}
+
+/// From now on the answer of a background save of a whiteboard waits, after
+/// its write, until [`release_board_saves`] (tests).
+pub fn hold_board_saves(cx: &mut App) {
+    cx.default_global::<HeldSaveAnswers>().held = true;
+}
+
+/// Lets the answers held by [`hold_board_saves`] through, and every later one.
+pub fn release_board_saves(cx: &mut App) {
+    let held = cx.default_global::<HeldSaveAnswers>();
+    held.held = false;
+    for waiter in held.waiting.drain(..) {
+        waiter.send(());
+    }
+}
+
+/// What a background save of a whiteboard waits for before its answer is
+/// taken: nothing, unless a test holds the answers.
+pub(crate) fn board_save_gate(cx: &mut App) -> Option<crate::pages::Answer<()>> {
+    let held = cx.try_global::<HeldSaveAnswers>()?;
+    if !held.held {
+        return None;
+    }
+    let (tx, rx) = crate::pages::answer();
+    cx.global_mut::<HeldSaveAnswers>().waiting.push(tx);
+    Some(rx)
+}
+
 /// The host of a whiteboard's origin, `innerword-page://<host>/`: its id and
 /// the moment its row was made (`board-12-1731600000000`), never a page's
 /// origin (`page-…`), for the reasons [`crate::pages::page_host`] gives.
@@ -493,9 +530,22 @@ pub struct FakeBoard {
     pub(crate) library_posted: u64,
     /// What `center` answers.
     pub(crate) selected: Vec<String>,
+    /// The PDFs of whiteboards made, and whether the next ones fail.
+    pub(crate) pdfs_made: usize,
+    pub(crate) fail_pdfs: bool,
 }
 
 impl FakeBoard {
+    /// The open view loads again: what its source serves now.
+    pub(crate) fn reload(&mut self, board_json: &str, library_json: &str) {
+        let Some(id) = self.open else {
+            return;
+        };
+        let opened = self.opened.len();
+        self.load(id, board_json, library_json);
+        self.opened.truncate(opened);
+    }
+
     /// A view of a whiteboard is made: it loads `board_json`.
     pub(crate) fn load(&mut self, id: DocumentId, board_json: &str, library_json: &str) {
         self.open = Some(id);
@@ -811,7 +861,9 @@ pub(crate) fn status_value(status: &Status) -> Value {
 
 /// What a call's body is: the name of the glue's call it runs.
 pub fn call_name(body: &str) -> &'static str {
-    let known: [(&str, &'static str); 16] = [
+    let known: [(&str, &'static str); 18] = [
+        (crate::workspace::board::HOLD_KEYS, "holdKeys"),
+        (crate::workspace::board::OPEN_TEXT, "openText"),
         (calls::COLLECT, "collect"),
         (calls::FILES, "files"),
         (calls::ADOPT, "adopt"),
@@ -1097,6 +1149,38 @@ impl crate::pages::FakePages {
         fake_board_pdf(scene)
     }
 
+    /// The PDF of a whiteboard, as the app asks the engine for it: counted,
+    /// and refused while [`FakePages::fail_board_pdfs`] says so.
+    pub fn make_board_pdf(&self, scene: &Scene) -> Result<innerword_web::PrintedPdf, String> {
+        let mut board = self.board.borrow_mut();
+        if board.fail_pdfs {
+            return Err("the export page did not answer".to_string());
+        }
+        board.pdfs_made += 1;
+        Ok(fake_board_pdf(scene))
+    }
+
+    /// From now on the PDF of a whiteboard fails (`fail`), or is made.
+    pub fn fail_board_pdfs(&self, fail: bool) {
+        self.board.borrow_mut().fail_pdfs = fail;
+    }
+
+    /// How many PDFs of whiteboards were made.
+    pub fn board_pdfs_made(&self) -> usize {
+        self.board.borrow().pdfs_made
+    }
+
+    /// The writer selected the elements `ids` (what `center` answers).
+    pub fn select(&self, ids: &[&str]) {
+        let status = {
+            let mut board = self.board.borrow_mut();
+            board.selected = ids.iter().map(|id| id.to_string()).collect();
+            board.status.selected = ids.len() as u64;
+            board.status.clone()
+        };
+        self.post_board(Message::Status(status));
+    }
+
     /// The page's `?`: it asks the app for its list of shortcuts.
     pub fn press_help(&self) {
         self.post_board(Message::Help);
@@ -1145,15 +1229,22 @@ impl crate::pages::FakeView {
         pages: Rc<crate::pages::FakePages>,
         id: DocumentId,
         host: &str,
-        board_json: &str,
-        library_json: &str,
+        cell: SharedCell,
         events: Rc<dyn innerword_web::PageEvents>,
         inbox: crate::pages::SharedInbox,
     ) -> crate::pages::FakeView {
         let mut view =
             crate::pages::FakeView::new(pages.clone(), id, host, "index.html", "", events, inbox);
-        pages.board.borrow_mut().load(id, board_json, library_json);
+        let (board_json, library_json) = match cell.lock() {
+            Ok(cell) => (cell.board_json(), cell.library.to_string()),
+            Err(_) => (String::new(), String::new()),
+        };
+        pages
+            .board
+            .borrow_mut()
+            .load(id, &board_json, &library_json);
         view.board = Some(id);
+        view.board_cell = Some(cell);
         view
     }
 
@@ -1389,6 +1480,29 @@ impl crate::pages::FakeView {
             "state" => {
                 let status = pages.board.borrow().status.clone();
                 done(Ok(status_value(&status).to_string()));
+            }
+            "holdKeys" => {
+                pages.board.borrow_mut().calls.push("holdKeys".to_string());
+                done(Ok("{}".to_string()));
+            }
+            "openText" => {
+                let id = argument_value
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .map(str::to_string);
+                let status = {
+                    let mut board = pages.board.borrow_mut();
+                    match &id {
+                        Some(id) => {
+                            board.calls.push(format!("openText {id}"));
+                            board.status.editing = true;
+                        }
+                        None => board.calls.push("openText".to_string()),
+                    }
+                    board.status.clone()
+                };
+                done(Ok(json!({ "editing": id.is_some() }).to_string()));
+                pages.post_board(Message::Status(status));
             }
             "mermaid" => {
                 let words = match argument_value.get("insert").and_then(Value::as_str) {

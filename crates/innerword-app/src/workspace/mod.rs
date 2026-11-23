@@ -76,7 +76,7 @@
 //! modals get their keys directly.
 
 mod assistant;
-mod board;
+pub(crate) mod board;
 mod board_pdf;
 mod fonts;
 mod images;
@@ -245,9 +245,9 @@ pub struct Workspace {
     /// The open page or whiteboard; never together with a session
     /// (`page.rs`, `board.rs`).
     pub(crate) page: Option<page::PageSession>,
-    /// A whiteboard whose session ended while its page held more than it had
-    /// posted: its view parked until that is saved (`board.rs`).
-    pub(crate) closing_board: Option<board::ClosingBoard>,
+    /// The whiteboards whose session ended while their page held more than
+    /// it had posted: each view parked until that is saved (`board.rs`).
+    pub(crate) closing_boards: Vec<board::ClosingBoard>,
     /// Excalidraw's shape library, one for every whiteboard (`board.rs`).
     pub(crate) shape_library: board::ShapeLibraryState,
     /// A close of the window or a quit that waits for a whiteboard's page.
@@ -533,7 +533,7 @@ impl Workspace {
             settings,
             session: None,
             page: None,
-            closing_board: None,
+            closing_boards: Vec::new(),
             shape_library: board::ShapeLibraryState::default(),
             ending: None,
             saver,

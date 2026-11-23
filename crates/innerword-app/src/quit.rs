@@ -24,20 +24,26 @@ pub fn request(cx: &mut App) {
         return;
     }
     cx.set_global(Requested(true));
-    let workspace = cx
-        .windows()
-        .into_iter()
-        .find_map(|window| window.downcast::<Workspace>());
-    let Some(workspace) = workspace else {
-        cx.quit();
-        return;
-    };
-    let ended = workspace.update(cx, |workspace, window, cx| {
-        workspace.end_then(End::Quit, window, cx);
+    // After the update that asked: `cmd-q` pressed in the window reaches the
+    // app-wide listener while that window is being updated, and a window
+    // cannot be updated from inside its own update (the workspace would not
+    // be reached and the app would quit without asking the whiteboard).
+    cx.defer(|cx| {
+        let workspace = cx
+            .windows()
+            .into_iter()
+            .find_map(|window| window.downcast::<Workspace>());
+        let Some(workspace) = workspace else {
+            cx.quit();
+            return;
+        };
+        let ended = workspace.update(cx, |workspace, window, cx| {
+            workspace.end_then(End::Quit, window, cx);
+        });
+        if ended.is_err() {
+            cx.quit();
+        }
     });
-    if ended.is_err() {
-        cx.quit();
-    }
 }
 
 /// Whether a quit is under way (tests).

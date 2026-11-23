@@ -350,19 +350,32 @@ pub(crate) struct BoardSaveJob {
     /// Where the writer looked, to store with it.
     pub view_state: Option<String>,
     pub snapshot_interval: Duration,
+    /// Where the job leaves what it wrote.
+    pub written: WrittenSlot,
 }
+
+/// What a background save of a whiteboard wrote.
+#[derive(Clone)]
+pub(crate) struct WrittenBoard {
+    pub meta: DocumentMeta,
+    pub stamp: innerword_library::store::ContentStamp,
+    /// The stored scene that was written.
+    pub scene: Arc<str>,
+    pub files: Vec<String>,
+    /// The view state stored with it (its `at` is `stamp`).
+    pub view_state: Option<String>,
+    pub duration: Duration,
+}
+
+/// Where a background save of a whiteboard leaves what it wrote, before it
+/// lets go of the second connection: a synchronous save that settles the
+/// background after that write and before its answer reached the main
+/// thread takes it from here as its base (the answer itself is dropped).
+pub(crate) type WrittenSlot = Arc<Mutex<Option<WrittenBoard>>>;
 
 /// What a background save of a whiteboard did.
 pub(crate) enum BoardSaveOutcome {
-    Saved {
-        meta: DocumentMeta,
-        stamp: innerword_library::store::ContentStamp,
-        /// The stored scene that was written.
-        scene: Arc<str>,
-        files: Vec<String>,
-        view_state: Option<String>,
-        duration: Duration,
-    },
+    Saved(WrittenBoard),
     /// See [`NotPrepared::NeedsFiles`]; nothing was written.
     NeedsFiles(Vec<String>),
     /// The row changed under the view (`StoreError::Stale`); nothing was
@@ -399,19 +412,27 @@ impl Saver {
                     if let Err(error) = store.snapshot_if_stale(job.id, job.snapshot_interval) {
                         eprintln!("Inner Word: could not take a version snapshot: {error}");
                     }
+                    // Where the writer looks, stamped with the scene written now (the
+                    // job was made on the stamp it expected).
                     let view_state = job
                         .view_state
-                        .as_ref()
-                        .filter(|json| store.save_view_state(job.id, json).is_ok())
-                        .cloned();
-                    BoardSaveOutcome::Saved {
+                        .as_deref()
+                        .map(|json| view_state_at(json, saved.stamp))
+                        .filter(|json| store.save_view_state(job.id, json).is_ok());
+                    let written = WrittenBoard {
                         meta: saved.meta,
                         stamp: saved.stamp,
                         files: prepared.files.iter().map(|id| id.to_hex()).collect(),
                         scene: Arc::from(prepared.scene),
                         view_state,
                         duration: started.elapsed(),
-                    }
+                    };
+                    // Left before the connection is let go: a settle that comes
+                    // after this write finds it.
+                    *job.written
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(written.clone());
+                    BoardSaveOutcome::Saved(written)
                 }
                 Err(innerword_library::StoreError::Stale { .. }) => BoardSaveOutcome::Stale,
                 Err(error) => BoardSaveOutcome::Failed(error.to_string()),
@@ -443,6 +464,17 @@ impl Saver {
                 .map_err(|error| error.to_string())?;
             Ok(Some(stored))
         })
+    }
+}
+
+/// `json` (a whiteboard's view state) with its `at` set to `stamp`.
+pub(crate) fn view_state_at(json: &str, stamp: innerword_library::store::ContentStamp) -> String {
+    match serde_json::from_str::<serde_json::Value>(json) {
+        Ok(serde_json::Value::Object(mut map)) => {
+            map.insert("at".to_string(), serde_json::Value::String(stamp.to_hex()));
+            serde_json::Value::Object(map).to_string()
+        }
+        _ => json.to_string(),
     }
 }
 

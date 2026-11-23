@@ -221,13 +221,16 @@ pub fn key_bindings() -> Vec<KeyBinding> {
     ]
 }
 
+/// The category of every command of the library: [`commands`] and
+/// [`new_board_command`].
+const CATEGORY: &str = "Library";
+
 /// The panel's commands for the command palette and the shortcuts overlay.
 ///
 /// Their actions are handled by the panel, so they act when the panel has focus. Wrap the
 /// window root with [`forward_actions`] to make the commands that do not need the panel's
 /// focus (new, rename, duplicate, move, trash, filter, ...) work from anywhere.
 pub fn commands() -> Vec<CommandDescriptor> {
-    const CATEGORY: &str = "Library";
     vec![
         CommandDescriptor::new("New document", CATEGORY, NewDocument)
             .keywords(["create", "add", "file"]),
@@ -302,7 +305,7 @@ pub fn commands() -> Vec<CommandDescriptor> {
 /// panel the scene of a new whiteboard ([`LibraryPanel::set_new_board_content`]); without
 /// that the panel passes the action on and makes nothing.
 pub fn new_board_command() -> CommandDescriptor {
-    CommandDescriptor::new("New whiteboard", "Library", NewBoard)
+    CommandDescriptor::new("New whiteboard", CATEGORY, NewBoard)
         .keywords(["create", "add", "board", "canvas", "drawing"])
 }
 
@@ -797,7 +800,8 @@ impl LibraryPanel {
     ///
     /// The panel calls it when something puts the keyboard inside the panel while the
     /// panel is not drawn: [`begin_rename`](Self::begin_rename) (so also
-    /// [`new_document`](Self::new_document) and [`new_folder`](Self::new_folder)),
+    /// [`new_document`](Self::new_document), [`new_folder`](Self::new_folder) and
+    /// [`new_board`](Self::new_board)),
     /// [`focus_filter`](Self::focus_filter) and [`show_trash`](Self::show_trash), which is
     /// what the palette's library commands do when the sidebar is closed. The handler runs
     /// after the current update, so it may update the entity that called the panel.

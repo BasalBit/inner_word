@@ -781,7 +781,10 @@ fn the_library_s_new_whiteboard_is_a_command_for_the_list_without_a_key(cx: &mut
     cx.update(|_, cx| {
         let command = innerword_library::new_board_command();
         assert_eq!(command.title.as_ref(), "New whiteboard");
-        assert_eq!(command.category.as_ref(), "Library");
+        // In the category of the library's other commands, whatever it is called.
+        let library = innerword_library::commands();
+        assert!(!library.is_empty());
+        assert!(library.iter().all(|c| c.category == command.category));
         assert_eq!(command.action_name(), gpui::Action::name(&NewBoard));
         // Not among the panel's commands, every one of which has a key there.
         assert!(

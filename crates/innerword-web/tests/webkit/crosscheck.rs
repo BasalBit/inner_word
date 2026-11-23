@@ -10,8 +10,9 @@
 //!   `index` and `version`, and a label's id wherever it is named (`boundElements`);
 //! - a text's width within 3 % (Rust sums the advance widths of the bundled fonts; WebKit
 //!   shapes the text, with the font's kerning), and what follows from a width by Excalidraw's
-//!   own rules within what that width differs by: the place of a centred or right-aligned
-//!   text, the size of a shape fitted to its label and the place of its label;
+//!   own rules within what that width differs by: the place of a centred text (half the
+//!   difference) or a right-aligned one (all of it), never of a left-aligned one, the size
+//!   of a shape fitted to its label and the place of its label;
 //! - the ends of a bound arrow within 1 px.
 //!
 //! Known and deliberate, and only noted (the corpus's `README.md`, `innerword-board`'s
@@ -326,30 +327,49 @@ fn compare(ours: &[Value], theirs: &[Value]) -> Comparison {
                             out.widest_text = out.widest_text.max(share);
                             (q.abs() * TEXT_WIDTH_SHARE, "a text's width, 3 %")
                         }
-                        ("text", "x") if is_label => {
-                            let container = a["containerId"].as_str().unwrap_or("");
-                            let container_apart = mine
-                                .get(container)
-                                .zip(excalidraws.get(container))
-                                .map(|(c, d)| {
-                                    let w = (c["width"].as_f64().unwrap_or(0.)
-                                        - d["width"].as_f64().unwrap_or(0.))
-                                    .abs();
-                                    let x = (c["x"].as_f64().unwrap_or(0.)
-                                        - d["x"].as_f64().unwrap_or(0.))
-                                    .abs();
-                                    w + x
-                                })
-                                .unwrap_or(0.);
-                            (
-                                width_apart.get(key).copied().unwrap_or(0.) + container_apart,
-                                "a label's place, by its width and its container's",
-                            )
+                        ("text", "x") => {
+                            // Where a text stands follows from its width only where it
+                            // is aligned by its middle or its right edge: a left-aligned
+                            // text keeps its x. A label stands in its container, whose
+                            // own place and width may differ too: the text area starts
+                            // at the container's x plus a share of its width (a padding
+                            // in a rectangle, 15 % of it in an ellipse, a quarter in a
+                            // diamond), so a left label may move by half the container's
+                            // difference, a centred one by half of both, a right one by
+                            // both.
+                            let text_apart = width_apart.get(key).copied().unwrap_or(0.);
+                            let (container_x, container_width) = if is_label {
+                                let container = a["containerId"].as_str().unwrap_or("");
+                                mine.get(container)
+                                    .zip(excalidraws.get(container))
+                                    .map(|(c, d)| {
+                                        let apart = |field: &str| {
+                                            (c[field].as_f64().unwrap_or(0.)
+                                                - d[field].as_f64().unwrap_or(0.))
+                                            .abs()
+                                        };
+                                        (apart("x"), apart("width"))
+                                    })
+                                    .unwrap_or((0., 0.))
+                            } else {
+                                (0., 0.)
+                            };
+                            match a["textAlign"].as_str() {
+                                Some("center") => (
+                                    container_x + (container_width + text_apart) / 2.,
+                                    "a centred text's place, by half its width's difference",
+                                ),
+                                Some("right") => (
+                                    container_x + container_width + text_apart,
+                                    "a right-aligned text's place, by its width's difference",
+                                ),
+                                _ if is_label => (
+                                    container_x + container_width / 2.,
+                                    "a left-aligned label's place, by its container's only",
+                                ),
+                                _ => (0., "a left-aligned text keeps its place"),
+                            }
                         }
-                        ("text", "x") => (
-                            width_apart.get(key).copied().unwrap_or(0.),
-                            "a text's place, by its width",
-                        ),
                         ("rectangle" | "ellipse" | "diamond", "width") => (
                             2. * label_apart(key),
                             "a shape fitted to its label, by the label's width",
@@ -394,6 +414,7 @@ pub(super) fn the_converter_against_excalidraw(report: &mut Report, rules: &Path
         names.len() >= 5,
         &format!("the converter's corpus is found ({names:?})"),
     );
+    kerning_measured(report, &assets, rules);
     let dump = std::env::var_os("INNERWORD_WEB_CROSSCHECK_DUMP").map(PathBuf::from);
     for name in &names {
         let text = std::fs::read_to_string(corpus().join(name)).unwrap_or_default();
@@ -441,6 +462,9 @@ pub(super) fn the_converter_against_excalidraw(report: &mut Report, rules: &Path
         if name == "arrows.json" {
             the_comparison_sees_a_difference(report, &ours, &theirs);
         }
+        if name == "text.json" {
+            a_text_may_move_only_as_it_is_aligned(report, &ours, &theirs);
+        }
         let comparison = compare(&ours, &theirs);
         for allowed in &comparison.allowed {
             report.note(&format!("{name}: {allowed}"));
@@ -459,6 +483,117 @@ pub(super) fn the_converter_against_excalidraw(report: &mut Report, rules: &Path
             ),
         );
     }
+}
+
+/// Words whose pairs fonts kern the most (a capital beside a round or slanted letter, a
+/// letter beside a full stop), and a few plain ones.
+const KERNED_WORDS: &[&str] = &[
+    "AV",
+    "AWAY",
+    "To",
+    "Ty",
+    "Yo",
+    "Yes?",
+    "We",
+    "LT",
+    "P.",
+    "Tokyo",
+    "WAVE",
+    "Typography",
+    "Postgres",
+    "minimum",
+    "Hello, world",
+];
+
+/// How far innerword-board's text widths, which sum the fonts' advance widths, lie from
+/// what Excalidraw measures in WebKit, which applies the fonts' pair kerning: each family
+/// with widths at 20 px, on [`KERNED_WORDS`]. Only noted (the worst cases, for whoever
+/// decides whether innerword-board applies kerning); the corpus's own texts are held at 3 %
+/// above.
+fn kerning_measured(report: &mut Report, assets: &Assets, rules: &Path) {
+    let mut skeletons = Vec::new();
+    let mut probes = Vec::new();
+    for &(family, family_name) in metrics::FAMILIES {
+        if !metrics::has_widths(family) {
+            continue;
+        }
+        for (n, word) in KERNED_WORDS.iter().enumerate() {
+            let id = format!("k{family}-{n}");
+            skeletons.push(serde_json::json!({
+                "type": "text", "id": id, "x": 0, "y": 40 * probes.len(),
+                "text": word, "fontFamily": family, "fontSize": 20
+            }));
+            probes.push((
+                id,
+                family_name,
+                *word,
+                metrics::text_size(word, family, 20.).0,
+            ));
+        }
+    }
+    let theirs = match bundle::convert(assets, rules, &Value::Array(skeletons).to_string()) {
+        Ok(Value::Array(list)) => list,
+        other => {
+            report.check(
+                false,
+                &format!("the kerning probe is converted by Excalidraw ({other:?})"),
+            );
+            return;
+        }
+    };
+    let mut apart: Vec<(f64, String)> = probes
+        .iter()
+        .filter_map(|(id, family, word, ours)| {
+            let theirs = theirs.iter().find(|e| e["id"] == id.as_str())?["width"].as_f64()?;
+            Some((
+                (ours - theirs) / theirs.max(1.),
+                format!("{word:?} in {family}: ours {ours:.2} Excalidraw's {theirs:.2}"),
+            ))
+        })
+        .collect();
+    report.check(
+        apart.len() == probes.len(),
+        &format!(
+            "the kerning probe measures every word in every family with widths ({} of {})",
+            apart.len(),
+            probes.len()
+        ),
+    );
+    apart.sort_by(|a, b| b.0.abs().total_cmp(&a.0.abs()));
+    let over = apart
+        .iter()
+        .filter(|(share, _)| share.abs() > TEXT_WIDTH_SHARE)
+        .count();
+    report.note(&format!(
+        "kerning: {over} of {} words lie more than 3 % from Excalidraw's widths; the worst: {}",
+        apart.len(),
+        apart
+            .iter()
+            .take(8)
+            .map(|(share, what)| format!("{what} ({:+.1} %)", share * 100.))
+            .collect::<Vec<_>>()
+            .join("; ")
+    ));
+    let mut by_family: BTreeMap<&str, f64> = BTreeMap::new();
+    for (id, family, _, ours) in &probes {
+        if let Some(theirs) = theirs
+            .iter()
+            .find(|e| e["id"] == id.as_str())
+            .and_then(|e| e["width"].as_f64())
+        {
+            let share = ((ours - theirs) / theirs.max(1.)).abs();
+            let worst = by_family.entry(family).or_insert(0.);
+            *worst = worst.max(share);
+        }
+    }
+    report.note(&format!(
+        "kerning: the worst word of each family: {}",
+        by_family
+            .iter()
+            .map(|(family, share)| format!("{family} {:.1} %", share * 100.))
+            .collect::<Vec<_>>()
+            .join(", ")
+    ));
 }
 
 /// The comparison is not blind: three differences planted in Excalidraw's side (a colour, a
@@ -487,5 +622,43 @@ fn the_comparison_sees_a_difference(report: &mut Report, ours: &[Value], theirs:
                 .iter()
                 .all(|n| named.iter().any(|m| m == n)),
         &format!("the cross-check names a difference planted in Excalidraw's side ({named:?})"),
+    );
+}
+
+/// The place of a text is held by its alignment. Planted in Excalidraw's side: each of
+/// three texts 2 % wider than ours (within the 3 % a width may differ), and moved from our
+/// place by a share of that difference. A left-aligned text moved by half of it is named
+/// (its place has no slack), a centred one moved by 0.6 of it is named (its slack is half),
+/// and a right-aligned one moved by 0.9 of it is not (its slack is all of it).
+fn a_text_may_move_only_as_it_is_aligned(report: &mut Report, ours: &[Value], theirs: &[Value]) {
+    let planted_at = [("title", 0.5), ("centred", 0.6), ("right", 0.9)];
+    let mut planted: Vec<Value> = theirs.to_vec();
+    for element in planted.iter_mut() {
+        for (id, share) in planted_at {
+            if element["id"] != id {
+                continue;
+            }
+            let Some(mine) = ours.iter().find(|e| e["id"] == id) else {
+                continue;
+            };
+            let (x, width) = (
+                mine["x"].as_f64().unwrap_or(0.),
+                mine["width"].as_f64().unwrap_or(0.),
+            );
+            element["width"] = Value::from(width * 1.02);
+            element["x"] = Value::from(x + share * width * 0.02);
+        }
+    }
+    let mut named: Vec<String> = compare(ours, &planted)
+        .differences
+        .iter()
+        .map(|d| format!("{}.{}", d.element, d.field))
+        .collect();
+    named.sort();
+    report.check(
+        named == ["centred.x", "title.x"],
+        &format!(
+            "the cross-check gives a text's place slack only as it is aligned: a left one none, a centred one half its width's difference, a right one all of it ({named:?})"
+        ),
     );
 }

@@ -18,6 +18,7 @@ use innerword_ui::{ConfirmDialog, ToastLayer};
 use super::{content, library_from};
 use LibraryItem::{Document, Folder};
 
+mod boards;
 mod mouse_paths;
 mod pages;
 mod rebinding;

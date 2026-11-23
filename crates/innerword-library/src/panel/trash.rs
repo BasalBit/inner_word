@@ -20,8 +20,9 @@ pub(super) struct TrashRow {
     pub location: SharedString,
     /// Folders: what went to the trash with it ("3 documents, 1 subfolder").
     pub contents: Option<SharedString>,
-    /// A page rather than a text. Always false for folders.
-    pub page: bool,
+    /// The kind of a document's item (a text, a page, a whiteboard). Always
+    /// [`DocumentKind::Text`] for folders, where it means nothing.
+    pub kind: DocumentKind,
 }
 
 /// Reads the trash and describes each entry. One store query plus one cached-tree walk per
@@ -42,7 +43,7 @@ pub(super) fn build_trash_rows(library: &Library) -> Vec<TrashRow> {
                     },
                     location: location_label(library, meta.folder_id),
                     contents: None,
-                    page: meta.kind == DocumentKind::Page,
+                    kind: meta.kind,
                 }
             }
             TrashEntry::Folder {
@@ -60,7 +61,7 @@ pub(super) fn build_trash_rows(library: &Library) -> Vec<TrashRow> {
                     label: folder.name.clone().into(),
                     location: location_label(library, folder.parent_id),
                     contents: Some(contents.into()),
-                    page: false,
+                    kind: DocumentKind::Text,
                 }
             }
         })

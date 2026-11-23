@@ -11,8 +11,8 @@ use innerword_ui::{ContextMenu, ContextMenuItem, MenuAnchor};
 
 use super::{
     CollapseAll, DeleteForever, Dismiss, Duplicate, EmptyTrash, ExpandAll, LibraryItem,
-    LibraryPanel, MoveToFolder, MoveToTrash, NewDocument, NewFolder, OpenSelected, ROW_HEIGHT,
-    Rename, RestoreSelected, ShowTrash, TRASH_ROW_HEIGHT, View,
+    LibraryPanel, MoveToFolder, MoveToTrash, NewBoard, NewDocument, NewFolder, OpenSelected,
+    ROW_HEIGHT, Rename, RestoreSelected, ShowTrash, TRASH_ROW_HEIGHT, View,
 };
 
 /// What the app adds to a menu of the panel: see [`LibraryPanel::set_menu_extension`].
@@ -228,9 +228,14 @@ impl LibraryPanel {
                 } else {
                     entry("Collapse All", CollapseAll)
                 };
-                vec![
+                let mut entries = vec![
                     entry("New Document Here", NewDocument),
                     entry("New Folder Here", NewFolder),
+                ];
+                if self.makes_boards() {
+                    entries.push(entry("New Whiteboard Here", NewBoard));
+                }
+                entries.extend([
                     Entry::Separator,
                     entry("Rename", Rename),
                     entry("Duplicate", Duplicate),
@@ -239,7 +244,8 @@ impl LibraryPanel {
                     Entry::Extension,
                     Entry::Separator,
                     entry("Move to Trash", MoveToTrash).danger(),
-                ]
+                ]);
+                entries
             }
             MenuKind::Library => {
                 let tree = self.library.read(cx).tree();
@@ -252,20 +258,32 @@ impl LibraryPanel {
                 } else {
                     entry("Collapse All", CollapseAll)
                 };
-                vec![
+                let mut entries = vec![
                     entry("New Document", NewDocument),
                     entry("New Folder", NewFolder),
+                ];
+                if self.makes_boards() {
+                    entries.push(entry("New Whiteboard", NewBoard));
+                }
+                entries.extend([
                     Entry::Separator,
                     all.enabled(!tree.folders.is_empty() && !filtering),
                     Entry::Extension,
                     Entry::Separator,
                     entry("Show Trash", ShowTrash),
-                ]
+                ]);
+                entries
             }
-            MenuKind::Add => vec![
-                entry("New Document", NewDocument),
-                entry("New Folder", NewFolder),
-            ],
+            MenuKind::Add => {
+                let mut entries = vec![
+                    entry("New Document", NewDocument),
+                    entry("New Folder", NewFolder),
+                ];
+                if self.makes_boards() {
+                    entries.push(entry("New Whiteboard", NewBoard));
+                }
+                entries
+            }
             MenuKind::TrashRow => vec![
                 entry("Show Trash", ShowTrash),
                 Entry::Extension,

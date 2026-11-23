@@ -20,11 +20,16 @@
 //! Errors are returned as [`StoreError`] (`Result<T>`), never panics. A failed call changes
 //! nothing and emits nothing.
 //!
-//! A library item is a text or a page ([`DocumentKind`]): a page is an HTML page kept whole
-//! in the library, created and saved with [`Library::create_page`] and
+//! A library item is a text, a page or a whiteboard ([`DocumentKind`]). A page is an HTML
+//! page kept whole in the library, created and saved with [`Library::create_page`] and
 //! [`Library::save_page`] (the same events as a text), and shown in the sidebar with a
-//! globe. The panel does not open pages itself: it emits
-//! [`LibraryPanelEvent::OpenDocument`] for either kind, and the app looks at the kind.
+//! globe. A whiteboard is a drawing (an Excalidraw scene), created and saved with
+//! [`Library::create_board`] and [`Library::save_board`] (a compare-and-swap against the
+//! [`ContentStamp`] of the stored scene; a save never changes its title), and shown with
+//! the whiteboard's icon ([`item_icon`]). The panel opens neither itself: it emits
+//! [`LibraryPanelEvent::OpenDocument`] for every kind, and the app looks at the kind. The
+//! panel makes whiteboards too ("New Whiteboard" in its menus, [`NewBoard`]) once the app
+//! has given it the scene of an empty one ([`LibraryPanel::set_new_board_content`]).
 //!
 //! The bytes of the images that documents hold are stored through the library too
 //! ([`Library::put_image`], [`Library::touch_image`]; the reads go through
@@ -95,10 +100,10 @@ pub use panel::{
     Collapse, CollapseAll, DeleteForever, Dismiss, Duplicate, EXPANDED_FOLDERS_SETTING, EmptyTrash,
     Expand, ExpandAll, FocusFilter, FocusTree, HEADER_HEIGHT, KEY_CONTEXT, LibraryItem,
     LibraryMenuTarget, LibraryPanel, LibraryPanelEvent, MoveDown, MoveToFolder, MoveToTrash,
-    MoveUp, NewDocument, NewFolder, OpenSelected, ROOT_ROW_HEIGHT, ROW_DETAIL_SETTING, ROW_HEIGHT,
-    Rename, RestoreSelected, RowDetail, SELECTED_ITEM_SETTING, SelectFirst, SelectLast, SelectNext,
-    SelectPageDown, SelectPageUp, SelectPrevious, ShowTrash, TRASH_ROW_HEIGHT, ToggleRowDetail,
-    UndoTrash, commands, forward_actions, key_bindings,
+    MoveUp, NewBoard, NewDocument, NewFolder, OpenSelected, ROOT_ROW_HEIGHT, ROW_DETAIL_SETTING,
+    ROW_HEIGHT, Rename, RestoreSelected, RowDetail, SELECTED_ITEM_SETTING, SelectFirst, SelectLast,
+    SelectNext, SelectPageDown, SelectPageUp, SelectPrevious, ShowTrash, TRASH_ROW_HEIGHT,
+    ToggleRowDetail, UndoTrash, commands, forward_actions, item_icon, key_bindings,
 };
 
 /// Text helpers of the panel, public only so that the crate's one integration-test binary
@@ -114,6 +119,15 @@ pub use innerword_store as store;
 /// another name here, because the document model has an `ImageId` of its own for the
 /// same 16 bytes inside a document, and the app sees both.
 pub use innerword_store::ImageId as StoredImageId;
+/// The kinds of library item (a text, a page, a whiteboard) and what a page and a
+/// whiteboard are made of, as the store has them: a page's content
+/// ([`Library::create_page`], [`Library::save_page`]), a whiteboard's
+/// ([`Library::create_board`], [`Library::save_board`]) with the stamp a save compares
+/// against and what a save answers, and the files either names (stored in `images.db`
+/// beside the pictures).
+pub use innerword_store::{
+    BoardContent, BoardSaved, ContentStamp, DocumentKind, FileId, FileInfo, PageContent,
+};
 /// The storage types that appear in this crate's API, re-exported so that consumers do not
 /// need a direct dependency on `innerword-store`.
 pub use innerword_store::{
@@ -122,10 +136,6 @@ pub use innerword_store::{
     NewImage, Result, SearchHit, Snapshot, SnapshotId, SnapshotMeta, SnapshotPolicy, SnippetPart,
     StoreError, TrashEntry, data_dir, database_path,
 };
-/// The kinds of library item (a text, a page) and what a page is made of, as the store has
-/// them: a page's content ([`Library::create_page`], [`Library::save_page`]) and the files
-/// its manifest names (stored in `images.db` beside the pictures).
-pub use innerword_store::{DocumentKind, FileId, FileInfo, PageContent};
 
 /// Installs the key bindings of the library panel. Call once at startup, after the app's
 /// own context-free bindings (a later binding wins at equal context depth).

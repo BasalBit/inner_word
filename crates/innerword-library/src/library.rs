@@ -7,9 +7,10 @@ use std::time::Duration;
 
 use gpui::{Context, EventEmitter, SharedString};
 use innerword_store::{
-    Clock, Document, DocumentContent, DocumentId, DocumentKind, DocumentMeta, EmptiedTrash,
-    FileInfo, Folder, FolderId, FolderNode, ImageId, ImageInfo, LibraryTree, NewImage, PageContent,
-    Result, SearchHit, Snapshot, SnapshotId, SnapshotMeta, Store, TrashEntry,
+    BoardContent, BoardSaved, Clock, ContentStamp, Document, DocumentContent, DocumentId,
+    DocumentKind, DocumentMeta, EmptiedTrash, FileInfo, Folder, FolderId, FolderNode, ImageId,
+    ImageInfo, LibraryTree, NewImage, PageContent, Result, SearchHit, Snapshot, SnapshotId,
+    SnapshotMeta, Store, TrashEntry,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -143,8 +144,8 @@ pub struct DocumentEntry {
     pub meta: DocumentMeta,
     /// Folder names from the root down to the document's folder. Empty for a root document.
     pub folder_path: Vec<String>,
-    /// What kind of item it is: a text, or a page (the same as `meta.kind`, here so that a
-    /// listing can tell the two apart without looking into the metadata).
+    /// What kind of item it is: a text, a page or a whiteboard (the same as `meta.kind`,
+    /// here so that a listing can tell them apart without looking into the metadata).
     pub kind: DocumentKind,
 }
 
@@ -448,6 +449,58 @@ impl Library {
         self.content_saved(meta, !same_title, cx)
     }
 
+    /// Creates a whiteboard at the end of `folder` (`None` is the root), as
+    /// [`create_page`](Self::create_page) creates a page: the caller supplies the stored
+    /// scene, the ids of the files it names (every one stored already, or the store refuses
+    /// with [`StoreError::FilesMissing`](innerword_store::StoreError::FilesMissing) and
+    /// writes nothing), the text of its elements and its counts. The title is given apart:
+    /// a whiteboard's title never follows its text. The first whiteboard of a library takes
+    /// it to schema 5 in the same transaction. Emits the events of a new document:
+    /// `DocumentCreated`, `TreeChanged`.
+    pub fn create_board(
+        &mut self,
+        folder: Option<FolderId>,
+        title: &str,
+        board: &BoardContent<'_>,
+        cx: &mut Context<Self>,
+    ) -> Result<BoardSaved> {
+        let saved = self.store.create_board(folder, title, board)?;
+        self.changed(
+            cx,
+            [LibraryEvent::DocumentCreated(saved.meta.id)],
+            false,
+            true,
+        )?;
+        Ok(saved)
+    }
+
+    /// Saves a whiteboard's scene with the text of its elements and its counts, as
+    /// [`save_page`](Self::save_page) saves a page: the cached entry is replaced in place
+    /// and `DocumentSaved` is emitted. A save never changes the title (only
+    /// [`create_board`](Self::create_board) and [`rename_document`](Self::rename_document)
+    /// set it), so it never emits `TreeChanged`.
+    ///
+    /// `expect` is the compare-and-swap: with `Some(stamp)` the save writes only when the
+    /// stored scene still has that stamp, and otherwise refuses with
+    /// [`StoreError::Stale`](innerword_store::StoreError::Stale) (the app passes the stamp
+    /// its view's scene descends from; agents pass `None`). Refuses a text and a page with
+    /// `WrongKind`, and a new file id the library does not have with `FilesMissing`. No
+    /// error changes anything or emits anything. Works on a trashed whiteboard.
+    pub fn save_board(
+        &mut self,
+        id: DocumentId,
+        board: &BoardContent<'_>,
+        expect: Option<ContentStamp>,
+        cx: &mut Context<Self>,
+    ) -> Result<BoardSaved> {
+        let saved = self.store.save_board(id, board, expect)?;
+        let meta = self.content_saved(saved.meta, false, cx)?;
+        Ok(BoardSaved {
+            meta,
+            stamp: saved.stamp,
+        })
+    }
+
     /// Whether the item `id` has the title `title` now: from the cache for a live item,
     /// from the store for one that is in the trash (or missing, which is the error).
     fn has_title(&self, id: DocumentId, title: &str) -> Result<bool> {
@@ -457,7 +510,7 @@ impl Library {
         })
     }
 
-    /// What follows a successful save of a text or a page: the cached entry replaced in
+    /// What follows a successful save of a text, a page or a whiteboard: the cached entry replaced in
     /// place (or the tree read again where the cache does not have it), `DocumentSaved`,
     /// and `TreeChanged` when the title changed on a live item.
     fn content_saved(

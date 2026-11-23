@@ -14,7 +14,7 @@ use innerword_ui::theme::{
 use innerword_ui::{HighlightedLabel, Icon, IconName, KeyHint};
 
 use super::controls::{ICON_BUTTON, hover_fill, icon_button, rest_fill, text_button};
-use super::drag::{DragPreview, DraggedItem, DropTarget, item_icon};
+use super::drag::{DragPreview, DraggedItem, DropTarget, row_icon};
 use super::menu::MenuKind;
 use super::rows::{count_documents, grouped, label_around_match};
 use super::{
@@ -197,6 +197,7 @@ impl Render for LibraryPanel {
             .on_action(cx.listener(Self::on_focus_tree))
             .on_action(cx.listener(Self::on_new_document))
             .on_action(cx.listener(Self::on_new_folder))
+            .on_action(cx.listener(Self::on_new_board))
             .on_action(cx.listener(Self::on_rename))
             .on_action(cx.listener(Self::on_duplicate))
             .on_action(cx.listener(Self::on_move_to_folder))
@@ -669,7 +670,7 @@ impl LibraryPanel {
                             this.click_disclosure(ix, cx);
                         }))
                 });
-            let icon = Icon::new(item_icon(row.item, row.page, row.expanded)).color(if active {
+            let icon = Icon::new(row_icon(row.item, row.kind, row.expanded)).color(if active {
                 colors.accent
             } else if selected || drop_into {
                 colors.ink
@@ -795,7 +796,7 @@ impl LibraryPanel {
                             DraggedItem {
                                 item: row.item,
                                 label: row.label.clone(),
-                                page: row.page,
+                                kind: row.kind,
                             },
                             |dragged, grabbed_at, _, cx| {
                                 cx.new(|_| DragPreview::new(dragged.clone(), grabbed_at))
@@ -1098,8 +1099,11 @@ impl LibraryPanel {
                                 (selected && panel_focused).then(|| focus_mark(colors.accent)),
                             )
                             .child(
-                                Icon::new(item_icon(row.item, row.page, false))
-                                    .color(if selected { colors.ink } else { colors.muted }),
+                                Icon::new(row_icon(row.item, row.kind, false)).color(if selected {
+                                    colors.ink
+                                } else {
+                                    colors.muted
+                                }),
                             )
                             .child(
                                 // Absolutely placed lines, so both truncate with an

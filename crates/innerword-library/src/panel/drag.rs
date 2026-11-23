@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use gpui::{Context, IntoElement, Pixels, Render, SharedString, Window, div, prelude::*, px};
-use innerword_store::FolderId;
+use innerword_store::{DocumentKind, FolderId};
 use innerword_ui::theme::{ActiveTheme, RADIUS_SM, SPACE_2, UI_TEXT_BASE};
 use innerword_ui::toast::show_toast;
 use innerword_ui::{Icon, IconName, Toast};
@@ -23,14 +23,25 @@ pub(super) const EXPAND_ON_HOVER: Duration = Duration::from_millis(650);
 const SCROLL_EDGE: Pixels = px(18.);
 
 /// The icon of an item of the library, wherever the panel draws one (a row of the tree, a
-/// row of the trash, the ghost of a drag): a folder (open or closed), a text, or a page,
-/// which has the globe.
-pub(super) fn item_icon(item: LibraryItem, page: bool, open: bool) -> IconName {
+/// row of the trash, the ghost of a drag): a folder (open or closed), or a document's item
+/// by its kind ([`item_icon`]). `kind` means nothing for a folder.
+pub(super) fn row_icon(item: LibraryItem, kind: DocumentKind, open: bool) -> IconName {
     match item {
         LibraryItem::Folder(_) if open => IconName::FolderOpen,
         LibraryItem::Folder(_) => IconName::Folder,
-        LibraryItem::Document(_) if page => IconName::Globe,
-        LibraryItem::Document(_) => IconName::Document,
+        LibraryItem::Document(_) => item_icon(kind),
+    }
+}
+
+/// The icon of a library item of `kind`, as the sidebar draws it on its row, in the trash
+/// and under a drag: a text has the document, a page the globe, a whiteboard its own
+/// ([`IconName::Whiteboard`]). For whatever else shows an item beside its name (quick open,
+/// the library search), so that every place draws the same one.
+pub fn item_icon(kind: DocumentKind) -> IconName {
+    match kind {
+        DocumentKind::Text => IconName::Document,
+        DocumentKind::Page => IconName::Globe,
+        DocumentKind::Board => IconName::Whiteboard,
     }
 }
 
@@ -39,8 +50,9 @@ pub(super) fn item_icon(item: LibraryItem, page: bool, open: bool) -> IconName {
 pub(super) struct DraggedItem {
     pub item: LibraryItem,
     pub label: SharedString,
-    /// The item is a page: the ghost shows the globe.
-    pub page: bool,
+    /// The kind of a document's item, for the ghost's icon ([`DocumentKind::Text`] for a
+    /// folder).
+    pub kind: DocumentKind,
 }
 
 /// What follows the pointer during a drag: the icon and name of the dragged item, a little
@@ -65,7 +77,10 @@ impl Render for DragPreview {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let colors = theme.colors;
+        let icon = row_icon(self.dragged.item, self.dragged.kind, false);
         let label = div()
+            // Which icon the ghost has, for the tests ("library-drag-ghost-globe").
+            .debug_selector(move || format!("library-drag-ghost-{}", icon.name()))
             .flex()
             .items_center()
             .gap(SPACE_2)
@@ -80,10 +95,7 @@ impl Render for DragPreview {
             .font_family(theme.fonts.ui.clone())
             .text_size(UI_TEXT_BASE)
             .text_color(colors.ink)
-            .child(
-                Icon::new(item_icon(self.dragged.item, self.dragged.page, false))
-                    .color(colors.muted),
-            )
+            .child(Icon::new(icon).color(colors.muted))
             .child(div().min_w_0().truncate().child(self.dragged.label.clone()));
         div()
             .pl(self.grabbed_at.x + px(14.))

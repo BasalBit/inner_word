@@ -6,9 +6,9 @@ use super::rows::Row;
 use super::{
     Collapse, CollapseAll, DeleteForever, Dismiss, Duplicate, EmptyTrash, Expand, ExpandAll,
     FocusFilter, FocusTree, LibraryItem, LibraryPanel, LibraryPanelEvent, MoveDown, MoveToFolder,
-    MoveToTrash, MoveUp, NewDocument, NewFolder, OpenSelected, ROW_HEIGHT, Rename, RestoreSelected,
-    RowDetail, SelectFirst, SelectLast, SelectNext, SelectPageDown, SelectPageUp, SelectPrevious,
-    ShowTrash, TRASH_ROW_HEIGHT, ToggleRowDetail, UndoTrash, View,
+    MoveToTrash, MoveUp, NewBoard, NewDocument, NewFolder, OpenSelected, ROW_HEIGHT, Rename,
+    RestoreSelected, RowDetail, SelectFirst, SelectLast, SelectNext, SelectPageDown, SelectPageUp,
+    SelectPrevious, ShowTrash, TRASH_ROW_HEIGHT, ToggleRowDetail, UndoTrash, View,
 };
 
 impl LibraryPanel {
@@ -312,6 +312,20 @@ impl LibraryPanel {
             return;
         }
         self.new_document(window, cx);
+    }
+
+    pub(super) fn on_new_board(
+        &mut self,
+        _: &NewBoard,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.new_board_content.is_none() {
+            // No whiteboards without a page engine: whatever the app does with the action.
+            cx.propagate();
+            return;
+        }
+        self.new_board(window, cx);
     }
 
     pub(super) fn on_new_folder(

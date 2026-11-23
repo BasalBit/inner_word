@@ -25,7 +25,7 @@ use gpui::{
     KeyBinding, Pixels, ScrollStrategy, SharedString, Subscription, Task, UniformListScrollHandle,
     Window, actions, prelude::*, px,
 };
-use innerword_store::{DocumentContent, DocumentId, FolderId, Result};
+use innerword_store::{BoardContent, DocumentContent, DocumentId, FolderId, Result};
 use innerword_ui::context_menu::OpenContextMenu;
 use innerword_ui::toast::show_toast;
 use innerword_ui::{
@@ -36,6 +36,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::library::{Library, LibraryEvent};
 use drag::DropTarget;
+pub use drag::item_icon;
 pub use menu::LibraryMenuTarget;
 use menu::MenuExtension;
 use move_picker::MoveDelegate;
@@ -73,6 +74,8 @@ actions!(
         NewDocument,
         /// Create a folder in the selected folder and name it in place.
         NewFolder,
+        /// Create a whiteboard in the selected folder and name it in place.
+        NewBoard,
         /// Rename the selected item in place.
         Rename,
         /// Duplicate the selected document, or the selected folder with everything in it.
@@ -288,9 +291,9 @@ pub fn commands() -> Vec<CommandDescriptor> {
 /// command actions to `panel`. Use it on the window's root element.
 ///
 /// When the panel itself has focus its own listeners run first, so nothing runs twice.
-/// Covered: new document, new folder, rename, duplicate, move to folder, move up / down,
-/// move to trash, undo, show trash, empty trash, filter, switch row detail, expand all,
-/// collapse all.
+/// Covered: new document, new folder, new whiteboard, rename, duplicate, move to folder,
+/// move up / down, move to trash, undo, show trash, empty trash, filter, switch row detail,
+/// expand all, collapse all.
 ///
 /// A command for one item (rename, duplicate, move to folder, move up / down, move to
 /// trash) that arrives while the keyboard is outside the panel acts on the document open
@@ -324,6 +327,7 @@ pub fn forward_actions<E: InteractiveElement>(element: E, panel: &Entity<Library
         element,
         NewDocument => on_new_document,
         NewFolder => on_new_folder,
+        NewBoard => on_new_board,
         Rename => on_rename,
         Duplicate => on_duplicate,
         MoveToFolder => on_move_to_folder,
@@ -396,6 +400,17 @@ struct Anchors {
     trash_row: Cell<Bounds<Pixels>>,
 }
 
+/// How a rename in place ended.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RenameEnd {
+    /// `enter`: the typed name is taken.
+    Submit,
+    /// `escape`: the name stays as it was.
+    Cancel,
+    /// The keyboard left the field, or another command ran: the typed name is kept.
+    Elsewhere,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum View {
     Tree,
@@ -410,7 +425,8 @@ enum View {
 ///
 /// - A filter field (`/`), which narrows the tree by name as you type.
 /// - The tree: nested folders first, then documents, in the user's own order. A page (an
-///   HTML page kept in the library) is a document row with a globe for its icon. Folders
+///   HTML page kept in the library) is a document row with a globe for its icon, a
+///   whiteboard one with the whiteboard's ([`item_icon`]). Folders
 ///   expand and collapse. The document open in the editor is marked. Each document row has
 ///   a muted detail: how long ago it was edited, or its word count
 ///   ([`RowDetail`], switched with `i`).
@@ -453,14 +469,17 @@ enum View {
 /// - A click opens a document (the list keeps the keyboard) and opens or closes a folder;
 ///   the triangle of a folder does the same without selecting it. A double click renames
 ///   in place.
-/// - The "+" button of the header opens a menu with "New Document" and "New Folder". They
-///   go where `n` and `shift-n` put them: into the selected folder, or to the top level.
+/// - The "+" button of the header opens a menu with "New Document" and "New Folder", and
+///   "New Whiteboard" when the app makes whiteboards
+///   ([`set_new_board_content`](Self::set_new_board_content)). They go where `n` and
+///   `shift-n` put them: into the selected folder, or to the top level.
 /// - A right click selects what was clicked and opens its context menu; so does the "more"
 ///   button at the right end of the selected row and of the row under the pointer, and
 ///   `ctrl-enter`. The menus: on a document Open, Rename, Duplicate, Move To, Move to
-///   Trash; on a folder also New Document Here, New Folder Here and Expand All or
-///   Collapse All; on the "Library" row and on the empty area under the rows New
-///   Document, New Folder, Expand All or Collapse All, Show Trash; on the "Trash" row
+///   Trash; on a folder also New Document Here, New Folder Here (New Whiteboard Here when
+///   the app makes whiteboards) and Expand All or Collapse All; on the "Library" row and
+///   on the empty area under the rows New Document, New Folder (New Whiteboard), Expand
+///   All or Collapse All, Show Trash; on the "Trash" row
 ///   Show Trash and Empty Trash; in the trash view Restore and Delete Forever on an item,
 ///   Back to Library and Empty Trash beside the items. Every item is one of the panel's
 ///   actions, shows its key and does what the key does. The app adds its own items with
@@ -493,6 +512,7 @@ enum View {
 /// panel.update(cx, |panel, _| {
 ///     panel.set_modal_layer(modal_layer.clone());         // share the window's modal layer
 ///     panel.set_new_document_content(empty_document_json); // what `n` creates
+///     panel.set_new_board_content(empty_scene_json);       // with a page engine only
 /// });
 /// // If the sidebar can be hidden: how the panel asks to be shown (a palette command
 /// // that renames, filters or shows the trash while the sidebar is closed).
@@ -576,6 +596,12 @@ pub struct LibraryPanel {
     menu_from_keyboard: bool,
 
     new_document_content: Option<String>,
+    /// The stored scene of an empty whiteboard, which New Whiteboard ([`NewBoard`])
+    /// stores. `None`: the app has no page engine, and the panel offers no whiteboard.
+    new_board_content: Option<String>,
+    /// The item being named in place is a whiteboard just made: once named, or when the
+    /// naming is cancelled, it opens with the keyboard on its canvas.
+    rename_opens_board: bool,
     modal_layer: Entity<ModalLayer>,
     /// The modal layer belongs to the app, which renders it.
     modal_layer_is_shared: bool,
@@ -672,6 +698,8 @@ impl LibraryPanel {
             menu_extension: None,
             menu_from_keyboard: false,
             new_document_content: None,
+            new_board_content: None,
+            rename_opens_board: false,
             modal_layer,
             modal_layer_is_shared: false,
             selection_dirty: false,
@@ -726,6 +754,22 @@ impl LibraryPanel {
     /// continue to the app's own handlers.
     pub fn set_new_document_content(&mut self, content: impl Into<String>) {
         self.new_document_content = Some(content.into());
+    }
+
+    /// Sets the stored scene of an empty whiteboard (`innerword_board`'s empty scene, as
+    /// `Scene::to_stored` writes it), which New Whiteboard ([`NewBoard`]) stores in the
+    /// whiteboards it makes. The library never parses a scene, so the app supplies it, and
+    /// does so only when it can show a whiteboard (it has a page engine). Until this is set
+    /// the panel's menus have no "New Whiteboard" item, and the panel does not handle
+    /// [`NewBoard`] and lets the action continue to the app's own handlers.
+    pub fn set_new_board_content(&mut self, scene: impl Into<String>) {
+        self.new_board_content = Some(scene.into());
+    }
+
+    /// Whether the panel makes whiteboards: the app gave it the scene of an empty one
+    /// ([`set_new_board_content`](Self::set_new_board_content)).
+    pub fn makes_boards(&self) -> bool {
+        self.new_board_content.is_some()
     }
 
     /// Sets how the panel asks its host to put it on screen. A host that can hide the
@@ -1011,13 +1055,14 @@ impl LibraryPanel {
     }
 
     /// The icon drawn on the row of `item`, in the tree as it is shown, else in the trash:
-    /// a folder, a text, or the globe of a page. `None` when the item has no row.
+    /// a folder, a text, the globe of a page or the whiteboard's own ([`item_icon`]).
+    /// `None` when the item has no row.
     pub fn item_icon(&self, item: LibraryItem) -> Option<IconName> {
         if let Some(row) = self.rows.iter().find(|row| row.item == item) {
-            return Some(drag::item_icon(row.item, row.page, row.expanded));
+            return Some(drag::row_icon(row.item, row.kind, row.expanded));
         }
         let row = self.trash_rows.iter().find(|row| row.item == item)?;
-        Some(drag::item_icon(row.item, row.page, false))
+        Some(drag::row_icon(row.item, row.kind, false))
     }
 
     /// The muted detail drawn at the right of a visible row: for a document its edit time
@@ -1083,6 +1128,59 @@ impl LibraryPanel {
         }
     }
 
+    /// Makes an empty whiteboard at the end of the [selected folder](Self::selected_folder)
+    /// (on the "Library" row: at the top level) and starts naming it in place, showing the
+    /// sidebar when it is hidden ([`set_reveal_handler`](Self::set_reveal_handler)). Once
+    /// it is named (`enter`), and also when the naming is cancelled (`escape`: it stays
+    /// "Untitled"), the panel emits [`LibraryPanelEvent::OpenDocument`] for it with
+    /// `focus_editor: true`, so that the keyboard goes to the canvas; when the keyboard
+    /// leaves the field for something else (a click elsewhere) the name is kept and it
+    /// opens with `focus_editor: false`, leaving the keyboard where it went.
+    ///
+    /// Returns `None` when no scene was set with
+    /// [`set_new_board_content`](Self::set_new_board_content), or the store failed (then a
+    /// toast says why).
+    pub fn new_board(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<DocumentId> {
+        let scene = self.new_board_content.clone()?;
+        let folder = self.selected_folder();
+        let created = self.library.update(cx, |library, cx| {
+            library.create_board(
+                folder,
+                "",
+                &BoardContent {
+                    scene: &scene,
+                    files: &[],
+                    plain_text: "",
+                    word_count: 0,
+                    char_count: 0,
+                },
+                cx,
+            )
+        });
+        match created {
+            Ok(saved) => {
+                let id = saved.meta.id;
+                if self.begin_rename(LibraryItem::Document(id), window, cx) {
+                    self.rename_opens = true;
+                    self.rename_opens_board = true;
+                    self.rename_is_naming = true;
+                } else {
+                    // Not in the live tree (cannot happen for an item just made at the end
+                    // of a live folder): open it all the same, it exists.
+                    cx.emit(LibraryPanelEvent::OpenDocument {
+                        id,
+                        focus_editor: true,
+                    });
+                }
+                Some(id)
+            }
+            Err(err) => {
+                self.report_error(&err.to_string(), cx);
+                None
+            }
+        }
+    }
+
     /// Creates a folder named "New folder" in the [selected folder](Self::selected_folder)
     /// and starts renaming it in place.
     pub fn new_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<FolderId> {
@@ -1139,6 +1237,7 @@ impl LibraryPanel {
         });
         self.renaming = Some(item);
         self.rename_opens = false;
+        self.rename_opens_board = false;
         self.rename_is_naming = false;
         self.focus_inside(&field.focus_handle(cx), window, cx);
         cx.notify();
@@ -1156,24 +1255,64 @@ impl LibraryPanel {
     }
 
     /// Ends the rename in progress and stores the typed name. An empty or unchanged name
-    /// changes nothing.
+    /// changes nothing. As `enter` in the field does: a whiteboard being named opens with
+    /// the keyboard on its canvas.
     pub fn commit_rename(&mut self, cx: &mut Context<Self>) {
-        self.finish_rename(true, cx);
+        self.end_rename(RenameEnd::Submit, cx);
     }
 
-    /// Leaves rename mode without changing the name.
+    /// Leaves rename mode without changing the name. As `escape` in the field does: a
+    /// whiteboard being named stays "Untitled" and opens all the same.
     pub fn cancel_rename(&mut self, cx: &mut Context<Self>) {
-        self.finish_rename(false, cx);
+        self.end_rename(RenameEnd::Cancel, cx);
     }
 
+    /// Ends the rename in progress: with `commit` because something else happened (the
+    /// keyboard left the field, another command ran), keeping the typed name; without it
+    /// as `escape` does.
     fn finish_rename(&mut self, commit: bool, cx: &mut Context<Self>) {
+        self.end_rename(
+            if commit {
+                RenameEnd::Elsewhere
+            } else {
+                RenameEnd::Cancel
+            },
+            cx,
+        );
+    }
+
+    fn end_rename(&mut self, end: RenameEnd, cx: &mut Context<Self>) {
         let Some(item) = self.renaming.take() else {
             return;
         };
         let opens = std::mem::take(&mut self.rename_opens);
+        let opens_board = std::mem::take(&mut self.rename_opens_board);
         let naming = std::mem::take(&mut self.rename_is_naming);
         cx.notify();
-        if !commit {
+        // What opens once the naming ends. A document just made opens once it has a name.
+        // A whiteboard just made opens however its naming ends (`escape` leaves it
+        // "Untitled" and opens it all the same), with the keyboard on its canvas unless the
+        // keyboard went somewhere else.
+        let open = match item {
+            LibraryItem::Document(id) if opens_board => Some(LibraryPanelEvent::OpenDocument {
+                id,
+                focus_editor: end != RenameEnd::Elsewhere,
+            }),
+            LibraryItem::Document(id) if opens && end != RenameEnd::Cancel => {
+                Some(LibraryPanelEvent::OpenDocument {
+                    id,
+                    focus_editor: false,
+                })
+            }
+            _ => None,
+        };
+        if end == RenameEnd::Cancel {
+            // Only when it is still there (trashed meanwhile: nothing to open).
+            if let Some(open) = open
+                && stored_name(&self.library.read(cx).tree(), item).is_some()
+            {
+                cx.emit(open);
+            }
             return;
         }
         let name = self
@@ -1200,11 +1339,8 @@ impl LibraryPanel {
                 Err(err) => self.report_error(&err.to_string(), cx),
             }
         }
-        if opens && let LibraryItem::Document(id) = item {
-            cx.emit(LibraryPanelEvent::OpenDocument {
-                id,
-                focus_editor: false,
-            });
+        if let Some(open) = open {
+            cx.emit(open);
         }
     }
 
@@ -1228,7 +1364,14 @@ impl LibraryPanel {
             |this: &mut Self, field, event: &TextFieldEvent, window, cx| match event {
                 TextFieldEvent::Submitted | TextFieldEvent::Cancelled => {
                     if this.renaming.is_some() {
-                        this.finish_rename(matches!(event, TextFieldEvent::Submitted), cx);
+                        this.end_rename(
+                            if matches!(event, TextFieldEvent::Submitted) {
+                                RenameEnd::Submit
+                            } else {
+                                RenameEnd::Cancel
+                            },
+                            cx,
+                        );
                         if field.focus_handle(cx).is_focused(window) {
                             window.focus(&this.focus_handle);
                         }

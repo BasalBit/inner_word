@@ -75,6 +75,7 @@ icons! {
     Copy => "copy",
     Sparkle => "sparkle",
     Globe => "globe",
+    Whiteboard => "whiteboard",
 }
 
 /// The default icon size.
@@ -152,5 +153,20 @@ mod tests {
         assert!(text.contains("stroke-width=\"1.5\""));
         assert!(text.contains("stroke-linecap=\"round\""));
         assert!(text.contains("fill=\"none\""));
+    }
+
+    #[test]
+    fn the_whiteboard_is_in_the_set() {
+        assert!(IconName::ALL.contains(&IconName::Whiteboard));
+        assert_eq!(IconName::Whiteboard.path(), "icons/whiteboard.svg");
+        assert_eq!(IconName::Whiteboard.name(), "whiteboard");
+        let text = std::str::from_utf8(IconName::Whiteboard.svg_bytes()).unwrap();
+        // drawn like the set: 1.5px round strokes, no fill
+        assert!(text.contains("viewBox=\"0 0 16 16\""));
+        assert!(text.contains("stroke-width=\"1.5\""));
+        assert!(text.contains("stroke-linecap=\"round\""));
+        assert!(text.contains("stroke-linejoin=\"round\""));
+        assert!(text.contains("fill=\"none\""));
+        assert_ne!(IconName::Whiteboard.svg_bytes(), IconName::Page.svg_bytes());
     }
 }

@@ -31,6 +31,10 @@ Whiteboards.
   `ctrl-enter` menu) put an element at the middle of the view; an arrow with two shapes
   selected connects them. Excalidraw's own keys work on the canvas, and the list of
   keyboard shortcuts shows them under "On a whiteboard".
+- A key you give a command in Keyboard shortcuts wins over Excalidraw's own key on a
+  whiteboard: given `cmd-k`, the command palette opens there, and Excalidraw's tooltips and
+  menus no longer show `cmd-k`. Excalidraw's link is still reached from its own menus and
+  toolbar.
 - A whiteboard is saved as it is drawn, at the end of every stroke or edit, and before
   anything that ends it: another item opened, closing it, Save Now, export, print, closing
   the window and quitting. A drawing that cannot be saved is written to a recovery file in
@@ -73,6 +77,8 @@ Whiteboards.
 - The tool and the MCP server say "Untitled" for an item without a title in every output.
 - Print can make a drawing smaller to fit the paper (used for whiteboards; documents are
   printed at their real size as before).
+- Menus and dialogs over a saved web page come up at once, with no flicker. They no longer
+  wait for a picture of the page; the live page is dimmed and covered instead.
 - The disk image is about 3 MB larger, with the whiteboard's editor in it.
 
 ### Repository

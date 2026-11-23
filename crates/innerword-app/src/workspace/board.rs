@@ -333,6 +333,11 @@ pub(crate) struct BoardState {
     /// What the session's source is, to tell it of a picture stored later
     /// (a library in memory).
     source: Option<Arc<boards::LibraryBoardSource>>,
+    /// When the view was asked to load (made, or loaded again).
+    loading_since: Instant,
+    /// How long the last load took until the page posted `ready` (what a
+    /// scripted run's `board:wait` reports).
+    pub ready_in: Option<Duration>,
 }
 
 impl BoardState {
@@ -721,6 +726,8 @@ impl Workspace {
             ready_waiters: Vec::new(),
             collecting: 0,
             source: None,
+            loading_since: Instant::now(),
+            ready_in: None,
         };
         let mut board = Box::new(board);
         board.seed_pictures(&scene);
@@ -767,6 +774,7 @@ impl Workspace {
                     );
                 }
                 // A (re)load starts a new count of revs.
+                board.ready_in = Some(board.loading_since.elapsed());
                 board.ready = true;
                 board.base_rev = 0;
                 board.saved = 0;
@@ -1820,6 +1828,7 @@ impl Workspace {
         };
         if let WebItem::Board(board) = &mut page.item {
             board.ready = false;
+            board.loading_since = Instant::now();
             board.held = None;
             board.saved = 0;
             // Until the new page is ready, nothing the old one posts counts

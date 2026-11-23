@@ -92,10 +92,21 @@ pub async fn run(step: BoardStep, window: AnyWindowHandle, cx: &mut AsyncApp) ->
             };
             let timer = cx.background_executor().timer(limit);
             match crate::pages::within(ready, timer).await.flatten() {
-                Some(()) => eprintln!(
-                    "[automation] board: ready after {:.0} ms",
-                    started.elapsed().as_secs_f64() * 1000.
-                ),
+                Some(()) => {
+                    let loaded = workspace.update(cx, |workspace, _, _| {
+                        workspace.board().and_then(|board| board.ready_in)
+                    })?;
+                    eprintln!(
+                        "[automation] board: ready after {:.0} ms{}",
+                        started.elapsed().as_secs_f64() * 1000.,
+                        loaded
+                            .map(|loaded| format!(
+                                " (loaded in {:.0} ms)",
+                                loaded.as_secs_f64() * 1000.
+                            ))
+                            .unwrap_or_default()
+                    )
+                }
                 None => {
                     let state = workspace.update(cx, |workspace, _, _| workspace.page_state())?;
                     bail!(

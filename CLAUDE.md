@@ -1,6 +1,7 @@
 # Inner Word
 
-A keyboard-first rich-text writing app for macOS (books, blog posts, social posts).
+A keyboard-first rich-text writing app for macOS (books, blog posts, social posts), with web
+pages and whiteboards kept beside the texts.
 Rust + GPUI (the Zed team's UI framework, crates.io `gpui` 0.2.2). Storage is SQLite.
 
 Until version 0.9.0 the app was called "The Writer" (crates `writer-*`, the tool `writer`,
@@ -20,11 +21,13 @@ names ("Working rules", "Saved names keep their old spelling").
 | Crate | Kind | Responsibility |
 |---|---|---|
 | `crates/innerword-core` | pure Rust | Document model (an image is a block of it: the id of stored bytes, a pixel size, a width, a description; never the bytes), headless editing engine (selection, commands, undo/redo), comments, input rules, search. No GPUI, no IO. |
-| `crates/innerword-store` | pure Rust | SQLite library: folders, documents, settings, full-text search. Where the library is (`paths.rs`, `data_dir`): `INNER_WORD_DATA_DIR`, else `~/Library/Application Support/Inner Word` (`DATA_DIR_NAME`), which the first use brings over from the old name `The Writer` (`OLD_DATA_DIR_NAME`): under the old folder's lock (`instance_lock::acquire_in_place`, which never creates the folder) a relative link is made under a name of its own (`MOVING_NAME`), swapped with the folder in one step (`renamex_np`, `RENAME_SWAP`), and the folder then renamed, so the old name is never missing (on a link that leads nowhere no older app or tool can make an empty folder); a move that stopped between the two is finished by the next look; a move that fails keeps the old folder and says why on stderr; a link `The Writer` -> `Inner Word` is the move's, any other link `The Writer` (one the user made) is the answer whether it leads anywhere now or not, so an unmounted drive fails to open as before and nothing is made. Does **not** depend on `innerword-core`; document content is an opaque JSON string, in which the store reads one token and nothing else: the id an image block names its bytes with (`"image":"<32 hex digits>"`, `Store::referenced_images`). The bytes of the images are in a **second file**, `images.db` beside `library.db` (made by the first image a library gets; `ImageFile` is that file by itself, for a thread of its own), stored once each under the hash of their bytes (`ImageId`) and deleted by nothing but the collector (`collect_unused_images`, `mark_unused_images`). **What a backup holds:** a daily backup (`backups/library-<ms>.db`, seven kept) is a copy of `library.db`, so it holds the documents only. The pictures have one copy, `backups/images.db`: brought up to date in the background, never before the window opens (`back_up_images`, a slice at a time; only pictures the copy does not have yet are copied; every run of the collector ends with it), read from when `images.db` does not have a picture (which is then written back), and a picture leaves it only when the collector deleted it and no kept backup names it. So a backup that is brought back finds its pictures in `images.db` or in the copy. **A damaged file is set aside, not believed**: an `images.db` or a copy that SQLite reads as damaged (`SQLITE_NOTADB`, `SQLITE_CORRUPT`) is moved aside as `images.db.damaged-<unix ms>` with its journal and made again from the other file (a read meanwhile answers "not there, ask the copy"; `images_moved_aside` lists what was set aside, and the app tells the writer of each once), and bytes whose hash is not their id are not trusted and are written again from the other file. A file of a newer version (`SchemaTooNew`) or an SQLite file that is not an images database (`NotALibrary`) is an error, and the file is left alone. **Pages**: a row of `documents` may be a page (`kind = 'page'`, `DocumentKind`, with the address it came from in `source_url`); its content is a manifest (`innerword_page::Manifest` as JSON), in which the store reads one more token, `"file":"<32 hex digits>"` (`Store::referenced_files`), and its files are in a second table `files` of `images.db` (`FileId`, `put_file`, `file_bytes`, `ImageFile::put_file`), covered by the copy among the backups, the damaged-file handling and the collector as pictures are. `save_document` refuses a page and `save_page` a text (`WrongKind`), and `create_page` / `save_page` refuse a manifest that names a file `images.db` does not have (`FilesMissing`), writing nothing. `library.db` is at schema 4 since a library may hold pages (3: documents may hold images), `images.db` at its schema 2 (the `files` table): a version that does not know them refuses the library. |
+| `crates/innerword-store` | pure Rust | SQLite library: folders, documents, settings, full-text search. Where the library is (`paths.rs`, `data_dir`): `INNER_WORD_DATA_DIR`, else `~/Library/Application Support/Inner Word` (`DATA_DIR_NAME`), which the first use brings over from the old name `The Writer` (`OLD_DATA_DIR_NAME`): under the old folder's lock (`instance_lock::acquire_in_place`, which never creates the folder) a relative link is made under a name of its own (`MOVING_NAME`), swapped with the folder in one step (`renamex_np`, `RENAME_SWAP`), and the folder then renamed, so the old name is never missing (on a link that leads nowhere no older app or tool can make an empty folder); a move that stopped between the two is finished by the next look; a move that fails keeps the old folder and says why on stderr; a link `The Writer` -> `Inner Word` is the move's, any other link `The Writer` (one the user made) is the answer whether it leads anywhere now or not, so an unmounted drive fails to open as before and nothing is made. Does **not** depend on `innerword-core`; document content is an opaque JSON string, in which the store reads one token and nothing else: the id an image block names its bytes with (`"image":"<32 hex digits>"`, `Store::referenced_images`). The bytes of the images are in a **second file**, `images.db` beside `library.db` (made by the first image a library gets; `ImageFile` is that file by itself, for a thread of its own), stored once each under the hash of their bytes (`ImageId`) and deleted by nothing but the collector (`collect_unused_images`, `mark_unused_images`). **What a backup holds:** a daily backup (`backups/library-<ms>.db`, seven kept) is a copy of `library.db`, so it holds the documents only. The pictures have one copy, `backups/images.db`: brought up to date in the background, never before the window opens (`back_up_images`, a slice at a time; only pictures the copy does not have yet are copied; every run of the collector ends with it), read from when `images.db` does not have a picture (which is then written back), and a picture leaves it only when the collector deleted it and no kept backup names it. So a backup that is brought back finds its pictures in `images.db` or in the copy. **A damaged file is set aside, not believed**: an `images.db` or a copy that SQLite reads as damaged (`SQLITE_NOTADB`, `SQLITE_CORRUPT`) is moved aside as `images.db.damaged-<unix ms>` with its journal and made again from the other file (a read meanwhile answers "not there, ask the copy"; `images_moved_aside` lists what was set aside, and the app tells the writer of each once), and bytes whose hash is not their id are not trusted and are written again from the other file. A file of a newer version (`SchemaTooNew`) or an SQLite file that is not an images database (`NotALibrary`) is an error, and the file is left alone. **Pages**: a row of `documents` may be a page (`kind = 'page'`, `DocumentKind`, with the address it came from in `source_url`); its content is a manifest (`innerword_page::Manifest` as JSON), in which the store reads one more token, `"file":"<32 hex digits>"` (`Store::referenced_files`), and its files are in a second table `files` of `images.db` (`FileId`, `put_file`, `file_bytes`, `ImageFile::put_file`), covered by the copy among the backups, the damaged-file handling and the collector as pictures are. `create_page` / `save_page` refuse a manifest that names a file `images.db` does not have (`FilesMissing`), writing nothing. **Whiteboards**: a row may be a whiteboard (`kind = 'board'`; `DocumentKind::reference_prefix` and `noun` say `doc`/`page`/`board` and document/page/whiteboard, so no crate writes its own); its content is the stored scene (`innerword_board::Scene::to_stored`), in which the store reads the page's token `"file"` too, its pictures in `files`. `create_board` / `save_board` (`BoardContent`: the scene, the file ids it names, its text and counts; no title, so an autosave never puts back a title a rename changed) save **compare-and-swap** (`expect: Option<ContentStamp>`, the first 16 bytes of the SHA-256 of the row's content; `StoreError::Stale` writes nothing), refuse a file id that neither the row nor any of its versions named and `images.db` does not have (`FilesMissing`; one they named is kept even when its bytes are gone), and answer the new stamp (`BoardSaved`); `boards()` lists them. Every save is "anything but my kind" (`WrongKind { id, kind, saving }`: `save_document`, `save_page`, `save_board`). `library.db` is at schema 4 since a library may hold pages (3: documents may hold images), and at **schema 5 once it holds a whiteboard**: the step is taken lazily, in the transaction of the first `create_board` (`OPEN_SCHEMA_VERSION` 4, `SCHEMA_VERSION` 5), so a library nobody made a whiteboard in stays readable by 0.10; `images.db` at its schema 2 (the `files` table): a version that does not know them refuses the library. |
 | `crates/innerword-image` | pure Rust | Image files: bytes as they come (a file, the clipboard, a drop, a path an agent names) to bytes as the library stores them (`prepare`, on ImageIO): a PNG, a JPEG or a GIF, upright, at most 4096 pixels on the long edge and 16 MB, without a GPS position. A file that already is that is stored as it came, byte for byte; HEIC, TIFF, BMP, WebP and AVIF are converted; an SVG, a PDF and what is no image are refused with a sentence (`PrepareError::sentence`). `fixtures` makes small picture files for the tests of every crate, so no binary file is in the repository. |
 | `crates/innerword-page` | pure Rust | The bundler of pages: an input (one `.html` file with the local files it names, its folder never walked; or a folder, taken whole) to the files a page is served from (`read_input`, `bundle`): every reference found by a small tokenizer of HTML, SVG, CSS and JS, every piece on the web fetched once through a `Fetcher` (`CurlFetcher`: `/usr/bin/curl`, public addresses only, every redirect followed and checked by the fetcher; `CachingFetcher`, `KnownPieces` for pieces the caller has, `MapFetcher` for tests) and stored under `_external/<host>/…`, the references rewritten to relative paths. The check as data (`CheckRequest`, `CheckReport`; `static_check`, the fake check of tests), the verdict (`prepare`: whole, or `PageError::Incomplete` naming every problem), the manifest, the folder export (`write_folder`), the normal form of a source address, the limits (`limits`: 32 MB a file, 64 MB a page, 2,000 files, 500 pieces from the web, 101 HTML files). No Objective-C, no GPUI, no network in its tests (a server on 127.0.0.1). |
-| `crates/innerword-web` | Rust without GPUI (WebKit, AppKit) | Everything that talks to WebKit: the view of an open page (`WebPage`, a `WKWebView` subclass above GPUI's view, served by a scheme handler `innerword-page://` from a `PageSource` with ranges and a CSP on every answer, a content rule list that blocks the network, WebRTC and media devices off, a link opened only by the reader; its callbacks go to the owner's `PageEvents`, which only post), the offscreen check (`check`, `check_blocking`: every HTML file loaded with the network blocked, every blocked request named, the text read with what is not shown), the PDF of a page (`print_offscreen`, `print_blocking`, `WebPage::print_to_pdf`), `available()` (macOS 12.3 and every class and selector it sends, the private switches of WebRTC among them). Builds and tests in `target-pure`; `tests/webkit.rs` is a program of its own (`harness = false`). |
-| `crates/innerword-print` | Rust without GPUI (CoreGraphics, CoreText, PDFKit, AppKit) | Printing, after the layout: what a printed page is as data (`Page`: rectangles, strokes, rows of text with the place of every glyph, single-line labels, pictures; points from the top left corner), the PDF writer (`PdfWriter`: CoreText's glyphs at the places the editor's layout names, in the fonts the layout asked for, found the way GPUI finds them and never by a PostScript name; `Report::rows_off` counts the rows whose glyphs CoreText spaces otherwise than the layout, pair of clusters by pair inside the row, which is how a wrong face shows), a PDF reader for tests and for looking (`PdfFile`: page count, page sizes, the text of a page, where a word stands, a page as pixels or as a PNG), and the macOS print operation (`run_sheet`: the print panel as a sheet on a window; `run_save_job`: the same operation into a file, no panel and no printer; `check_selectors`: every class and selector the two send, asked of the runtime). Builds and tests in `target/` although it has no GPUI ("Working rules"). |
+| `crates/innerword-board` | pure Rust | A whiteboard's scene in Rust, the one place that reads and writes it: the stored form and the form the view posts (`Scene::from_stored`, `from_view`, `to_stored`; every element and field kept, unknown ones too; deleted elements and `iframe`, `embeddable`, `magicframe` left out), its text in reading order (what the library indexes), its listing for agents, the assistant and the version history (`Scene::listing`), its summary, bounds and PDF size (`pdf_size`); agents' skeletons made into Excalidraw 0.18.1's elements (`add`; text measured with the bundled fonts' advance widths, `metrics`, close and not exact: Excalidraw measures again at every load), changes by id (`update`), removals (`remove`), every id, seed and nonce derived from the input (`HashedMaking`, never random); the delta between two stored scenes (`Scene::delta_from`, what the view's `adopt` takes) and the merge by the base rule (`merge`); the shape library as the library keeps it (`ShapeLibrary`); `sniff_svg`, `well_formed_json`, `export_dir` (what the tool hands its PDF child); the limits (`limits`: 16 MB of scene, 20,000 elements, 20,000 characters a text, 2,000 elements a request for agents; 256 MB for the writer's own scene). Depends on nothing of ours. |
+| `crates/innerword-board-web` | pure Rust, and the JavaScript of the bundle | Everything of Excalidraw: its sources and build (`web/`: `package.json` with exact versions, the lockfile, `build.mjs`, the glue in `src/glue/`, `UPGRADING.md`), the built folder **committed** (`dist/`: `index.html`, `export.html`, `assets/`, `fonts/`, `font-metrics.json`, `MANIFEST.json`, `BUILD-INFO.json`, `NOTICES.txt`; `-diff -text` in `.gitattributes`), and a small Rust library: where the bundle is (`Assets::find`: `Contents/Resources/Whiteboard` from an app bundle, else this crate's `dist/`; a build with `INNER_WORD_BUNDLED` set compiles no other path in), the files it serves by its manifest, the bridge's messages (`bridge`), the calls into the page (`calls`), the keys Excalidraw acts on (`keys::WHITEBOARD_KEYS`). Depends on nothing of ours; no cargo build and no test needs node or the network. |
+| `crates/innerword-web` | Rust without GPUI (WebKit, AppKit) | Everything that talks to WebKit: the view of an open page (`WebPage`, a `WKWebView` subclass above GPUI's view, served by a scheme handler `innerword-page://` from a `PageSource` with ranges and a CSP on every answer, a content rule list that blocks the network, WebRTC and media devices off, a link opened only by the reader; its callbacks go to the owner's `PageEvents`, which only post), the offscreen check (`check`, `check_blocking`: every HTML file loaded with the network blocked, every blocked request named, the text read with what is not shown), the PDF of a page (`print_offscreen`, `print_blocking`, `WebPage::print_to_pdf`), `available()` (macOS 12.3 and every class and selector it sends, the private switches of WebRTC among them). A whiteboard's view is a page's view with `ViewExtras` (`WebPage::new_with`): one script message handler (`Bridge`, `innerwordBoard`: the main frame of the view's own origin only, a string under a size cap, `PageEvents::message`, counted in `ViewStats`), no navigation after the first load (`one_document`; no `alert` toast), its own policy (`BOARD_CONTENT_SECURITY_POLICY`: no inline script, no eval, no frame; the export page's adds WebAssembly); calls into the page (`call_async`, `callAsyncJavaScript` in the page world), a view out of sight and still drawn (`park`), one script offscreen and its PDF (`run_script`, `run_script_blocking`: a whiteboard's export page). A page's view has no bridge. Builds and tests in `target-pure`; `tests/webkit.rs` is a program of its own (`harness = false`), with the real bundle's cases and the converter's cross-check (`innerword_board::add` against Excalidraw's own). |
+| `crates/innerword-print` | Rust without GPUI (CoreGraphics, CoreText, PDFKit, AppKit) | Printing, after the layout: what a printed page is as data (`Page`: rectangles, strokes, rows of text with the place of every glyph, single-line labels, pictures; points from the top left corner), the PDF writer (`PdfWriter`: CoreText's glyphs at the places the editor's layout names, in the fonts the layout asked for, found the way GPUI finds them and never by a PostScript name; `Report::rows_off` counts the rows whose glyphs CoreText spaces otherwise than the layout, pair of clusters by pair inside the row, which is how a wrong face shows), a PDF reader for tests and for looking (`PdfFile`: page count, page sizes, the text of a page, where a word stands, a page as pixels or as a PNG), and the macOS print operation (`run_sheet`: the print panel as a sheet on a window; `run_save_job`: the same operation into a file, no panel and no printer; `check_selectors`: every class and selector the two send, asked of the runtime; `PrintRequest::paper` and `Scaling::{Actual, DownToFit}`: a whiteboard's page put on the user's paper, turned and scaled down to fit). `PdfWriter::add_pdf_page` draws a page of another PDF in as a page of its own (`CGContextDrawPDFPage`: paths, text and its fonts, pictures kept), which is how a folder's PDF holds its whiteboards. Builds and tests in `target/` although it has no GPUI ("Working rules"). |
 | `crates/innerword-export` | pure Rust | Markdown, DOCX and plain-text exporters over `innerword-core`, and the Markdown importer (Markdown text to a document or a fragment). Pictures come from whoever exports (`ImageSource`, `ExportSource::with_images`): a DOCX embeds them, Markdown names them `![description](image:<id>)` or, for a file, links picture files that are returned beside the text (`export_package`, `MarkdownImages::Files`), plain text has the description. The importer asks an `ImageResolver` which stored image each image of the Markdown is; `KnownImages` answers for the images a document already holds, with their width and alignment. |
 | `crates/innerword-vim` | pure Rust | Vim emulation engine over `innerword-core`'s editing engine plus a small visual-layout trait. |
 | `crates/innerword-ui` | GPUI | Theme tokens (light/dark) and shared widgets (text field, picker, modal, context menu, tooltip, toasts, key hints, icons). |
@@ -33,18 +36,18 @@ names ("Working rules", "Saved names keep their old spelling").
 | `crates/innerword-vim-mode` | GPUI | Glue that attaches the `innerword-vim` engine to an `Editor` (key interception, caret style, command line, status). |
 | `crates/innerword-comments` | GPUI | Comments panel: threads, composer, replies, resolve, navigation. |
 | `crates/innerword-spell` | GPUI | Spell checking: the spell service behind a trait (the macOS system checker `NSSpellChecker`, and a fake built from word lists for the tests of every crate) and the `SpellChecker` entity that attaches to an `Editor` and keeps its spelling marks current (what is on screen first, the rest in slices while idle, one paragraph per edit), with the rows for the context menu, the actions and the queries the Vim keys need. |
-| `crates/innerword-library` | GPUI | `Library` model (the single owner of the store, emits change events; `Library::change_outside` is the one way for code that works on the store itself, the app carrying out an agent's request, to make a change and have the same events emitted; `put_image` and `touch_image` store and keep the bytes of images and tell nobody; `create_page`, `save_page` and `put_file` for pages) and the library sidebar panel (a page's row has a globe; files dropped on the panel are `LibraryPanelEvent::DropPaths` with the folder under them). |
+| `crates/innerword-library` | GPUI | `Library` model (the single owner of the store, emits change events; `Library::change_outside` is the one way for code that works on the store itself, the app carrying out an agent's request, to make a change and have the same events emitted; `put_image` and `touch_image` store and keep the bytes of images and tell nobody; `create_page`, `save_page` and `put_file` for pages; `create_board` and `save_board`, compare-and-swap, for whiteboards) and the library sidebar panel (rows, the trash and the drag ghost carry the item's `DocumentKind`: a page's row has a globe, a whiteboard's its own icon, `item_icon`; files dropped on the panel are `LibraryPanelEvent::DropPaths` with the folder under them; New Whiteboard in the library's menu, its + menu and a folder row's, named in place, once the app gave it the scene of an empty one, `set_new_board_content`; `NewBoard`, `new_board_command` and `TREE_KEY_CONTEXT` for its row in the list of shortcuts). |
 | `crates/innerword-keymap` | pure Rust | The keyboard shortcuts as data: keystroke text in one normal form (a key bound in two spellings is one key), the defaults in order, the user's changes as the one stored value, the keymap to install in an order that keeps precedence, guard rails and conflicts as a typed verdict about the rows the app lists (two rows under one place name are in one place; the commands of a part of the app that is not shown hold no key), the shortcuts file (export, and an import plan that says what is wrong with a key it cannot read). |
 | `crates/innerword-keymap-ui` | GPUI | "Keyboard shortcuts" as it is seen (`KeymapView`): the list of every key grouped by place, the search by name, by place and by key, changing a key (it waits for the next keystroke), the verdict in words, the row menu, the import preview. It shows and asks; the app does. |
-| `crates/innerword-app` | GPUI bin `inner-word` | Window and workspace shell, command palette, quick open, library search, settings (the app's and the open document's), version history, the keymap (the defaults every crate bound, the user's changes installed over them, their storage, the rows of "Keyboard shortcuts", the export and import of the shortcuts file), status bar, autosave, export flow (with the PDF export, `pdf_export.rs`: a document or a folder made of the pages Print makes, written into the file chosen first), the zoom of the text (its commands, where it is kept, life size, the pinch), Print (the command, the pages made in slices, where a job goes: the macOS print panel, a recorder in a test, a directory in a scripted run; the same job of pages makes a PDF export), images (the provider the editor gets over the library, with its own connection to `images.db` so that nothing large is read or written on the main thread; the app's look at the system pasteboard; the pictures for the exporters and for a print; the collector of bytes nothing names), the native menu bar, the menus of the title and the status bar, the single-instance guard, the spelling settings and the language picker, the Agents panel, agents that write while the app is open (the listener of `innerword-agent`'s channel, and what a request does in the window), the assistant in the app (whether it is there, its settings, its two chats mounted, what they are given and what is applied to the text), pages (an open page is a second kind of open item: WebKit's view above GPUI's view, its focus, keys, overlays, find, zoom, theme, print and export; the page engine, WebKit or the fake of the tests; File > Import Page… and drops, with the note, Cancel and the report). Mounts everything above. |
-| `crates/innerword-assistant` | pure Rust | The engine of the assistant: the interface to a terminal agent (`Backend`, nothing in it assumes Claude), the Claude Code backend, the fake backend for the tests of every crate, the conversation model (`Transcript`, `ChatSession`), context assembly, the system prompts, the library's MCP server as read-only tools. |
+| `crates/innerword-app` | GPUI bin `inner-word` | Window and workspace shell, command palette, quick open, library search, settings (the app's and the open document's), version history, the keymap (the defaults every crate bound, the user's changes installed over them, their storage, the rows of "Keyboard shortcuts", the export and import of the shortcuts file), status bar, autosave, export flow (with the PDF export, `pdf_export.rs`: a document or a folder made of the pages Print makes, written into the file chosen first), the zoom of the text (its commands, where it is kept, life size, the pinch), Print (the command, the pages made in slices, where a job goes: the macOS print panel, a recorder in a test, a directory in a scripted run; the same job of pages makes a PDF export), images (the provider the editor gets over the library, with its own connection to `images.db` so that nothing large is read or written on the main thread; the app's look at the system pasteboard; the pictures for the exporters and for a print; the collector of bytes nothing names), the native menu bar, the menus of the title and the status bar, the single-instance guard, the spelling settings and the language picker, the Agents panel, agents that write while the app is open (the listener of `innerword-agent`'s channel, and what a request does in the window), the assistant in the app (whether it is there, its settings, its two chats mounted, what they are given and what is applied to the text), pages (an open page is a second kind of open item: WebKit's view above GPUI's view, its focus, keys, overlays, find, zoom, theme, print and export; the page engine, WebKit or the fake of the tests; File > Import Page… and drops, with the note, Cancel and the report), whiteboards (the web item's other half, `PageSession::item`, `WebItem::Board`: Excalidraw in the same view with its bridge, the autosave compare-and-swap, the page asked at every deliberate end, `end_then` and `quit::request`, the recovery file, the shape library, the Add commands and Mermaid, its keys and the fixed bindings that keep GPUI off Excalidraw's, its PDF, Print and its pages in a folder's PDF, an agent's change taken in by the base rule; `boards.rs`, `workspace/board.rs`, `workspace/board_pdf.rs`, `board_steps.rs`). Mounts everything above. |
+| `crates/innerword-assistant` | pure Rust | The engine of the assistant: the interface to a terminal agent (`Backend`, nothing in it assumes Claude), the Claude Code backend, the fake backend for the tests of every crate, the conversation model (`Transcript`, `ChatSession`), context assembly (`OpenKind::Text`, `Page`, `Board`), the system prompts, the library's MCP server as read-only tools. |
 | `crates/innerword-assistant-ui` | GPUI | The assistant as it is seen: the shared chat components (message list with streamed, formatted answers, composer, model and effort pickers, answer actions, notices) and the side chat panel (`AssistantPanel`). |
 | `crates/innerword-assistant-quick` | GPUI | The quick chat: a popover at the selection or the caret (`QuickChat`), what it captures and what it does to the text (an answer that names an image of the document brings it back; no answer reads a file). |
-| `crates/innerword-agent` | pure Rust | The command layer for agents: a typed API for every operation on the library (read, create, edit, images, comments, history, export, trash) over `innerword-store`, `innerword-core`, `innerword-export` and `innerword-image`, with the app-is-open rule and the safety net (a version before every change) inside it. An image file an agent names is read and made into what the library stores in the process that was asked, and travels with the request. Pages too: `add_page` is prepared (read, fetched, checked by a `PageChecker`) by whoever asks, and added, updated by its address (a version kept first), confirmed unchanged or left in the trash; `pages`, and a page's branch of every read, of the versions and of export (a folder, the original, text, a PDF); exit codes 14 (`page_incomplete`) and 15 (`wrong_kind`). |
-| `crates/innerword-mcp` | pure Rust | The MCP protocol layer: a stdio server that only has tools, over a line stream (37 tools, 12 of them read-only; `add_image` and `add_page`, one page a call, are among those that change the library, `list_pages` is hidden behind `innerword pages`, and no tool returns a picture). |
-| `crates/innerword-cli` | pure Rust bin `innerword` | The command line tool for agents and scripts (`innerword image add`, `innerword images`, `innerword page add` with `--list`, `innerword pages` among its commands), and `innerword mcp`, the MCP server. WebKit never runs in its process: `innerword __page-check <dir>` and `innerword __page-pdf <dir> <out>` are its children (`src/page_check.rs`, not in the help). Ships inside the app bundle at `Contents/MacOS/innerword`. |
+| `crates/innerword-agent` | pure Rust | The command layer for agents: a typed API for every operation on the library (read, create, edit, images, comments, history, export, trash) over `innerword-store`, `innerword-core`, `innerword-export` and `innerword-image`, with the app-is-open rule and the safety net (a version before every change) inside it. An image file an agent names is read and made into what the library stores in the process that was asked, and travels with the request. Pages too: `add_page` is prepared (read, fetched, checked by a `PageChecker`) by whoever asks, and added, updated by its address (a version kept first), confirmed unchanged or left in the trash; `pages`, and a page's branch of every read, of the versions and of export (a folder, the original, text, a PDF); exit codes 14 (`page_incomplete`) and 15 (`wrong_kind`). Whiteboards: `create_board`, `add_to_board`, `update_board`, `remove_from_board` (skeletons and changes made into elements by `innerword-board`, a version kept first; a picture file an `image` skeleton names read and made where asked, stored before the scene names it), `boards`, and a whiteboard's branch of every read (its listing of elements), of the versions and of export (a PDF only, `PageChecker::print_board`, a child `innerword __board-pdf`); 15 for a text operation on a whiteboard and the reverse, 3 for an element it does not have, 9 for the PDF of an empty one. The live channel is at protocol 4. |
+| `crates/innerword-mcp` | pure Rust | The MCP protocol layer: a stdio server that only has tools, over a line stream (41 tools, 12 of them read-only; `add_image`, `add_page`, one page a call, and the four of whiteboards, `create_board`, `add_to_board`, `update_board`, `remove_from_board`, are among those that change the library, `list_pages` and `list_boards` are hidden behind `innerword pages` and `innerword boards`, and no tool returns a picture). |
+| `crates/innerword-cli` | pure Rust bin `innerword` | The command line tool for agents and scripts (`innerword image add`, `innerword images`, `innerword page add` with `--list`, `innerword pages`, `innerword board new|add|update|remove`, `innerword boards` among its commands), and `innerword mcp`, the MCP server. WebKit never runs in its process: `innerword __page-check <dir>`, `innerword __page-pdf <dir> <out>` and `innerword __board-pdf <dir> <out>` are its children (`src/page_check.rs`, `src/board_pdf.rs`, not in the help). Ships inside the app bundle at `Contents/MacOS/innerword`. |
 | `crates/innerword-agent-setup` | pure Rust | What is known about the agents on a Mac: how each is detected, where its skills live, how an MCP server is added to it; the text of the skill; installing and removing it. Used by the tool (`innerword agents ...`) and by the app (the Agents panel). |
-| `scripts/` | shell | `.app` bundling and `.dmg` creation (unsigned / ad-hoc signed). |
+| `scripts/` | shell | `.app` bundling and `.dmg` creation (unsigned / ad-hoc signed), with the whiteboard's editor in `Contents/Resources/Whiteboard`. |
 | `docs/gpui-notes.md` | notes | Verified GPUI API notes for this exact gpui version. Read it before writing GPUI code. |
 
 Dependency direction: `app → {editor-tools, vim-mode, comments, spell, library, export,
@@ -59,7 +62,10 @@ the list of its read-only tools and for the folders installers put a program in;
 `{app, agent} → image`, `app → print` (`print` depends on nothing of ours: the editor's print pass
 fills its pages, the app has a PDF made of them and hands it to the system),
 `{app, agent, mcp, cli} → page`, `{app, cli} → web` (`page` and `web` depend on nothing of ours; the
-app and the tool's children map WebKit's check to the bundler's report). Never the reverse. None of the agent crates depends on GPUI. The app does not depend on `innerword-cli`
+app and the tool's children map WebKit's check to the bundler's report), `{app, agent, cli} → board`,
+`{app, cli} → board-web` (`board` and `board-web` depend on nothing of ours; `board-web` and `web` have
+them as dev-dependencies, for their tests: the font metrics, the bundle's cases, the converter's
+cross-check). Never the reverse. None of the agent crates depends on GPUI. The app does not depend on `innerword-cli`
 (the tool is a separate program beside it). It depends on `innerword-agent` for one thing, the
 live channel (`innerword_agent::live`: the listener, and `execute`, which carries a request of
 the tool out on the library's own store; `crates/innerword-app/src/live.rs` and
@@ -77,7 +83,10 @@ cargo run -p innerword-app              # run the app
 cargo test -p <crate>                # per-crate tests (GPUI crates)
 CARGO_TARGET_DIR=target-pure cargo test -p innerword-core   # pure crates use target-pure
 CARGO_TARGET_DIR=target-pure cargo test -p innerword-page   # the bundler (no network: MapFetcher, a server on 127.0.0.1)
-CARGO_TARGET_DIR=target-pure cargo test -p innerword-web    # WebKit, offscreen, in a program of its own
+CARGO_TARGET_DIR=target-pure cargo test -p innerword-web    # WebKit, offscreen, in a program of its own (the real whiteboard bundle too)
+CARGO_TARGET_DIR=target-pure cargo test -p innerword-board  # a whiteboard's scene, the converter, the merge
+CARGO_TARGET_DIR=target-pure cargo test -p innerword-board-web  # dist/ against MANIFEST.json and BUILD-INFO.json
+(cd crates/innerword-board-web/web && node build.mjs --check)   # dist/ is what web/ builds, byte for byte (needs npm ci first)
 INNER_WORD_DATA_DIR=/some/tmp cargo run -p innerword-app   # run against a throwaway library
 CARGO_TARGET_DIR=target-pure cargo build -p innerword-cli   # the `innerword` tool (target-pure/debug/innerword)
 cargo build -p innerword-cli            # the same beside a debug app (target/debug/innerword), where the Agents panel looks for it
@@ -146,8 +155,10 @@ the file is chosen, waits until it is stored and in the text and says `image: in
 (adds a file or folder as File > Import Page… does once it is chosen, waits until it is done
 and says `page: added page:12 “Orbitarium” 31 files 1.0 MB` or `page: not added: <the
 sentence>`), `page:wait[:<ms>]` (until the open page has loaded), `page:text`,
-`page:find:<query>`, `page:js:<script>` and `page:menu` (see "Pages"),
-`resize:<w>x<h>`, `theme:<light|dark|system>`, `screenshot:<path>`, `info`, `state` (one
+`page:find:<query>`, `page:js:<script>` and `page:menu` (see "Pages"), `board:new[:<title>]`,
+`board:wait[:<ms>]`, `board:scene`, `board:draw:<json>`, `board:press:<keys>`, `board:js:<script>`,
+`board:pdf:<path>`, `board:menu`, `board:library` and `board:mermaid:<definition>` (see
+"Whiteboards"), `resize:<w>x<h>`, `theme:<light|dark|system>`, `screenshot:<path>`, `info`, `state` (one
 line: document, save state, what the last save cost, focus, modal, the open context menu,
 the zoom of the view (`zoom=[page 177% fit-width life=177%]`), printing (`print=[idle]`,
 `print=[preparing 40%]`, `print=[panel]`), the PDF export (`export=[idle]`,
@@ -156,7 +167,9 @@ the zoom of the view (`zoom=[page 177% fit-width life=177%]`), printing (`print=
 from 0, the width as a share of the text column, pixels and pixels per inch, and `ready`,
 `loading`, `missing` or `broken` for its picture), the open page (`web=[id=12 state=loaded
 zoom=100% overlay=none|waiting|snapshot|holes:N focus=page|find|elsewhere responder=web|gpui
-find="q":found missing=0]` or `web=[none]`), the pages being added (`adding=[2/3 "Orbitarium"
+find="q":found missing=0]` or `web=[none]`), the open whiteboard (`board=[id=12 state=loaded
+elements=14 rev=31 posted=31 saved=31 dirty=no base=3f2a9c1b adopting=no … closing=no]` or
+`board=[none]`, see "Whiteboards"), the pages being added (`adding=[2/3 "Orbitarium"
 fetching]`, `checking`, `storing`, or `adding=[idle]`),
 Vim, tool, the format bar, comments, spelling, how many keys are changed and what the list
 of shortcuts shows while it is open, status bar, the list of fonts of the settings while it
@@ -251,7 +264,11 @@ main thread writes the page's row only. Measured when pages were added, in the d
 with the debug tool and the real check, a page with 16 MB of files: "change" 1.8 ms with a
 short document open and 0.9 ms with the book of 10,000 blocks open (its save first, 21 ms,
 is the book's flush), "window" 0.1 ms; the tool 5 s from start to answer, most of it the
-check in WebKit:
+check in WebKit. **A change by an agent to an open whiteboard** of 3,000 elements (5,250
+with their labels, 3.0 MB of scene; release, measured when whiteboards were added):
+"change" 81 ms, "window" 41 ms (the two scenes parsed, the delta, the adopt call), the tool
+169 ms; with a 16 MB picture, whose bytes the listener's thread stores before the request
+is queued, 76 ms and 38 ms, the tool 401 ms ("Whiteboards", "What it costs"):
 
 ```bash
 INNER_WORD_AUTOMATION="wait:1500; book:10000; wait:4000; log:book ready; agents:1:60000; wait:300; state; quit"
@@ -317,7 +334,15 @@ and the first responder, the snapshot under an overlay and the holes of toasts, 
 theme, a crash, print, export, its versions, and adding pages (Import Page…, drops on the
 sidebar, a page and the text, a refusal and Show Why, Cancel while a fetch is held, the
 note, files that were lost, no engine); agents' pages are in `live.rs`, the side chat over a
-page in `assistant.rs`, the library's menus in `context_menus.rs`.
+page in `assistant.rs`, the library's menus in `context_menus.rs`;
+`tests/suite/boards.rs` holds whiteboards in the assembled app on the fake page engine:
+saving and its compare-and-swap, the page asked at every way of closing and quitting, a
+failed adopt, pictures, the recovery copy, the keys and the menu bar without the
+whiteboard's own keys, the commands, the PDF, Print and a folder's PDF, the shape library,
+versions, no engine; agents and whiteboards are in `live.rs` (the waits of a request, the
+base rule, the note's conflicts and Undo, an agent's picture stored, adopted and served),
+the side chat over a whiteboard in `assistant.rs`, New Whiteboard in `context_menus.rs`,
+`mouse.rs` and `keybindings.rs`.
 
 **Tests never ask the Mac's dictionary** (its answers differ between macOS versions, and
 its learned words are shared with every other app). A workspace checks spelling only when
@@ -426,6 +451,22 @@ its buttons is pressed. Every message spends the user's own plan in the engine.
   Replace Selection are off (no caret, no selection), Copy works; the conversation is the
   page's own (`assistant.conversation.<id>`). The quick chat does not open on a page: its
   key says so in a toast and names the side chat's key.
+- **Whiteboards.** With a whiteboard open the side chat is sent the listing of its elements
+  (one per line with its id, position, size and text, `Scene::listing`) in place of the
+  Markdown, after `innerword_assistant::BOARD_PREFACE` ("The open item is a whiteboard: a
+  drawing of shapes, arrows, text and pictures. It is changed only by its owner, in the
+  app. Its elements, one per line, with their ids, positions, sizes and text:"), with
+  `kind="board"` in the tag (`OpenKind::Board`). The listing is made when the message is
+  sent, from the scene the app holds then (the side chat's source reads a shared copy the
+  workspace keeps current, `Workspace::feed_the_side_chat`, as a frame is built and as the
+  page posts; a pointer is compared, the scene is parsed only at the send); `cmd-3` (going
+  to the side chat) asks the page for a gesture it has not posted. The side chat has no
+  hook before a message leaves, so a send does not wait for the page itself (the spec's
+  collect before each message is the one part of 6.6 left out). Too long a listing goes as
+  its beginning and its end. Insert at Caret and Replace Selection are off, Copy works; the
+  conversation is the whiteboard's own; the assistant reads other whiteboards with the
+  same read-only tools (`read_document` gives the listing). The quick chat does not open
+  on a whiteboard: its key says so in a toast and names the side chat's key.
 - **The slot at the right is shared with the comments, one at a time**
   (`workspace/right_panel.rs`). A panel is there when it has something to show (comments:
   the document has a thread or one is being written; side chat: the user has it open).
@@ -500,7 +541,9 @@ open" below).
   looks for it at `target/debug/innerword` (`cargo build -p innerword-cli`). The script's smoke
   test runs the bundled tool on a temporary library: create, read back, the app shows the
   document, a write while the bundled app is open arrives in the window and in the
-  library, and with the owner's switch off it is refused with exit code 5.
+  library, and with the owner's switch off it is refused with exit code 5; and a whiteboard,
+  made, drawn on, read back and exported as a PDF by the bundled tool (its WebKit child
+  finding the editor in `Contents/Resources/Whiteboard`) while the bundled app is open.
 - **The one rule.** Agents can read and change things at any time, and **the library has
   one writer at a time**. While the app is closed that is the tool, which takes the lock
   of the data directory for the moment of each write. While the app is open it is the app:
@@ -545,6 +588,26 @@ open" below).
     request moved to the trash. For a document that is not the open one the button is
     **Open**. The same two are commands without a key ("Undo the last change by an agent",
     "Go to the last change by an agent": the palette, the Inner Word menu).
+  - **The open whiteboard** (section 6.7 of `docs/whiteboard-design.md`; `workspace/live.rs`,
+    `Workspace::must_wait` and `take_over_open_board`). A request first waits, each wait
+    with its own patience on the app's clock: for a whiteboard that is closing (its view
+    parked while its last gesture is collected) to be saved, at most a second, every
+    request; for the open whiteboard's answer to an earlier outside write's adopt; for what
+    its page holds and has not posted (`status`: a newer rev, the pointer down, a text
+    being edited): the page is asked once (`collect`) and the request goes on once that is
+    saved, or after a second with what the app holds, a read and a write alike; a change
+    (not a read) for an input method composing in a text element, three seconds, then
+    `Refusal::Composing`. Then the flush saves the writer's last gesture, the change is
+    made, and the stored scene after it is taken into the view by the base rule as one
+    step of Excalidraw's undo (`adopt_outside_write`: the delta from the scene the view
+    descends from; the writer's copy of an element they changed meanwhile stays). The
+    note says "Claude made the whiteboard “Plan”" (Open), "Claude drew on “Plan”",
+    "Claude changed “Plan”", "Claude removed elements from “Plan”", and once the view has
+    answered, what it did not take ("2 of its changes were not taken, because you changed
+    those elements meanwhile: api, reads.", at most five ids and "and 3 more"); its
+    **Undo** is the whiteboard's own undo with as many steps as the run adopted, while the
+    canvas is at the rev the last adopt answered (the writer has not drawn since; a failed
+    adopt, which reloads the view, offers none). A rename changes the title only.
   - **Vim mode keeps what the writer is in the middle of.** The editor reports a change
     it took over as any edit, and Vim mode takes an edit it did not make for the writer's
     own doing elsewhere in the app, which cancels a half-typed command and closes the
@@ -582,15 +645,19 @@ open" below).
     One request and one answer per connection, each one line of JSON with a version
     (`{"version":3,"wait_ms":10000,"op":"edit","request":{...}}`); the answer is the
     result as the direct write gives it, the error as it was (`WireError`), or a
-    `Refusal`. **The protocol is version 3** (`live::PROTOCOL_VERSION`): version 2 since
+    `Refusal`. **The protocol is version 4** (`live::PROTOCOL_VERSION`): version 2 since
     requests bring image files with them ("Images" below), version 3 since an `add_page`
-    brings the files of a page ("Pages"). A request reads past a field it does not know,
+    brings the files of a page ("Pages"), version 4 since whiteboards (four operations a
+    version 3 app does not know, the kind in `Detail::WrongKind`, and the pictures a
+    whiteboard's request carries, stored by the listener before the request is queued, as
+    a page's files are). A request reads past a field it does not know,
     so an app of version 1 (0.6.0) would have taken a request with a picture, kept the
     image as a link and answered "done"; with the number changed the two versions refuse
     each other whole, a `flush` included (`Refusal::Protocol`: exit code 5 with the
     sentence for an app of another version, "nothing was changed" in it; a test sends a
-    request with a picture to a stand-in that answers as 0.6.0 does, and a page to one
-    that answers as 0.7.0 does). The tool writes the whole line before it connects (a
+    request with a picture to a stand-in that answers as 0.6.0 does, a page to one that
+    answers as 0.7.0 does, and a whiteboard's request with a picture to one that answers
+    as version 3 does). The tool writes the whole line before it connects (a
     page is up to 86 MB of base64, and the listener gives a connection up after a second
     without a byte), and the app reads the version before it reads the request.
   - **Where the socket is.** `inner-word-<uid>/<pid>-<n>.sock` in the user's temporary
@@ -716,6 +783,35 @@ open" below).
   app's listener stores its files before the request is queued ("While the app is open",
   "Pages"); the note says "Claude added “Orbitarium”" (Open) or "Claude updated
   “Orbitarium”" (an open page reloads, and the note has no button).
+- **Whiteboards** (the whole feature is in "Whiteboards" below; `docs/whiteboard-design.md`
+  is its design, section 7 the agents'). `innerword board new [<title>] [--in <folder>]
+  [--content <json> | --file <path> | --stdin]`, `innerword board add <board>`, `innerword
+  board update <board>`, `innerword board remove <board> <id>...` (each with `--author`,
+  `--dry-run`, `--json`), `innerword boards` (also `board list`); the MCP tools
+  `create_board`, `add_to_board`, `update_board`, `remove_from_board` and the hidden
+  `list_boards`. Elements come as Excalidraw's own element skeletons
+  (`[{"type":"rectangle","id":"api","x":100,"y":80,"label":{"text":"API"}}, {"type":"arrow",
+  "start":{"id":"api"},"end":{"id":"db"}}]`; a text has no size, a shape comes 100 x 100,
+  an arrow is bound to the edges of the shapes it names) and changes as `[{"id":"api","dx":40}]`;
+  they are made into elements **in pure Rust** (`innerword_board::add`, `update`, `remove`),
+  in the tool and on the app's main thread alike, every id, seed and nonce derived from
+  the request, so a dry run names the ids the real run gives. A picture is an element too
+  (`{"type":"image","x":640,"y":80,"path":"/Users/…/photo.jpg"}`): **its file is read and
+  made in the process that was asked** (an SVG as it came, else `innerword_image::prepare`;
+  `impl Prepare` for `CreateBoardRequest` and `AddToBoardRequest` always reads again, and
+  both front ends refuse `pictures` as an argument), travels with the request and is stored
+  in `images.db` `files` before the scene names it, by the app's listener while the app is
+  open. Every change keeps the drawing as it was as a version first ("Before a drawing /
+  an edit / a removal by Claude"). `innerword get board:12` (and `read_document`) is the
+  **listing**, one element per line with its id, position, size and text
+  (`Scene::listing`), `--format json` the stored scene as it is. A whiteboard is exported as
+  a PDF only (`innerword export board:12 x.pdf`, a child `innerword __board-pdf <dir> <out>`
+  that loads the bundle's export page in WebKit; `INNER_WORD_PAGE_CHECK=fake` in a debug
+  tool makes the fixed PDF of `Scene::pdf_size` in its own process). Exit codes: 15 for a
+  text operation on a whiteboard and the reverse (and an export that is not a PDF), 3 for
+  an element id the whiteboard does not have, 2 for a skeleton that cannot be read or would
+  pass the limits, 9 for the PDF of an empty whiteboard. `board:<id>` is its reference in
+  every output; `doc:`, `page:` and `board:` are read alike.
 - **Who says what.** `innerword-agent` words its errors for both front ends and names fields
   ("occurrence", "permanently"). The command line adds the option to type next, worded
   for the command that failed (`innerword-cli/src/main.rs`, `hint_in`: `--occurrence`,
@@ -817,9 +913,11 @@ open" below).
   laptop's disk, so the project keeps to two. Everything that
   depends on GPUI builds in the default `target/`. The pure crates (`innerword-core`,
   `innerword-store`, `innerword-image`, `innerword-export`, `innerword-vim`, `innerword-agent`, `innerword-mcp`, `innerword-cli`,
-  `innerword-agent-setup`, `innerword-assistant`, `innerword-keymap`, `innerword-page`, `innerword-web`) build and test with
-  `CARGO_TARGET_DIR=target-pure` so they do not queue behind GPUI builds (`innerword-page` and
-  `innerword-web` compile again in `target/` when the app links them; both are small).
+  `innerword-agent-setup`, `innerword-assistant`, `innerword-keymap`, `innerword-page`, `innerword-web`,
+  `innerword-board`, `innerword-board-web`) build and test with
+  `CARGO_TARGET_DIR=target-pure` so they do not queue behind GPUI builds (`innerword-page`,
+  `innerword-web` and the two of whiteboards compile again in `target/` when the app links them;
+  all are small).
   `innerword-web`'s `tests/webkit.rs` is a program of its own (`harness = false`): WebKit wants
   the main thread of the process. `innerword-print` has no
   GPUI in it and builds and tests in `target/` all the same (`cargo test -p innerword-print`):
@@ -831,6 +929,16 @@ open" below).
   target dirs, git worktrees, or copies of the repo (each worktree or copy brings target
   directories of its own). Do not run `cargo clean`: rebuilding GPUI from nothing takes many
   minutes, and builds running beside yours lose theirs.
+- **The disk is the limit.** Run `df -h .` in the repository before a large build (the first
+  `cargo build` or `cargo test` of a GPUI crate in a session, any build of `innerword-app`, a
+  release build, `scripts/bundle.sh`, `npm ci`) and stop when less than 5 GB is free: build
+  nothing more and say what `df -h .` printed, the sizes of `target/` and `target-pure/`
+  (`du -sh`) and the step that was next. Never delete a target directory to make room.
+- **npm only for the whiteboard's bundle.** `npm` and `node` are run in
+  `crates/innerword-board-web/web` and nowhere else, and only to change the bundle (a new
+  Excalidraw, a change of the glue): `npm ci --ignore-scripts --no-audit --no-fund` (the one
+  step that reaches the network), `node build.mjs`, `node build.mjs --check`, and `dist/` is
+  committed with the change (`web/UPGRADING.md`). No cargo build and no test needs node.
 - **Test binaries are expensive.** Every test binary or example that links GPUI costs about
   150 MB. Keep at most one integration-test binary per GPUI crate (`tests/main.rs` with
   submodules) or use unit tests; add an example only when your task says so.
@@ -899,7 +1007,9 @@ open" below).
    document**, on every way in (a chosen file, a paste, a drop, an agent's request), so no
    save ever names bytes that are not there; and nothing deletes them but the collector
    ("Images"). A document that names an image the library does not have keeps the block: it
-   shows a placeholder and is saved as it was.
+   shows a placeholder and is saved as it was. **A whiteboard never loses a stroke**: the
+   page posts every gesture, the app saves it compare-and-swap, every deliberate end asks
+   the page first, and what cannot be saved goes to a recovery file ("Whiteboards").
 
 ## Document model in one paragraph
 
@@ -957,7 +1067,14 @@ page", "Copy page address" and "Open page address in browser" (a page with an ad
 an open page (key context `PageView`) `ctrl-enter` / `shift-f10` open the page's context
 menu and `cmd-f`, `cmd-opt-f`, `cmd-g`, `cmd-shift-g` find in the page: the four find keys
 are bound once more there, with the defaults the text's tools have, because the tools are
-not on a page's path. In the settings `up` / `down` move, `left` /
+not on a page's path. The commands of whiteboards (see "Whiteboards"): "New whiteboard"
+(the window's, anywhere, and the library's own, in the library; only with a page engine),
+and on an open whiteboard (key context `BoardView`, "On a whiteboard") "Add text", "Add
+rectangle", "Add ellipse", "Add diamond", "Add arrow", "Add frame", "Mermaid to drawing…",
+"Show or hide the shape library", "Add selection to shape library" and "Insert from shape
+library…", all without a key; `ctrl-enter` / `shift-f10` open the whiteboard's menu and
+`cmd-f` Excalidraw's search; every `cmd` chord Excalidraw acts on is the whiteboard's there
+(fixed bindings, not changeable). In the settings `up` / `down` move, `left` /
 `right` change, `space` switches; the "Writing" section has the switch for the format bar
 and the two spelling rows, the "Status bar" section chooses the character limit and which
 counts are shown.
@@ -1094,6 +1211,12 @@ Keymap facts that bite (details in `docs/gpui-notes.md`):
   focused element's own level the one added later wins. `innerword_app::init` therefore adds
   the app's bindings first, and a crate that needs a window-wide key inside one of its
   views binds it at the level of the focused element (the find bar does, for `cmd-opt-c`).
+  The same rule keeps GPUI off a whiteboard's own chords: a binding of `gpui::NoAction` in
+  `BoardView`, added after every other binding, wins on that key there and disables every
+  binding under it, so GPUI leaves the chord to the web view; elsewhere the window's key
+  works as before (`boards::fixed_key_bindings`, appended by `keymap::install` and
+  `measure_install` after the defaults were taken, never a default or a row of a command;
+  the `keyscost` step's binding count includes them).
 - **Who takes a key in the text**: an open insert menu, then Vim mode (it lets every `cmd`
   chord through), then the bindings from the editor outwards, then text input. Popups with
   a field (format menu, link, font, find bar) and modals have the keyboard themselves.
@@ -1132,7 +1255,11 @@ Keymap facts that bite (details in `docs/gpui-notes.md`):
   menu bar can draw. A key with `enter` or `tab` in it cannot be given to AppKit: an item
   whose command has only such keys shows none (a placeholder of two keys says so to GPUI).
   The key beside an item is live: AppKit runs an enabled item on its key where GPUI has no
-  binding for it, so the menu bar is built again after every change of a key.
+  binding for it, so the menu bar is built again after every change of a key, and when a
+  whiteboard becomes or stops being the open item: while one is open the menu bar carries
+  no key equivalent that is one of its own keys (`menus::menu_key_bindings(.., open)`,
+  `OpenItemKind::Board`), or AppKit would run the comments' `cmd-alt-c` from the menu bar
+  over Excalidraw's.
 - **The keymap GPUI has is one the app built** (`crates/innerword-app/src/keymap.rs`). Every
   crate binds its keys in its `init`; at the end of `innerword_app::init` they are taken as
   the defaults, and from then on every change clears the keymap and binds it again in the
@@ -1201,12 +1328,20 @@ document"). Three crates: `innerword-keymap` knows what a change is,
   one row** (`tests/suite/keybindings.rs`,
   `every_key_of_the_keymap_is_a_row_and_an_entry_of_the_file`): a namespace of actions that
   is bound and not in `KEY_GROUPS` fails that test. With every part of the app shown the
-  list has 385 rows (384 commands in places and the `/` of the insert menu, which is no
-  binding) and the shortcuts file 410 entries, one for each key context: 13 rows stand for
-  several key contexts, 26 more than there are rows. Without the assistant: 355 rows, and
-  the same 410 entries. (Counted in a scripted run when the PDF export was added, and before
-  that for 0.8.0: `keys:cmd-/; state` has
-  `rows=N`, and "Export…" writes the file; the sixteen zoom commands are among them, since
+  list has 442 rows and the shortcuts file 424 entries, one for each key context of a
+  command; without the assistant 412 rows, and the same 424 entries. Before whiteboards
+  they were 385 rows (384 commands in places and the `/` of the insert menu, which is no
+  binding) and 410 entries (13 rows stand for several key contexts, 26 more than there
+  are rows), 355 without the assistant. Whiteboards add 57 rows and 14 entries: "New
+  whiteboard" twice (Anywhere, `workspace::NewBoard`, and In the library, the panel's own,
+  `library_panel::NewBoard`, a row with no key that the palette leaves out), and "On a
+  whiteboard" the whiteboard's menu, Find, the six Add commands, Mermaid to drawing and
+  the three of the shape library (all of them entries), and 43 **fixed rows**, no entries:
+  what each of the whiteboard's own keys does (42 rows for 43 keys: Clear canvas has two)
+  and one for its tool keys (letters and digits). Reload whiteboard is Reload page. (Counted
+  in a scripted run when whiteboards were added, `keys:cmd-/; state` with and without
+  `INNER_WORD_ASSISTANT_FAKE=ready`, and the file written by "Export…"; before that when
+  the PDF export was added and for 0.8.0: the sixteen zoom commands are among them, since
   0.6.0 nine more without a key: Print and Cancel printing, "Anywhere", and the seven
   commands of an image, "In the text"; and since 0.8.0 the eleven of pages: Import page…,
   Cancel adding pages, Show the report of the pages added last, Reload page, Copy page
@@ -1572,7 +1707,20 @@ operation), `crates/innerword-app/src/printing.rs` (the job and where it goes),
   copied because `innerword-export` keeps its own to itself; a test holds the two equal
   through the Markdown export), page breaks at the start of every document but the first
   and at the end of every one but the last left out, as the Word export leaves them out;
-  pages of the folder are left out and the toast says so. Measured in the debug build: a
+  pages of the folder are left out and the toast says so. **Its whiteboards come after its
+  documents, one page each** of the whiteboard's own size (the drawing and a 32 pt margin,
+  no title and no page number on it; it counts among the file's pages): each is the
+  whiteboard's PDF as Export as PDF… makes it (WebKit on the export page, `run_script`,
+  on the main thread between two awaits, one whiteboard at a time after the documents'
+  slices; the fake engine's fixed page in tests) drawn in by `PdfWriter::add_pdf_page`, so
+  its lines stay paths and its words text. What is exported is each stored scene when the
+  export is chosen (the open whiteboard of the folder is asked for its last gesture and
+  saved first). An empty whiteboard is left out and the toast names it ("“Plan” is empty
+  and was left out."); one whose PDF cannot be made ends the export with nothing written;
+  without a page engine the whiteboards are left out and the toast says why; Cancel works
+  between two whiteboards; `export:wait` says "N pages, 2 whiteboards". The folder's
+  Markdown, DOCX and plain-text exports leave whiteboards out and say so, as they leave
+  pages out. Measured in the debug build: a
   generated book of 3,000 blocks, 861 pages, 0 rows off, made in 2.2 s in slices
   (`export=[preparing 35%]` after 0.7 s). `innerword-export` has no PDF: the picker's format
   is the app's own (`export::FileFormat`, `Export(ExportFormat)` or `Pdf`).
@@ -2065,13 +2213,213 @@ page), `workspace/page_import.rs` and `page_report.rs` (adding pages in the app)
   and a kit): enough that the page has some where the archive has some and that no style
   sheet still names one on the web.
 
+## Whiteboards
+
+A whiteboard is a third kind of item in the library, beside documents and pages: a canvas
+the writer draws on with the real Excalidraw (`@excalidraw/excalidraw` 0.18.1, bundled and
+run in the WebKit view pages have, offline for good). Shapes, arrows, text, frames,
+pictures, a Mermaid diagram turned into a drawing, a shape library to reuse shapes from;
+saved as it is drawn, kept in versions, found by its words, exported **as a PDF only**.
+Agents make whiteboards and draw on them ("Agents"). The design, with its reasons and its
+reviews, is `docs/whiteboard-design.md`. Where it lives: `innerword-store` (the row, schema
+5, compare-and-swap), `innerword-board` (the scene in Rust), `innerword-board-web` (the
+bundle and its contract), `innerword-web` (the view's bridge, calls, the export page),
+`innerword-agent` / `innerword-cli` / `innerword-mcp` (agents),
+`crates/innerword-app/src/boards.rs` (the view's source, the fixed keys, the fake engine's
+whiteboard), `workspace/board.rs` (the open whiteboard: saving, the calls, the commands,
+the shape library, closing and quitting), `workspace/board_pdf.rs` (its PDF),
+`board_steps.rs` (the scripted `board:` steps), `workspace/live.rs` (an agent's change).
+
+- **In the library**: a row of `documents` with `kind = 'board'` (the first one takes
+  `library.db` to schema 5, lazily, so 0.10 refuses only a library that holds one), in the
+  tree among documents and pages with its own icon (`IconName::Whiteboard`), in the trash,
+  the versions, the library search (the text of its elements), quick open ("Whiteboard")
+  and `innerword list` like a document. Its title is the name it was given and never
+  follows what is drawn; `""` shows "Untitled". Its content is the stored scene: Excalidraw's
+  own envelope, every element as Excalidraw wrote it (deleted ones and `iframe`,
+  `embeddable`, `magicframe` left out), `appState`'s four drawing settings, and each
+  picture as `{"mimeType", "file": "<FileId>", "created"}` without its bytes, which are in
+  `images.db` `files`, kept by the copy among the backups and deleted by nothing but the
+  collector, as a page's files are. **Only `innerword_board::Scene::to_stored` writes it**;
+  every reader goes through `Scene::from_stored`. `view_state` keeps where the writer looked
+  (`{"scrollX","scrollY","zoom","at":"<stamp>"}`): a whiteboard changed since (an agent, a
+  restored version) opens fitted to its drawing.
+- **The bundle** (`crates/innerword-board-web`): `dist/` is committed (159 files besides its
+  manifest, 7.4 MB: JavaScript 6.7 MB in 128 files, most of them chunks loaded only when
+  they are used, Mermaid's at the first Mermaid dialog or paste, the font subsetter at the
+  first export; CSS 0.15 MB; 25 font files, 0.44 MB: Excalifont, Virgil, Nunito, Lilita One,
+  Comic Shanns, Liberation Sans, Cascadia Code and the interface's Assistant; the CJK font
+  Xiaolai is left out). In the app it is 7.5 MB, and the disk image of the arm64 build grew
+  by 3.1 MB with it (12.5 MB for 0.10.1, 15.6 MB with whiteboards). `node build.mjs` makes it from `web/` with exact
+  versions and patches that each apply once or fail the build (no font CDN, no Xiaolai);
+  `node build.mjs --check` holds it byte for byte; `web/UPGRADING.md` says what a new
+  Excalidraw needs. The app and the tool find it with `Assets::find`:
+  `Contents/Resources/Whiteboard/` in the app bundle (one copy for both executables,
+  sealed by the signature), the crate's `dist/` from a `cargo build`; no variable points
+  them elsewhere, and a build with `INNER_WORD_BUNDLED=1` (`scripts/bundle.sh`) compiles no
+  path of the build machine in. Its licenses are `dist/NOTICES.txt`, in the bundle and on
+  the disk image as `THIRD-PARTY-LICENSES-WHITEBOARD.txt`; `about.hbs` says so.
+- **The view**: a page's view (`innerword-web`) with a bridge (one script message handler,
+  `innerwordBoard`, from the main frame of its own origin `board-<id>-<created_at>` only,
+  under 24 MB a message), calls into the page (`call_async`: `collect`, `adopt`, `undo`,
+  `zoom`, `search`, `insertElements`, `insertPictures`, `mermaid`, `library` and the
+  others of `innerword_board_web::calls`), no navigation after the first load, and the
+  whiteboard's own policy (no inline script, no eval, no frame). The source serves the
+  bundle, `board.json` (the stored scene, its stamp and the view state **as they are now**:
+  a reload never starts from an older scene), `library.json` and `_files/<FileId>` (only the
+  pictures the whiteboard names). The theme follows the app's; the zoom commands zoom
+  Excalidraw's canvas (Fit Width and Fit Page show the whole drawing), the status bar shows
+  it; Find opens Excalidraw's search; a link opens only by the reader's act, as on a page.
+  Opening saves nothing. Excalidraw's own file actions, export, theme switch, collaboration,
+  embeds, AI and library browsing are switched off (design section 4.13).
+- **Never lose a stroke** (design 4.6). The page posts the scene at the end of every gesture
+  (150 ms after a key); the app holds the newest and saves it in the background through
+  the saver's second connection **compare-and-swap** against the stored scene the view's
+  scene descends from (`BoardState::stamp`), so a late post never writes over an agent's
+  change or a restored version (a save that finds the row changed adopts it by the base
+  rule and saves the merge). A picture the page posts (`file`) is made by `sniff_svg` or
+  `innerword_image::prepare` and stored before a save names it. Every **deliberate end**
+  first asks the page for what it has not posted (`collect`, at most a second,
+  `VIEW_COLLECT_PATIENCE`): another item opened, the whiteboard closed, trashed or deleted
+  (the view is parked out of sight, still drawn, `closing_boards`, while the new item opens
+  at once; several can close at once), Save Now, Export, Print, Version History, Duplicate,
+  Reload, an agent's request, and closing the window and quitting, which go through one
+  routine (`Workspace::end_then(End::CloseWindow | End::Quit)`; `cmd-q` and the signals
+  call `quit::request`, which runs after the update that asked, `cx.defer`). Only a quit
+  the system starts (log out, the Dock) reaches `on_app_quit` alone and saves what the app
+  holds. A scene that cannot be read or saved goes to a recovery file,
+  `<data directory>/Recovered/whiteboard-<id>-<ms>.json`, never dropped; the save state
+  says so with Show in Finder.
+- **Keys** (key context `BoardView`, a place where text is typed). Keys without `cmd` are
+  Excalidraw's (tool letters, digits, `escape`, the arrows, typing); of the `cmd` chords the
+  window keeps its own (palette, quick open, library, settings, save, export, zoom, the
+  list of shortcuts, `cmd-f`, close, quit) and every other chord Excalidraw acts on is the
+  whiteboard's (`innerword_board_web::keys::WHITEBOARD_KEYS`: undo, copy, duplicate,
+  group, layers, align, …): **fixed bindings** to `gpui::NoAction` in `BoardView`, appended
+  after the defaults by `keymap::install` (45 bindings: 43 keys and the second spellings of
+  `cmd-shift-,` and `cmd-shift-.`; not defaults, not rows of commands, not in the shortcuts
+  file, never changed), and **the menu bar is built without their key equivalents while a
+  whiteboard is open** (`menus::menu_key_bindings(.., OpenItemKind::Board)`), so `cmd-alt-c`
+  is Excalidraw's copy styles there and the comments' key elsewhere; a click on Show or
+  Hide Comments, Next and Previous Comment or Vim Mode answers with a toast. The list of
+  shortcuts has them as fixed rows "On a whiteboard", and a key the user gives a window
+  command that is one of them gets "the whiteboard sees it first". The Edit menu's Undo,
+  Redo and Select All go to the glue, Copy, Cut and Paste to the view. `ctrl-enter` and
+  `shift-f10` open the app's menu of the whiteboard; Excalidraw's `?` opens the list of
+  shortcuts at "On a whiteboard".
+- **Drawing without the pointer**: "Add text", "Add rectangle", "Add ellipse", "Add
+  diamond", "Add arrow", "Add frame" (palette category "Whiteboard", Insert > Whiteboard,
+  the title menu, the `ctrl-enter` menu; no default keys) put an element at the middle of
+  the view, selected, made by the converter agents use against the scene the page holds
+  (asked first); a text opens for typing (the app holds the writer's keys meanwhile,
+  `workspace::board::HOLD_KEYS` and `OPEN_TEXT`); an arrow with two shapes selected binds
+  them. "Mermaid to drawing…" opens Excalidraw's Mermaid dialog. **The shape library** is
+  one for every whiteboard, kept in the library's setting `board.shape_library`
+  (Excalidraw's `.excalidrawlib` form, at most 8 MB and 1,000 items, an item with a
+  picture dropped), posted by the page when it changes and served to the next view; "Show
+  or hide the shape library", "Add selection to shape library", "Insert from shape
+  library…" (a picker of the app). Pictures come by paste, a drop from the Finder,
+  Insert > Image… and agents.
+- **New Whiteboard**: the palette, File > New Whiteboard, the library's menu and + menu,
+  "New Whiteboard Here" on a folder row, the empty state's hint; no default key. The
+  library's panel makes it at the end of the selected folder and **names it in place** in
+  the sidebar (shown for it when hidden); `enter` takes the name, `escape` leaves it
+  "Untitled", and either opens it with the keyboard on the canvas. The panel makes
+  whiteboards only once the app gave it the scene of an empty one
+  (`set_new_board_content`, with a page engine). The library's own `NewBoard` is a row
+  "In the library" of the list of shortcuts (`new_board_command`, `TREE_KEY_CONTEXT`), the
+  palette has the window's.
+- **What does not apply** says so in a toast, from its key and the menu bar, and is left
+  out of the palette: document settings, take title from text, spelling language,
+  comments, Vim mode, the quick chat, Life Size and Automatic ("A whiteboard has no
+  paper size: Zoom to Fit shows the whole drawing."). The text's commands have no handler
+  (greyed). Find Next and Previous have none either: `cmd-g` is Excalidraw's group.
+- **PDF, Print, Export**: one code path from the **stored** scene (the zoom, the theme and
+  a selection change nothing): the bundle's export page loaded offscreen in WebKit,
+  Excalidraw's `exportToSvg` (light colours, a 32 pt margin, its fonts inlined), one PDF
+  page of exactly that size, scaled down only past 14,400 pt a side, lines as paths and
+  text as text. The app runs it in-process (`run_script`), the tool in a child
+  (`__board-pdf`). An empty whiteboard has no PDF ("“Plan” is empty: there is nothing to
+  export."). The export picker of a whiteboard has one row, "PDF file"; Export as PDF…
+  writes WebKit's bytes; Print… puts the page on **the user's paper**, turned to the
+  drawing and scaled down to fit (`printing::Fit::ShrinkOntoPaper`,
+  `innerword_print::Scaling::DownToFit`); a folder's PDF holds its whiteboards after its
+  documents ("Printing"). No other format: no PNG, SVG, `.excalidraw`, Markdown or DOCX of
+  a whiteboard.
+- **The version history** shows each version's listing of elements, muted; Restore keeps
+  the current scene as a version, saves the old one compare-and-swap and takes it into the
+  open view as one step of its undo.
+- **The page engine** is the pages' (`pages::PageEngine`): WebKit in every run of the real
+  binary, `pages::use_fake` in tests (`FakePages` learns whiteboards: its canvas is a scene
+  in Rust, its `adopt` applies the base rule with `innerword_board::merge`; the levers
+  `draw`, `draw_unposted`, `post_stale`, `hold_collects`, `fail_adopts`, `paste_picture`,
+  `change_library` and the others, `tests/suite/boards.rs`), none: a whiteboard shows its
+  listing under "Whiteboards need macOS 12.3 or later." (or "… are not shown in this
+  run.") and none can be made in the app. `Workspace::board_served(path)` answers what the
+  view would be served, for tests on the fake engine.
+- **Scripted runs**: `board:new[:<title>]` (as New Whiteboard, named without the sidebar's
+  field, opened; `board: made board:12 “Plan”`), `board:wait[:<ms>]` (until the page
+  posted `ready`; it says how long the load took), `board:scene` (the listing of what the
+  app holds, after a collect), `board:draw:<json>` (skeletons given to the page as the
+  writer's drawing, so they go through the autosave), `board:press:<keys>` (real
+  `keyDown:` events to the web view: what reaches Excalidraw; never `cmd-c` or `cmd-x`,
+  the user's clipboard), `board:js:<script>`, `board:pdf:<path>` (`board: pdf 1 page,
+  734 x 244 pt, 1 picture, made in 0.20 s`), `board:menu`, `board:library` (`board: library
+  1 item, saved`), `board:mermaid:<definition>` (`\n` for a new line). `state` has
+  `board=[id=12 state=loaded elements=14 rev=31 posted=31 saved=31 dirty=no base=3f2a9c1b
+  adopting=no editing=no composing=no pointer=up zoom=100% pictures=2/2 recovered=no
+  library=3/saved overlay=none focus=board responder=web closing=no]` or `board=[none]`;
+  the Add commands are `action:board::AddRectangle` and the others; `print:pdf:`,
+  `print:job:`, `export:wait`, `zoom:`, `agents:`, `theme:` work on a whiteboard. The
+  check with an agent (the design's 9.4):
+
+  ```bash
+  INNER_WORD_DATA_DIR=/some/tmp INNER_WORD_EXPORT_DIR=/some/tmp/out \
+  INNER_WORD_AUTOMATION="wait:1500; board:new:Architecture; board:wait; log:board ready; agents:1:60000; wait:500; board:scene; state; keys:cmd-shift-s; type:pdf; keys:enter; export:wait; quit" \
+  ./target/debug/inner-word
+  # when the log says "board ready": innerword --library /some/tmp board add board:<id> --author Claude --content '[...]'
+  ```
+- **What it costs** (release build, measured when whiteboards were added, on a whiteboard of
+  3,000 elements made by the tool, 5,250 with their labels, a stored scene of 3.0 MB):
+  opening it 477 ms from the view's load to `ready`; **an agent's change while it is open**
+  `cost=[save 16 ms, change 81 ms, window 41 ms]` (the change is reading the scene, adding
+  and writing 3 MB with its version kept; the window is parsing the two scenes, the delta
+  and the adopt call: the main thread is held for both), the tool 169 ms from start to
+  answer; **an agent's 16 MB picture** (a PNG stored as it came, its bytes stored by the
+  listener's thread before the request is queued) `cost=[save 1 ms, change 76 ms, window
+  38 ms]`, the tool 401 ms; **the autosave** of a gesture on it `last_save=[main 0.00 ms,
+  background 59 ms, 3012568 bytes]` (only the message's head is read on the main thread);
+  **its PDF** (13,302 x 8,444 pt) 1.37 s with `board:pdf:`; **a folder's PDF** with a
+  document and three whiteboards of 400 elements, 4 pages, 0.66 s. In the debug build an
+  agent's change to a small whiteboard (six elements and a picture) is `change 4 ms,
+  window 1 ms`, the whole page to `ready` 90 to 440 ms. The scripts are the design's 9.4;
+  the way to take the window's part off the main thread, should it grow too long, is in
+  its risk 8 (the delta on a background task, the adopt in a later turn).
+- **Not in this version**: text to diagram and the AI tools, web embeds, collaboration,
+  `.excalidraw` and `.excalidrawlib` files, a library per whiteboard, agents and the shape
+  library, exports other than one PDF, a dark PDF, a whiteboard in a Markdown, DOCX or
+  plain-text export, the assistant changing a whiteboard, elbow arrows and inline shapes
+  from agents, a picture from an address on the web, a zoom of the app's kept for a
+  whiteboard, Excalidraw's undo across a reload or a relaunch (versions are the undo that
+  lasts), more than one whiteboard view at a time, whiteboards below macOS 12.3.
+- **Checked by hand only, or by nothing** (the design's section 10, checks 1 to 14, for a
+  person): keys and the menu bar in a real active key window (`performKeyEquivalent:`
+  against the menu, the first responder), the Edit menu with the pointer and the clipboard,
+  a quit the system starts within a gesture, an input method in a text element while an
+  agent writes, dragging while an agent changes another shape, the cursors and
+  Excalidraw's own right-click menu, the pinch and two-finger scroll, a drop from the
+  Finder, the print panel, the theme, Wi-Fi off, Mermaid with the pointer, the shape
+  library across whiteboards, a folder's PDF in Preview. The `screenshot:` step failed in
+  the sessions that built this ("could not create image from window": the screen
+  recording permission), so no scripted picture of the canvas was looked at.
+
 ## Mouse
 
 Every feature is reachable with the mouse alone (product rule 1). How it fits together:
 
 - **The menu bar** (`crates/innerword-app/src/menus.rs`) is the complete map: Inner Word (with
-  the keyboard shortcuts: the list, import, export, reset all), File (Export…, Export as
-  PDF… and Cancel PDF Export, Print… and Cancel Printing), Edit (with Spelling), Format (with Turn Into, Align and Image), Insert (with Image…), View (with
+  the keyboard shortcuts: the list, import, export, reset all), File (New Whiteboard,
+  Export…, Export as PDF… and Cancel PDF Export, Print… and Cancel Printing), Edit (with Spelling), Format (with Turn Into, Align and Image), Insert (with Image… and Whiteboard), View (with
   Theme), Help. While the
   assistant is shown it has its items too (Edit > Ask the Assistant…; View > Show or Hide
   Assistant, Go to Assistant, New Chat, Clear Chat), and none of them otherwise. Every item
@@ -2114,6 +2462,14 @@ Every feature is reachable with the mouse alone (product rule 1). How it fits to
   Browser" on a link); the title's chevron and the status bar's zoom have the page's menus;
   `.html` files and folders dropped on the sidebar, a page or the text are added
   ("Pages"); File > Import Page… opens the open panel.
+- **A whiteboard** is Excalidraw's with the pointer: drawing, selecting, its style panel and
+  its own right-click menu (drawn by the page); the app's items are on the title's chevron
+  (Rename…, Add with the six shapes, Mermaid and the shape library, Find on Whiteboard…,
+  Insert Picture…, Zoom to Fit, Print…, Export as PDF…, Version History…, Reveal in
+  Library) and in the menu bar (Insert > Whiteboard, File > New Whiteboard); the status
+  bar's save state, elements and zoom have menus; New Whiteboard is in the library's menu,
+  its + menu and a folder row's ("New Whiteboard Here"); picture files dropped on the
+  canvas land where they were dropped ("Whiteboards").
 - **The format bar** (`crates/innerword-editor-tools/src/format_bar.rs`) comes up 150 ms after
   the left button is released on a selection the pointer made: bold, italic, underline,
   strikethrough, inline code, highlight and text colour (menus), link, turn into (a menu),

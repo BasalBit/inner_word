@@ -1136,6 +1136,61 @@ key window (keys, the first responder, the cursor) was not checked by a person y
 - **Every `BOOL`** of a `ClassDecl` method and of a `msg_send!` result is
   `objc::runtime::BOOL` (an `i8` on x86_64), never a Rust `bool`.
 
+### A whiteboard's view: the bridge, calls, the fixed keys
+
+What a whiteboard's view (Excalidraw in the same `WKWebView`, `docs/whiteboard-design.md`)
+added to the above, as it was built and run (`innerword-web`'s test program, the app's
+tests on the fake engine, scripted runs in the debug build).
+
+- **The bridge only posts.** The script message handler (`innerwordBoard`, in the page
+  world, the main frame of the view's own origin only, under a size cap) holds a `Weak` of
+  the view's state and only pushes the body into the inbox; the workspace's task reads it
+  (`innerword_board_web::bridge::parse`) in an update of its own, as every other callback.
+  `WebPage`'s `Drop` removes the handlers (the controller retains them: a strong
+  reference would be a cycle).
+- **Calls are started from tasks, answered by posting.** `call_async`
+  (`callAsyncJavaScript:arguments:inFrame:inContentWorld:completionHandler:`, one argument,
+  the JSON as an `NSString`) is made between two awaits of a workspace task, never inside
+  an AppKit callback; its completion only sends on a channel (`pages::answer`). The glue
+  runs its calls one after the other, in the order they were made. An answer and a post
+  the same call caused can come in either order: the merge an `adopt` posts may reach the
+  app before the adopt's answer, so a post that comes while an adopt waits is kept aside
+  and taken once the answer says its rev counts (`BoardState::pending_post`).
+- **`loaded` comes before the page is.** `didFinish` arrived while module scripts had not
+  run yet (`document.readyState` "interactive"): wait for the page's own `ready` post,
+  never for `PageEvents::loaded`. A covered background window draws no animation frame, and
+  Excalidraw mounts in one: `pages::draw_when_covered` is needed for a whiteboard too, or a
+  scripted run never gets `ready`.
+- **Out of sight, still drawn** (`WebPage::park`): the frame moved to x = -100,000 with
+  occlusion detection off, never `setHidden:` (a hidden view stops animation frames,
+  throttles timers and fires `visibilitychange`); it hides and shows the view once in the
+  same turn so that WebKit looks at its visibility again. A call that must answer from a
+  parked view (`collect`) never waits on a frame or a timer.
+- **React draws a turn later.** A selection set with `updateScene` is in `getAppState()`
+  only after React's next render: a key pressed to open the new text before that went to
+  the old selection. The Add commands hold the writer's keys in the page until the new text
+  is open (`workspace::board::HOLD_KEYS`, `OPEN_TEXT`: two animation frames, then `Enter`,
+  then the held keys), instead of a timer.
+- **Keeping GPUI off a chord in one place: `NoAction`, added last.** A binding without a
+  context ranks like the deepest; among bindings at one depth the one added later wins, and
+  a `gpui::NoAction` that wins disables every binding under it (`Keymap::bindings_for_input`,
+  read). So the whiteboard's own chords are bound to `NoAction` in `BoardView` after every
+  other binding (`boards::fixed_key_bindings`, appended by `keymap::install` and
+  `measure_install` after the defaults were taken): on a whiteboard GPUI matches nothing on
+  `cmd-alt-c` and leaves it to the web view; elsewhere the window's binding still works. The
+  menu bar is the other way in (AppKit may offer a chord to the menu before the view):
+  while a whiteboard is open it is built without those key equivalents, and a click on such
+  an item is captured at the workspace root and answered with a toast, because an item is
+  enabled whenever its action has a handler anywhere, and four of them have app-wide ones.
+- **An app-wide action listener reached from a key runs inside that window's update.**
+  `cmd-q` pressed in the window reaches `cx.on_action(Quit)` while the window is being
+  updated, so updating the workspace from there failed and the app quit without asking the
+  whiteboard: `quit::request` does its work after that update (`cx.defer`).
+- **Tests on the fake engine and the clock.** A request of an agent that waits (for a
+  whiteboard's page, a closing whiteboard, a composition) waits on `COMPOSITION_POLL`
+  timers of the app's executor: a test lets the clock run (`advance_clock`) while it waits
+  for the answer (`answer_in_time` in `tests/suite/live.rs`), or it never comes.
+
 ## Testing
 
 Source: `$G/src/app/test_context.rs`, `$G/src/platform/test/`, `$G/../gpui-macros-0.2.2/src/test.rs`.

@@ -26,9 +26,10 @@ use crate::types::{
     AddCommentRequest, AddImageRequest, AttachedImage, CommentRequest, CreateDocumentRequest,
     CreateFolderRequest, DeleteCommentRequest, DeleteDocumentRequest, DeleteFolderRequest,
     DuplicateDocumentRequest, EditRequest, EmptyTrashRequest, InsertRequest, MoveDocumentRequest,
-    MoveFolderRequest, RenameDocumentRequest, RenameFolderRequest, ReplaceDocumentRequest,
-    ReplaceSectionRequest, ReplyRequest, RestoreDocumentRequest, RestoreFolderRequest,
-    RestoreVersionRequest, TrashDocumentRequest, TrashFolderRequest,
+    MoveFolderRequest, RemoveFromBoardRequest, RenameDocumentRequest, RenameFolderRequest,
+    ReplaceDocumentRequest, ReplaceSectionRequest, ReplyRequest, RestoreDocumentRequest,
+    RestoreFolderRequest, RestoreVersionRequest, TrashDocumentRequest, TrashFolderRequest,
+    UpdateBoardRequest,
 };
 
 /// What is said when the images of one request weigh more than
@@ -145,7 +146,7 @@ fn path_of(source: &str, base_dir: Option<&Path>) -> std::result::Result<PathBuf
 /// there as written and has `%20` and the like in it is tried with those read as the
 /// characters they stand for (Markdown has no other way to write a space in a path
 /// without angle brackets).
-fn file_of(
+pub(crate) fn file_of(
     source: &str,
     base_dir: Option<&Path>,
 ) -> std::result::Result<Option<PathBuf>, &'static str> {
@@ -279,6 +280,8 @@ brings_nothing!(
     CommentRequest,
     DeleteCommentRequest,
     RestoreVersionRequest,
+    UpdateBoardRequest,
+    RemoveFromBoardRequest,
 );
 
 macro_rules! brings_the_images_of {

@@ -14,7 +14,7 @@ use crate::attach::Prepare;
 use crate::error::{Error, Result};
 use crate::library::{Library, Session};
 use crate::types::*;
-use crate::{comments, items, pages, versions, write_text};
+use crate::{boards, comments, items, pages, versions, write_text};
 
 fn as_json<T: Serialize>(result: T) -> Result<Value> {
     serde_json::to_value(result)
@@ -131,6 +131,21 @@ operations! {
     /// travels with the request. With a source address the page there is updated, or
     /// left as it is when it is the same. See [`AddPageRequest`].
     add_page / AddPage(AddPageRequest) -> PageAdded = pages::add_page;
+    /// Makes a whiteboard, empty or with elements. A picture file an `image` element
+    /// names is read here, by whoever asks, and travels with the request. See
+    /// [`CreateBoardRequest`].
+    create_board / CreateBoard(CreateBoardRequest) -> BoardChanged = boards::create_board;
+    /// Adds elements to a whiteboard: shapes, text, arrows bound to shapes, frames,
+    /// pictures from files of this Mac (read here, by whoever asks). See
+    /// [`AddToBoardRequest`].
+    add_to_board / AddToBoard(AddToBoardRequest) -> BoardChanged = boards::add_to_board;
+    /// Moves, resizes, restyles or rewrites elements of a whiteboard by id. See
+    /// [`UpdateBoardRequest`].
+    update_board / UpdateBoard(UpdateBoardRequest) -> BoardChanged = boards::update_board;
+    /// Removes elements of a whiteboard by id, with their labels; arrows bound to them
+    /// stay, unbound. See [`RemoveFromBoardRequest`].
+    remove_from_board / RemoveFromBoard(RemoveFromBoardRequest) -> BoardChanged
+        = boards::remove_from_board;
 
     /// Renames a document, or gives its title back to its text. See
     /// [`RenameDocumentRequest`].

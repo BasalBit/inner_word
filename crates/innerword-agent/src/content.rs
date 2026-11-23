@@ -58,43 +58,50 @@ pub(crate) fn parse(meta: &DocumentMeta, content: &str) -> Result<Document> {
     })
 }
 
-/// The error of a text operation on a page: a page is kept as it was saved.
-pub(crate) fn is_a_page(meta: &DocumentMeta) -> Error {
+/// The error of a text operation on what `meta` is: a page is kept as it was saved, a
+/// whiteboard is changed by its elements.
+pub(crate) fn not_a_text(meta: &DocumentMeta) -> Error {
     Error::WrongKind {
         id: meta.id.0,
         name: quoted_excerpt(title_of(meta)),
-        is_page: true,
+        kind: meta.kind,
+        wanted: None,
         export: false,
     }
 }
 
-/// The error of an export of a page as Markdown or DOCX: a page has formats of its own.
-pub(crate) fn page_is_not_a_text_file(meta: &DocumentMeta) -> Error {
+/// The error of an export of what `meta` is in a format it does not have: a page as
+/// Markdown or DOCX, a whiteboard as anything but a PDF.
+pub(crate) fn not_in_that_format(meta: &DocumentMeta) -> Error {
     Error::WrongKind {
         id: meta.id.0,
         name: quoted_excerpt(title_of(meta)),
-        is_page: true,
+        kind: meta.kind,
+        wanted: None,
         export: true,
     }
 }
 
-/// The error of a page operation on a text.
-pub(crate) fn is_a_text(meta: &DocumentMeta) -> Error {
+/// The error of an operation of a page or a whiteboard (`wanted`) on what `meta` is.
+pub(crate) fn not_a(meta: &DocumentMeta, wanted: DocumentKind) -> Error {
     Error::WrongKind {
         id: meta.id.0,
         name: quoted_excerpt(title_of(meta)),
-        is_page: false,
+        kind: meta.kind,
+        wanted: Some(wanted),
         export: false,
     }
 }
 
-/// Loads the document `meta` names. A page is refused with [`Error::WrongKind`]: its
-/// content is its manifest, never a document, and every operation on the text of a
-/// document comes through here.
+/// Loads the document `meta` names. A page and a whiteboard are refused with
+/// [`Error::WrongKind`]: the content of the one is its manifest and of the other its
+/// scene, never a document, and every operation on the text of a document comes through
+/// here.
 pub(crate) fn load(store: &Store, meta: &DocumentMeta) -> Result<Loaded> {
     let stored = store.document(meta.id)?;
-    if stored.meta.kind == DocumentKind::Page {
-        return Err(is_a_page(&stored.meta));
+    match stored.meta.kind {
+        DocumentKind::Text => {}
+        DocumentKind::Page | DocumentKind::Board => return Err(not_a_text(&stored.meta)),
     }
     let document = parse(&stored.meta, &stored.content)?;
     let custom_title = title_is_chosen(store, &stored.meta, &document);
@@ -278,6 +285,10 @@ pub(crate) enum Reason {
     Restore,
     /// A page is brought to a newer copy of itself.
     Update,
+    /// Elements are added to a whiteboard.
+    Drawing,
+    /// Elements are removed from a whiteboard.
+    Removal,
 }
 
 impl Reason {
@@ -291,6 +302,8 @@ impl Reason {
             Reason::CommentDeleted => "a comment was deleted",
             Reason::Restore => "a version was restored",
             Reason::Update => "an update",
+            Reason::Drawing => "a drawing",
+            Reason::Removal => "a removal",
         };
         format!("Before {what} by {author}")
     }

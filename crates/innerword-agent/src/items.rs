@@ -178,8 +178,14 @@ pub(crate) fn rename_document(
 ) -> Result<DocumentChanged> {
     let index = Index::load(session.store)?;
     let meta = index.live_document(session.store, &request.document)?;
-    if meta.kind == innerword_store::DocumentKind::Page {
-        return crate::pages::rename(session, &index, &meta, request);
+    match meta.kind {
+        innerword_store::DocumentKind::Text => {}
+        innerword_store::DocumentKind::Page => {
+            return crate::pages::rename(session, &index, &meta, request);
+        }
+        innerword_store::DocumentKind::Board => {
+            return crate::boards::rename(session, &index, &meta, request);
+        }
     }
     let loaded = content::load(session.store, &meta)?;
     let title = if request.follow_text {

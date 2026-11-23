@@ -141,8 +141,14 @@ impl Library {
         let session = self.reader()?;
         let index = Index::load(&session.store)?;
         let meta = index.document(&session.store, &request.document)?;
-        if meta.kind == innerword_store::DocumentKind::Page {
-            return crate::pages::read(&session.store, &index, &meta, request);
+        match meta.kind {
+            innerword_store::DocumentKind::Text => {}
+            innerword_store::DocumentKind::Page => {
+                return crate::pages::read(&session.store, &index, &meta, request);
+            }
+            innerword_store::DocumentKind::Board => {
+                return crate::boards::read(&session.store, &index, &meta, request);
+            }
         }
         let loaded = content::load(&session.store, &meta)?;
         let document = &loaded.document;
@@ -195,6 +201,7 @@ impl Library {
             comments,
             images,
             page: None,
+            board: None,
         })
     }
 
@@ -204,8 +211,14 @@ impl Library {
         let session = self.reader()?;
         let index = Index::load(&session.store)?;
         let meta = index.document(&session.store, &request.document)?;
-        if meta.kind == innerword_store::DocumentKind::Page {
-            return crate::pages::find(&session.store, &index, &meta, request);
+        match meta.kind {
+            innerword_store::DocumentKind::Text => {}
+            innerword_store::DocumentKind::Page => {
+                return crate::pages::find(&session.store, &index, &meta, request);
+            }
+            innerword_store::DocumentKind::Board => {
+                return crate::boards::find(&session.store, &index, &meta, request);
+            }
         }
         let loaded = content::load(&session.store, &meta)?;
         let matches = matching::find(&loaded.document, &request.text, false)?;

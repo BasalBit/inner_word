@@ -28,6 +28,7 @@
 //! | History | [`versions`](Library::versions), [`read_version`](Library::read_version), [`restore_version`](Library::restore_version) |
 //! | Export | [`export`](Library::export) |
 //! | Pages | [`add_page`](Library::add_page), [`pages`](Library::pages) (and every read, item and history operation above works on a page) |
+//! | Whiteboards | [`create_board`](Library::create_board), [`add_to_board`](Library::add_to_board), [`update_board`](Library::update_board), [`remove_from_board`](Library::remove_from_board), [`boards`](Library::boards) (and every read, item and history operation above works on a whiteboard; its export is a PDF) |
 //!
 //! # The rules
 //!
@@ -104,12 +105,23 @@
 //! it is the page at that address, added again unchanged, updated (the page as it was
 //! kept as a version) or left in the trash ([`PageOutcome`]).
 //!
+//! **A whiteboard is changed by its elements.** A library item can be a whiteboard: a
+//! drawing, kept as the scene of Excalidraw, the editor the app draws with. An agent adds
+//! elements as Excalidraw's element skeletons ([`Library::add_to_board`]), changes and
+//! removes them by id, and reads a whiteboard as a listing of its elements; they are made
+//! into Excalidraw's elements here, in Rust, with every id derived from the request, so a
+//! dry run names the ids the real run gives. Every change keeps the drawing as it was as a
+//! version first. A picture file an `image` element names is read by whoever was asked,
+//! as for [`Library::add_image`] ([`BoardPicture`]). An operation on the text of a document
+//! fails on a whiteboard with [`Error::WrongKind`], and a whiteboard is exported as a PDF
+//! only, by the [`PageChecker`] of the library.
+//!
 //! # Naming things
 //!
-//! A [`Target`] names a document or a folder by id (`12`, `doc:12`, `folder:3`) or by its
-//! path in the library (`The Salt Road/Part one/Chapter 1`). A name that fits several
-//! items fails with [`Error::Ambiguous`], which lists the candidates with their ids. Every
-//! result carries ids, so the next request can be exact.
+//! A [`Target`] names a document or a folder by id (`12`, `doc:12`, `page:12`, `board:12`,
+//! `folder:3`) or by its path in the library (`The Salt Road/Part one/Chapter 1`). A name
+//! that fits several items fails with [`Error::Ambiguous`], which lists the candidates
+//! with their ids. Every result carries ids, so the next request can be exact.
 //!
 //! # Example
 //!
@@ -168,6 +180,7 @@
 #![warn(missing_docs)]
 
 mod attach;
+mod boards;
 mod browse;
 mod checker;
 mod comments;
@@ -190,11 +203,12 @@ mod versions;
 mod write_text;
 
 pub use checker::{
-    CHECK_ARGUMENT, FAKE_CHECK_ENV, PDF_ARGUMENT, PageChecker, ProcessChecker, StaticChecker,
+    BOARD_PDF_ARGUMENT, BOARD_PDF_KILL_MS, CHECK_ARGUMENT, FAKE_CHECK_ENV, PDF_ARGUMENT,
+    PageChecker, ProcessChecker, StaticChecker,
 };
 pub use error::{
-    Candidate, Error, ErrorKind, ErrorReport, ItemKind, Occurrence, PAGE_IS_NOT_A_TEXT_FILE,
-    Refusal, Result,
+    BOARD_IS_PDF_ONLY, Candidate, Error, ErrorKind, ErrorReport, ItemKind, Occurrence,
+    PAGE_IS_NOT_A_TEXT_FILE, Refusal, Result,
 };
 pub use innerword_store::{Clock, DATA_DIR_ENV};
 pub use library::{DEFAULT_AUTHOR, FETCH_LOCAL_ENV, Library};

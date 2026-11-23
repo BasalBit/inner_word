@@ -32,10 +32,10 @@
 //! One request and one answer per connection, each one line of JSON.
 //!
 //! ```text
-//! {"version":3,"wait_ms":10000,"op":"edit","request":{"document":"doc:3","old_text":"a","new_text":"b","author":"Claude"}}
-//! {"version":3,"answer":"done","result":{ ...what Library::edit returns... }}
-//! {"version":3,"answer":"failed","error":{"code":"no_match","message":"...", "detail":{...}}}
-//! {"version":3,"answer":"refused","refusal":{"why":"switched_off"}}
+//! {"version":4,"wait_ms":10000,"op":"edit","request":{"document":"doc:3","old_text":"a","new_text":"b","author":"Claude"}}
+//! {"version":4,"answer":"done","result":{ ...what Library::edit returns... }}
+//! {"version":4,"answer":"failed","error":{"code":"no_match","message":"...", "detail":{...}}}
+//! {"version":4,"answer":"refused","refusal":{"why":"switched_off"}}
 //! ```
 //!
 //! A [`Request`] is one [`Operation`]: an operation of [`Library`](crate::Library) that
@@ -72,6 +72,16 @@
 //! does not know `add_page`, so the number changed again. The tool writes the whole line
 //! before it connects, and the listener reads the version of a line before the rest of
 //! it.
+//!
+//! **Version 4** added whiteboards: four operations an app of version 3 does not know
+//! (`create_board`, `add_to_board`, `update_board`, `remove_from_board`: it would answer
+//! `invalid`, "the request cannot be read"), the kind in the wire form of
+//! [`Error::WrongKind`] (what the item is and what the operation wanted, where version 3
+//! said only whether it is a page), and the pictures a whiteboard's request carries
+//! (`pictures`, [`BoardPicture`](crate::BoardPicture): the picture files its `image`
+//! skeletons name, read and made by the tool, base64 in the line, 32 MB a request at
+//! most), which the listener stores before it queues the request, as it stores a page's
+//! files ([`store_page_files`]). So a 0.10 app and a 0.11 tool refuse each other whole.
 //!
 //! `wait_ms` is how long the tool waits for the app to take the request up. An app that
 //! is busy for longer answers [`Refusal::TooLate`] at that moment by itself, and does not
@@ -118,15 +128,15 @@ use serde_json::Value;
 
 use crate::error::{Candidate, Error, ErrorKind, ItemKind, Occurrence};
 use crate::library::Session;
-use crate::types::PreparedPage;
+use crate::types::{AddToBoardRequest, BoardPicture, CreateBoardRequest, PreparedPage};
 
 pub use crate::error::Refusal;
 pub use crate::operations::Operation;
 pub use socket::{Closer, Incoming, Listener};
 
-/// The version of the protocol this build speaks: 3 since a request can bring a page
-/// with its files (the module's notes say what each version added).
-pub const PROTOCOL_VERSION: u32 = 3;
+/// The version of the protocol this build speaks: 4 since there are whiteboards (the
+/// module's notes say what each version added).
+pub const PROTOCOL_VERSION: u32 = 4;
 
 /// What the files of the page one request brings may weigh, in bytes as the library
 /// stores them (before they are written as base64): 64 MB, the most a page can be. The
@@ -262,33 +272,51 @@ pub(crate) struct RequestLine<'a> {
     pub(crate) operation: &'a Operation,
 }
 
-/// Whether the request is an add_page that is not a dry run and carries blobs: the
-/// listener refuses it at once (Refusal::SwitchedOff) while the owner's switch is off.
+/// Whether the request brings files to store, a page's files or a whiteboard's
+/// pictures: an add_page that is not a dry run and carries blobs, or a create_board or
+/// add_to_board that is not a dry run and carries the bytes of pictures. The listener
+/// refuses it at once (Refusal::SwitchedOff) while the owner's switch is off.
 pub fn carries_page_files(request: &Request) -> bool {
+    let brings = |pictures: &[BoardPicture]| pictures.iter().any(|p| !p.data.is_empty());
     match &request.operation {
         Operation::AddPage(add) => {
             !add.write.dry_run
                 && matches!(&add.prepared, Some(PreparedPage::Page(page)) if !page.blobs.is_empty())
         }
+        Operation::CreateBoard(CreateBoardRequest {
+            pictures, write, ..
+        })
+        | Operation::AddToBoard(AddToBoardRequest {
+            pictures, write, ..
+        }) => !write.dry_run && brings(pictures),
         _ => false,
     }
 }
 
 /// For the app's listener thread, before it queues a request (and only while the
-/// switch is on): stores the blobs of an add_page that is not a dry run through
-/// `files`, each after checking that `FileId::of(data)` is its `file`, empties their
-/// data, marks them stored. Any other request is left as it is.
+/// switch is on): stores a page's files or a whiteboard's pictures through `files`, each
+/// after checking that `FileId::of(data)` is its `file` (and, for a picture, that the
+/// bytes are of the kind the request says), empties their data, marks them stored: the
+/// blobs of an add_page, the pictures of a create_board or an add_to_board, neither for
+/// a dry run. Any other request is left as it is.
 ///
-/// A blob that fails the check stops the storing with [`Error::Invalid`] (answer the
-/// request with it: what is stored by then is named by nothing, and goes with the
-/// collector). The main thread then writes the row, and the store refuses it when a
-/// file is not there after all (`StoreError::FilesMissing`).
+/// A blob or a picture that fails the check stops the storing with [`Error::Invalid`]
+/// (answer the request with it: what is stored by then is named by nothing, and goes
+/// with the collector). The main thread then writes the row or the scene, and the store
+/// refuses it when a file is not there after all (`StoreError::FilesMissing`).
 pub fn store_page_files(
     request: &mut Request,
     files: &mut innerword_store::ImageFile,
 ) -> std::result::Result<(), Error> {
-    let Operation::AddPage(add) = &mut request.operation else {
-        return Ok(());
+    let add = match &mut request.operation {
+        Operation::AddPage(add) => add,
+        Operation::CreateBoard(CreateBoardRequest {
+            pictures, write, ..
+        })
+        | Operation::AddToBoard(AddToBoardRequest {
+            pictures, write, ..
+        }) => return store_board_pictures(pictures, write.dry_run, files),
+        _ => return Ok(()),
     };
     if add.write.dry_run {
         return Ok(());
@@ -311,6 +339,34 @@ pub fn store_page_files(
         }
         blob.data = Vec::new();
         blob.stored = true;
+    }
+    Ok(())
+}
+
+/// [`store_page_files`] of the pictures of a whiteboard's request.
+fn store_board_pictures(
+    pictures: &mut [BoardPicture],
+    dry_run: bool,
+    files: &mut innerword_store::ImageFile,
+) -> std::result::Result<(), Error> {
+    if dry_run {
+        return Ok(());
+    }
+    let total: usize = pictures.iter().map(|picture| picture.data.len()).sum();
+    if total > MAX_ATTACHED_BYTES {
+        return Err(Error::invalid(crate::boards::TOO_MUCH_PICTURES));
+    }
+    for picture in pictures.iter_mut() {
+        if picture.stored {
+            continue;
+        }
+        crate::boards::check_picture(picture)?;
+        let stored = files.put_file(&picture.data)?;
+        if stored.id.to_hex() != picture.file {
+            return Err(Error::invalid(crate::boards::DAMAGED_PICTURE));
+        }
+        picture.data = Vec::new();
+        picture.stored = true;
     }
     Ok(())
 }
@@ -469,10 +525,17 @@ enum Detail {
     WrongKind {
         id: i64,
         name: String,
-        is_page: bool,
+        kind: innerword_store::DocumentKind,
         /// An answer without it is about a text operation.
         #[serde(default)]
+        wanted: Option<innerword_store::DocumentKind>,
+        /// An answer without it is not about an export.
+        #[serde(default)]
         export: bool,
+    },
+    EmptyBoard {
+        id: i64,
+        name: String,
     },
     Failed {
         message: String,
@@ -562,13 +625,19 @@ impl WireError {
             Error::WrongKind {
                 id,
                 name,
-                is_page,
+                kind,
+                wanted,
                 export,
             } => Some(Detail::WrongKind {
                 id: *id,
                 name: name.clone(),
-                is_page: *is_page,
+                kind: *kind,
+                wanted: *wanted,
                 export: *export,
+            }),
+            Error::EmptyBoard { id, name } => Some(Detail::EmptyBoard {
+                id: *id,
+                name: name.clone(),
             }),
             Error::Failed { message } => Some(Detail::Failed {
                 message: message.clone(),
@@ -651,14 +720,17 @@ impl WireError {
             Ok(Detail::WrongKind {
                 id,
                 name,
-                is_page,
+                kind,
+                wanted,
                 export,
             }) => Error::WrongKind {
                 id,
                 name,
-                is_page,
+                kind,
+                wanted,
                 export,
             },
+            Ok(Detail::EmptyBoard { id, name }) => Error::EmptyBoard { id, name },
             Ok(Detail::Failed { message }) => Error::Failed { message },
             Err(_) => Error::InApp {
                 kind: ErrorKind::ALL

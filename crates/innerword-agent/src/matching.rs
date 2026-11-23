@@ -345,6 +345,7 @@ pub(crate) fn occurrences(
             heading: heading_above(document, range.start.block),
             context: context(document, range),
             across_image: across_an_image(document, range, matched_as),
+            element: None,
         })
         .collect()
 }

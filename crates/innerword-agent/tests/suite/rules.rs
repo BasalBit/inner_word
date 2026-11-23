@@ -4,20 +4,21 @@
 use std::time::{Duration, Instant};
 
 use innerword_agent::{
-    AddCommentRequest, AddImageRequest, AddPageRequest, CommentRequest, CreateDocumentRequest,
-    CreateFolderRequest, DeleteCommentRequest, DeleteDocumentRequest, DeleteFolderRequest,
-    DuplicateDocumentRequest, EditRequest, EmptyTrashRequest, Error, ErrorKind, InfoRequest,
-    InsertPosition, InsertRequest, Library, ListVersionsRequest, MoveDocumentRequest,
-    MoveFolderRequest, ReadRequest, Refusal, RenameDocumentRequest, RenameFolderRequest,
-    ReplaceDocumentRequest, ReplaceSectionRequest, ReplyRequest, RestoreDocumentRequest,
-    RestoreFolderRequest, RestoreVersionRequest, SearchRequest, Target, TextFormat,
-    TrashDocumentRequest, TrashFolderRequest, TreeRequest, WriteOptions,
+    AddCommentRequest, AddImageRequest, AddPageRequest, AddToBoardRequest, CommentRequest,
+    CreateBoardRequest, CreateDocumentRequest, CreateFolderRequest, DeleteCommentRequest,
+    DeleteDocumentRequest, DeleteFolderRequest, DuplicateDocumentRequest, EditRequest,
+    EmptyTrashRequest, Error, ErrorKind, InfoRequest, InsertPosition, InsertRequest, Library,
+    ListVersionsRequest, MoveDocumentRequest, MoveFolderRequest, ReadRequest, Refusal,
+    RemoveFromBoardRequest, RenameDocumentRequest, RenameFolderRequest, ReplaceDocumentRequest,
+    ReplaceSectionRequest, ReplyRequest, RestoreDocumentRequest, RestoreFolderRequest,
+    RestoreVersionRequest, SearchRequest, Target, TextFormat, TrashDocumentRequest,
+    TrashFolderRequest, TreeRequest, UpdateBoardRequest, WriteOptions,
 };
 use innerword_core::Document;
 use innerword_store::instance_lock::{self, HolderKind};
 
 use super::live::age_the_lock;
-use super::{Fixture, claude, closed_fixture, fixture, through_the_app};
+use super::{Fixture, PLAN, changes, claude, closed_fixture, fixture, skeletons, through_the_app};
 
 /// The options of a dry run by "Claude".
 pub fn dry() -> WriteOptions {
@@ -129,6 +130,51 @@ pub fn every_write(
                     create_folders: true,
                     write: o(),
                     ..Default::default()
+                })
+                .map(|r| r.written.changed),
+        ),
+        (
+            "create_board",
+            library
+                .create_board(&CreateBoardRequest {
+                    title: "Sketch".into(),
+                    folder: Some(Target::path("Sketches")),
+                    elements: skeletons(r#"[{"type":"rectangle","x":0,"y":0}]"#),
+                    write: o(),
+                    ..Default::default()
+                })
+                .map(|r| r.written.changed),
+        ),
+        (
+            "add_to_board",
+            library
+                .add_to_board(&AddToBoardRequest {
+                    board: Target::path("Sketches/Plan"),
+                    elements: skeletons(
+                        r#"[{"type":"text","id":"note","x":100,"y":20,"text":"A note"}]"#,
+                    ),
+                    write: o(),
+                    ..Default::default()
+                })
+                .map(|r| r.written.changed),
+        ),
+        (
+            "update_board",
+            library
+                .update_board(&UpdateBoardRequest {
+                    board: Target::path("Sketches/Plan"),
+                    changes: changes(r#"[{"id":"api","dx":20}]"#),
+                    write: o(),
+                })
+                .map(|r| r.written.changed),
+        ),
+        (
+            "remove_from_board",
+            library
+                .remove_from_board(&RemoveFromBoardRequest {
+                    board: Target::path("Sketches/Plan"),
+                    ids: vec!["db".into()],
+                    write: o(),
                 })
                 .map(|r| r.written.changed),
         ),
@@ -341,6 +387,23 @@ fn seeded() -> Fixture {
 
 /// Puts into the library of `fx` something for every kind of write to work on.
 pub fn seed(fx: &Fixture) {
+    seed_texts(fx);
+    // A whiteboard with a shape, an ellipse and an arrow between them.
+    fx.clock.advance_ms(1000);
+    fx.library
+        .create_board(&CreateBoardRequest {
+            title: "Plan".into(),
+            folder: Some(Target::path("Sketches")),
+            create_folders: true,
+            elements: skeletons(PLAN),
+            write: claude(),
+            ..Default::default()
+        })
+        .unwrap();
+}
+
+/// What [`seed`] puts into a library but the whiteboard: documents, folders, the trash.
+pub fn seed_texts(fx: &Fixture) {
     let chapter = fx.create(
         Some("Book"),
         "# Chapter 1\n\nThe *Maren* left at dawn.\n\n## Notes\n\nOld notes.\n",
@@ -408,7 +471,7 @@ fn while_an_app_that_takes_no_changes_is_open_reading_works_and_every_write_is_r
     assert_eq!(status.app_pid, Some(std::process::id()));
     assert_eq!(
         (status.documents, status.folders, status.trashed),
-        (3, 2, 2)
+        (4, 3, 2)
     );
 
     // Everything that reads works.
@@ -1374,7 +1437,8 @@ fn the_default_library_follows_the_environment_variable() {
 #[test]
 fn a_library_of_an_older_version_is_upgraded_for_reading_unless_the_app_has_it() {
     let fx = closed_fixture();
-    seed(&fx);
+    // Without the whiteboard: a library of schema 1 never held one.
+    seed_texts(&fx);
     // As schema version 1 left it: without the index version 2 added.
     let downgrade = || {
         let conn = rusqlite::Connection::open(fx.library.database_path()).unwrap();
@@ -1406,7 +1470,7 @@ fn a_library_of_an_older_version_is_upgraded_for_reading_unless_the_app_has_it()
     assert_eq!(tree.total_documents, 3);
     assert_eq!(
         fx.store().schema_version().unwrap(),
-        innerword_store::SCHEMA_VERSION
+        innerword_store::OPEN_SCHEMA_VERSION
     );
     assert_eq!(instance_lock::holder(&fx.data_dir()).unwrap(), None);
     // Writing upgrades it too.
@@ -1414,7 +1478,7 @@ fn a_library_of_an_older_version_is_upgraded_for_reading_unless_the_app_has_it()
     fx.create(None, "# After the upgrade\n\ntext");
     assert_eq!(
         fx.store().schema_version().unwrap(),
-        innerword_store::SCHEMA_VERSION
+        innerword_store::OPEN_SCHEMA_VERSION
     );
 
     // What is not a library is refused, for reading and for writing, and left alone.
@@ -1515,7 +1579,7 @@ fn content_that_is_not_a_document_is_reported_and_never_written_over() {
             .tree(&TreeRequest::default())
             .unwrap()
             .total_documents,
-        3
+        4
     );
     fx.library
         .move_document(&MoveDocumentRequest {

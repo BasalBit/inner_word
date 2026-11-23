@@ -14,21 +14,24 @@ use innerword_agent::live::{
     Request,
 };
 use innerword_agent::{
-    AddCommentRequest, AddImageRequest, AddPageRequest, CommentRequest, CreateDocumentRequest,
-    CreateFolderRequest, DeleteCommentRequest, DeleteDocumentRequest, DeleteFolderRequest,
-    DuplicateDocumentRequest, EditRequest, EmptyTrashRequest, Error, ErrorKind, ExportRequest,
-    FindRequest, FolderInfoRequest, InfoRequest, InsertPosition, InsertRequest, Library,
-    ListCommentsRequest, ListVersionsRequest, MoveDocumentRequest, MoveFolderRequest, Placement,
-    ReadRequest, ReadVersionRequest, RecentRequest, Refusal, RenameDocumentRequest,
-    RenameFolderRequest, ReplaceDocumentRequest, ReplaceSectionRequest, ReplyRequest,
-    RestoreDocumentRequest, RestoreFolderRequest, RestoreVersionRequest, SearchRequest, Target,
-    TrashDocumentRequest, TrashFolderRequest, TreeRequest, WriteOptions,
+    AddCommentRequest, AddImageRequest, AddPageRequest, AddToBoardRequest, CommentRequest,
+    CreateBoardRequest, CreateDocumentRequest, CreateFolderRequest, DeleteCommentRequest,
+    DeleteDocumentRequest, DeleteFolderRequest, DuplicateDocumentRequest, EditRequest,
+    EmptyTrashRequest, Error, ErrorKind, ExportRequest, FindRequest, FolderInfoRequest,
+    InfoRequest, InsertPosition, InsertRequest, Library, ListCommentsRequest, ListVersionsRequest,
+    MoveDocumentRequest, MoveFolderRequest, Placement, ReadRequest, ReadVersionRequest,
+    RecentRequest, Refusal, RemoveFromBoardRequest, RenameDocumentRequest, RenameFolderRequest,
+    ReplaceDocumentRequest, ReplaceSectionRequest, ReplyRequest, RestoreDocumentRequest,
+    RestoreFolderRequest, RestoreVersionRequest, SearchRequest, Target, TrashDocumentRequest,
+    TrashFolderRequest, TreeRequest, UpdateBoardRequest, WriteOptions,
 };
 use innerword_store::instance_lock::{self, InstanceLock};
 use innerword_store::{DocumentId, Store};
 
 use super::rules::{dry, every_write, seed};
-use super::{Fixture, THROUGH_THE_APP, claude, closed_fixture, through_the_app};
+use super::{
+    Fixture, THROUGH_THE_APP, changes, claude, closed_fixture, skeletons, through_the_app,
+};
 
 // ----- the stand-in for the app ------------------------------------------------------------
 
@@ -804,6 +807,120 @@ fn steps(pictures: &Path) -> Vec<Step> {
                 })
             }
         }),
+        // Whiteboards: made with elements and a picture, drawn on, changed, cut down,
+        // and what is refused.
+        step("create_board", {
+            let harbour = harbour.clone();
+            move |library| {
+                library.create_board(&CreateBoardRequest {
+                    title: "Harbour plan".into(),
+                    folder: Some(Target::path("Sketches/Drafts")),
+                    create_folders: true,
+                    elements: skeletons(&format!(
+                        r#"[{{"type":"rectangle","id":"dock","x":0,"y":0,"width":160,"height":80,"label":{{"text":"Dock"}}}},
+                           {{"type":"image","id":"photo","x":200,"y":0,"path":"{harbour}"}}]"#
+                    )),
+                    write: claude(),
+                    ..Default::default()
+                })
+            }
+        }),
+        step("create_board", move |library| {
+            library.create_board(&CreateBoardRequest {
+                title: "Nothing yet".into(),
+                write: claude(),
+                ..Default::default()
+            })
+        }),
+        step("add_to_board", {
+            let square = square.clone();
+            move |library| {
+                library.add_to_board(&AddToBoardRequest {
+                    board: Target::path("Sketches/Plan"),
+                    elements: skeletons(&format!(
+                        r#"[{{"type":"text","id":"title","x":100,"y":20,"text":"System overview","fontSize":28}},
+                           {{"type":"diamond","id":"cache","x":420,"y":240,"label":{{"text":"Cache"}}}},
+                           {{"type":"arrow","x":300,"y":150,"start":{{"id":"api"}},"end":{{"id":"cache"}}}},
+                           {{"type":"frame","id":"backend","children":["api","db","reads"],"name":"Backend"}},
+                           {{"type":"image","x":640,"y":80,"width":96,"path":"{square}"}}]"#
+                    )),
+                    write: claude(),
+                    ..Default::default()
+                })
+            }
+        }),
+        step("add_to_board", move |library| {
+            // An end bound to nothing there is refused, and nothing is changed.
+            library.add_to_board(&AddToBoardRequest {
+                board: Target::path("Sketches/Plan"),
+                elements: skeletons(r#"[{"type":"arrow","x":0,"y":0,"end":{"id":"nowhere"}}]"#),
+                write: claude(),
+                ..Default::default()
+            })
+        }),
+        step("add_to_board", move |library| {
+            // A text operation's target is not a whiteboard.
+            library.add_to_board(&AddToBoardRequest {
+                board: Target::path("Book/Chapter 1"),
+                elements: skeletons(r#"[{"type":"text","x":0,"y":0,"text":"x"}]"#),
+                write: claude(),
+                ..Default::default()
+            })
+        }),
+        step("update_board", move |library| {
+            library.update_board(&UpdateBoardRequest {
+                board: Target::path("Sketches/Plan"),
+                changes: changes(
+                    r##"[{"id":"api","dx":40,"backgroundColor":"#ffc9c9"},{"id":"db","text":"Postgres 17"},{"id":"reads","end":{"id":"cache"}}]"##,
+                ),
+                write: claude(),
+            })
+        }),
+        step("update_board", move |library| {
+            library.update_board(&UpdateBoardRequest {
+                board: Target::path("Sketches/Plan"),
+                changes: changes(r#"[{"id":"ghost","dx":1}]"#),
+                write: claude(),
+            })
+        }),
+        step("remove_from_board", move |library| {
+            library.remove_from_board(&RemoveFromBoardRequest {
+                board: Target::path("Sketches/Plan"),
+                ids: vec!["db".into(), "backend".into()],
+                write: claude(),
+            })
+        }),
+        step("edit", move |library| {
+            // A whiteboard has no text to edit.
+            library.edit(&EditRequest {
+                document: Target::path("Sketches/Plan"),
+                old_text: "API".into(),
+                new_text: "Gateway".into(),
+                write: claude(),
+                ..Default::default()
+            })
+        }),
+        step("rename_document", move |library| {
+            library.rename_document(&RenameDocumentRequest {
+                document: Target::path("Sketches/Plan"),
+                title: "Architecture".into(),
+                write: claude(),
+                ..Default::default()
+            })
+        }),
+        step("restore_version", move |library| {
+            // The whiteboard as it was before the first drawing by Claude.
+            let versions = library
+                .versions(&ListVersionsRequest {
+                    document: Target::path("Sketches/Architecture"),
+                })
+                .unwrap();
+            library.restore_version(&RestoreVersionRequest {
+                version: versions.versions.last().expect("a version").id.0,
+                write: claude(),
+                ..Default::default()
+            })
+        }),
         // Documents as items.
         step("create_document", move |library| {
             library.create_document(&CreateDocumentRequest {
@@ -1082,7 +1199,7 @@ fn every_operation_gives_the_same_result_and_the_same_library_both_ways() {
         "the steps above and the table of operations (src/operations.rs) name different \
          operations: an operation that writes has to be in both"
     );
-    assert_eq!(table.len(), 26);
+    assert_eq!(table.len(), 30);
 
     // What a search finds is the same too (the index is not in the dump).
     for query in ["dusk", "lighthouse", "Rewritten", "notes", "year"] {
@@ -1298,6 +1415,7 @@ fn nothing_writes_to_a_library_but_through_the_table() {
         "with_page_checker",
         "with_fetcher",
         "pages",
+        "boards",
     ];
     fn sources(dir: &Path, out: &mut Vec<(String, String)>) {
         for entry in std::fs::read_dir(dir).unwrap() {
@@ -2179,17 +2297,17 @@ fn versions_of_the_channel_that_do_not_fit_tell_each_other() {
     // A newer app refuses this tool's request, in a form every version reads.
     let app = RawApp::open(&fx, |_| {
         b"{\"version\":7,\"answer\":\"refused\",\"refusal\":{\"why\":\"protocol\",\"app\":7,\
-          \"tool\":3},\"more\":[1,2]}\n"
+          \"tool\":4},\"more\":[1,2]}\n"
             .to_vec()
     });
     let error = change(&fx.library).unwrap_err();
     let message = error.to_string();
     assert_eq!(
         refusal(Err::<(), _>(error)),
-        Refusal::Protocol { app: 7, tool: 3 }
+        Refusal::Protocol { app: 7, tool: 4 }
     );
     assert!(
-        message.contains("the app speaks version 7 of their channel, this tool version 3"),
+        message.contains("the app speaks version 7 of their channel, this tool version 4"),
         "{message}"
     );
     assert!(message.contains("nothing was changed"), "{message}");
@@ -2218,13 +2336,13 @@ fn versions_of_the_channel_that_do_not_fit_tell_each_other() {
         BufReader::new(stream).read_line(&mut answer).unwrap();
         serde_json::from_str(&answer).unwrap_or_else(|_| panic!("{answer:?}"))
     };
-    let answer = ask(r#"{"version":4,"op":"teleport","request":{"document":3,"to":"Mars"}}"#);
+    let answer = ask(r#"{"version":5,"op":"teleport","request":{"document":3,"to":"Mars"}}"#);
     assert_eq!(
         answer,
         serde_json::json!({
-            "version": 3,
+            "version": 4,
             "answer": "refused",
-            "refusal": {"why": "protocol", "app": 3, "tool": 4},
+            "refusal": {"why": "protocol", "app": 4, "tool": 5},
         })
     );
     // And a tool from before images (0.6.0 spoke version 1): its requests bring no
@@ -2240,9 +2358,9 @@ fn versions_of_the_channel_that_do_not_fit_tell_each_other() {
         assert_eq!(
             ask(&line),
             serde_json::json!({
-                "version": 3,
+                "version": 4,
                 "answer": "refused",
-                "refusal": {"why": "protocol", "app": 3, "tool": 1},
+                "refusal": {"why": "protocol", "app": 4, "tool": 1},
             }),
             "{line}"
         );
@@ -2260,9 +2378,29 @@ fn versions_of_the_channel_that_do_not_fit_tell_each_other() {
         assert_eq!(
             ask(&line),
             serde_json::json!({
-                "version": 3,
+                "version": 4,
                 "answer": "refused",
-                "refusal": {"why": "protocol", "app": 3, "tool": 2},
+                "refusal": {"why": "protocol", "app": 4, "tool": 2},
+            }),
+            "{line}"
+        );
+    }
+    // And a tool from before whiteboards (0.10 spoke version 3): an app of version 3
+    // does not know a whiteboard's request, nor the kinds the error of version 4 names.
+    // Refused whole too.
+    for line in [
+        format!(
+            r#"{{"version":3,"wait_ms":10000,"op":"edit","request":{{"document":"doc:{}","old_text":"Text","new_text":"Words"}}}}"#,
+            chapter.id
+        ),
+        r#"{"version":3,"wait_ms":1000,"op":"flush"}"#.to_string(),
+    ] {
+        assert_eq!(
+            ask(&line),
+            serde_json::json!({
+                "version": 4,
+                "answer": "refused",
+                "refusal": {"why": "protocol", "app": 4, "tool": 3},
             }),
             "{line}"
         );
@@ -2270,7 +2408,7 @@ fn versions_of_the_channel_that_do_not_fit_tell_each_other() {
     assert_eq!(fx.markdown(chapter.id), "# Chapter 1\n\nText.\n");
     app.names();
     // What is no request is answered as a failure.
-    for line in ["nonsense", "{}", r#"{"version":3,"op":"sing"}"#] {
+    for line in ["nonsense", "{}", r#"{"version":4,"op":"sing"}"#] {
         let answer = ask(line);
         assert_eq!(answer["answer"], "failed", "{line}");
         assert_eq!(answer["error"]["code"], "invalid", "{line}");
@@ -2278,24 +2416,24 @@ fn versions_of_the_channel_that_do_not_fit_tell_each_other() {
     assert_eq!(app.names(), [] as [&str; 0], "none of it reached the app");
     // A request as the documentation writes it is served.
     let answer = ask(&format!(
-        r#"{{"version":3,"wait_ms":10000,"op":"edit","request":{{"document":"doc:{}","old_text":"Text","new_text":"Words","author":"Claude"}}}}"#,
+        r#"{{"version":4,"wait_ms":10000,"op":"edit","request":{{"document":"doc:{}","old_text":"Text","new_text":"Words","author":"Claude"}}}}"#,
         chapter.id
     ));
-    assert_eq!(answer["version"], 3);
+    assert_eq!(answer["version"], 4);
     assert_eq!(answer["answer"], "done");
     assert_eq!(answer["result"]["replacements"], 1);
     assert_eq!(answer["result"]["changed"], true);
     assert_eq!(app.changes(), ["edit"]);
-    let answer = ask(r#"{"version":3,"wait_ms":1000,"op":"flush"}"#);
+    let answer = ask(r#"{"version":4,"wait_ms":1000,"op":"flush"}"#);
     assert_eq!(
         answer["result"],
         serde_json::json!({"takes_changes": true, "app_version": env!("CARGO_PKG_VERSION")})
     );
-    let answer = ask(r#"{"version":3,"wait_ms":1000,"op":"hello"}"#);
+    let answer = ask(r#"{"version":4,"wait_ms":1000,"op":"hello"}"#);
     assert_eq!(answer["result"]["takes_changes"], true);
     // A failure travels with its kind and comes out as the error it was.
     let answer = ask(&format!(
-        r#"{{"version":3,"wait_ms":10000,"op":"edit","request":{{"document":{},"old_text":"gone","new_text":"x"}}}}"#,
+        r#"{{"version":4,"wait_ms":10000,"op":"edit","request":{{"document":{},"old_text":"gone","new_text":"x"}}}}"#,
         chapter.id
     ));
     assert_eq!(answer["answer"], "failed");
@@ -2314,11 +2452,11 @@ fn an_app_from_before_images_refuses_a_request_that_brings_one_whole() {
     let chapter = fx.create(None, "# Chapter 1\n\nText.\n");
     let file = fx.picture("harbour.png", (64, 40), [30, 90, 160]);
     let before = fx.dump();
-    // What the listener of 0.6.0 writes for a request of version 3 (its `parse_request`
+    // What the listener of 0.6.0 writes for a request of version 4 (its `parse_request`
     // compares the number first and reads nothing else of the line).
     let app = RawApp::open(&fx, |_| {
         b"{\"version\":1,\"answer\":\"refused\",\"refusal\":{\"why\":\"protocol\",\"app\":1,\
-          \"tool\":3}}\n"
+          \"tool\":4}}\n"
             .to_vec()
     });
     let added = fx.library.add_image(&AddImageRequest {
@@ -2339,7 +2477,7 @@ fn an_app_from_before_images_refuses_a_request_that_brings_one_whole() {
         assert_eq!(error.exit_code(), 5);
         let message = error.to_string();
         assert!(
-            message.contains("the app speaks version 1 of their channel, this tool version 3"),
+            message.contains("the app speaks version 1 of their channel, this tool version 4"),
             "{message}"
         );
         assert!(message.contains("nothing was changed"), "{message}");
@@ -2348,7 +2486,7 @@ fn an_app_from_before_images_refuses_a_request_that_brings_one_whole() {
         assert_eq!(report.nothing_changed, Some(true));
         assert_eq!(
             refusal(Err::<(), _>(error)),
-            Refusal::Protocol { app: 1, tool: 3 }
+            Refusal::Protocol { app: 1, tool: 4 }
         );
     }
     // Both requests said which version they are, and brought the bytes of the file.
@@ -2361,7 +2499,7 @@ fn an_app_from_before_images_refuses_a_request_that_brings_one_whole() {
     use base64::Engine;
     let bytes = base64::engine::general_purpose::STANDARD.encode(std::fs::read(&file).unwrap());
     for line in &lines {
-        assert_eq!(line["version"], 3);
+        assert_eq!(line["version"], 4);
         assert_eq!(line["request"]["images"][0]["data"], bytes.as_str());
     }
     assert_eq!(lines[0]["op"], "add_image");
@@ -2389,7 +2527,7 @@ fn an_app_from_before_pages_refuses_a_page_whole() {
     let before = fx.dump();
     let app = RawApp::open(&fx, |_| {
         b"{\"version\":2,\"answer\":\"refused\",\"refusal\":{\"why\":\"protocol\",\"app\":2,\
-          \"tool\":3}}\n"
+          \"tool\":4}}\n"
             .to_vec()
     });
     let error = fx
@@ -2403,14 +2541,14 @@ fn an_app_from_before_pages_refuses_a_page_whole() {
     assert_eq!(error.exit_code(), 5);
     let message = error.to_string();
     assert!(
-        message.contains("the app speaks version 2 of their channel, this tool version 3"),
+        message.contains("the app speaks version 2 of their channel, this tool version 4"),
         "{message}"
     );
     assert!(message.contains("nothing was changed"), "{message}");
     assert_eq!(error.report().nothing_changed, Some(true));
     assert_eq!(
         refusal(Err::<(), _>(error)),
-        Refusal::Protocol { app: 2, tool: 3 }
+        Refusal::Protocol { app: 2, tool: 4 }
     );
     let lines: Vec<serde_json::Value> = app
         .requests
@@ -2418,7 +2556,7 @@ fn an_app_from_before_pages_refuses_a_page_whole() {
         .map(|line| serde_json::from_str(&line).unwrap())
         .collect();
     assert_eq!(lines.len(), 1);
-    assert_eq!(lines[0]["version"], 3);
+    assert_eq!(lines[0]["version"], 4);
     assert_eq!(lines[0]["op"], "add_page");
     let page = &lines[0]["request"]["prepared"];
     assert_eq!(page["state"], "page");

@@ -1899,7 +1899,8 @@ mod tests {
         let wrong = Failure::from(Error::WrongKind {
             id: 3,
             name: "\u{201c}Orbitarium\u{201d}".into(),
-            is_page: true,
+            kind: innerword_agent::DocumentKind::Page,
+            wanted: None,
             export: false,
         });
         let text = tool_error_text(&wrong, true);
@@ -1910,7 +1911,8 @@ mod tests {
         let text_not_page = Failure::from(Error::WrongKind {
             id: 3,
             name: "\u{201c}Chapter 2\u{201d}".into(),
-            is_page: false,
+            kind: innerword_agent::DocumentKind::Text,
+            wanted: Some(innerword_agent::DocumentKind::Page),
             export: false,
         });
         assert!(!tool_error_text(&text_not_page, true).contains("add_page"));
@@ -1918,7 +1920,8 @@ mod tests {
         let export = Failure::from(Error::WrongKind {
             id: 3,
             name: "\u{201c}Orbitarium\u{201d}".into(),
-            is_page: true,
+            kind: innerword_agent::DocumentKind::Page,
+            wanted: None,
             export: true,
         });
         let text = tool_error_text(&export, false);

@@ -5,6 +5,9 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
+pub use innerword_board::{
+    AddedElement, BoardSummary, Bounds, ElementChange, ListedElement, ListedStyle, Skeleton,
+};
 pub use innerword_store::{DocumentId, DocumentKind, FolderId, SnapshotId};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
@@ -36,7 +39,7 @@ use crate::error::{Occurrence, Refusal};
 /// | Written | Means |
 /// |---|---|
 /// | `12`, `#12`, `id:12` | the id 12 (of a document or a folder, whichever the request asks for) |
-/// | `doc:12`, `document:12`, `page:12` | the document 12 (a page is a document of the library) |
+/// | `doc:12`, `document:12`, `page:12`, `board:12`, `whiteboard:12` | the document 12 (a page and a whiteboard are documents of the library) |
 /// | `folder:3` | the folder 3 |
 /// | anything else | a path |
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -89,6 +92,8 @@ impl Target {
         if let Some(id) = prefixed("doc:")
             .or_else(|| prefixed("document:"))
             .or_else(|| prefixed("page:"))
+            .or_else(|| prefixed("board:"))
+            .or_else(|| prefixed("whiteboard:"))
         {
             return Target::DocumentId(id);
         }
@@ -558,8 +563,9 @@ pub struct DocumentSummary {
     pub updated_at: Time,
     /// When it went to the trash; `None` for a document that is not in the trash.
     pub trashed_at: Option<Time>,
-    /// What the item is: a text (`"text"`), or a page (`"page"`), a web page kept as it
-    /// was made, which cannot be edited.
+    /// What the item is: a text (`"text"`), a page (`"page"`), a web page kept as it
+    /// was made, which cannot be edited, or a whiteboard (`"board"`), a drawing that is
+    /// changed by its elements.
     #[serde(default)]
     pub kind: DocumentKind,
     /// For a page: the address it came from, when one was given (in its normal form).
@@ -571,6 +577,16 @@ impl DocumentSummary {
     /// Whether it is a page.
     pub fn is_page(&self) -> bool {
         self.kind == DocumentKind::Page
+    }
+
+    /// Whether it is a whiteboard.
+    pub fn is_board(&self) -> bool {
+        self.kind == DocumentKind::Board
+    }
+
+    /// How the item is named for the next request: `doc:12`, `page:12` or `board:12`.
+    pub fn reference(&self) -> String {
+        format!("{}:{}", self.kind.reference_prefix(), self.id.0)
     }
 }
 
@@ -887,6 +903,9 @@ pub struct DocumentInfo {
     /// For a page: what it is made of, where it came from, when it was taken.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub page: Option<PageSummary>,
+    /// For a whiteboard: what it holds, counted, and its drawn area.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub board: Option<BoardInfo>,
 }
 
 /// A request for what is known about one folder.
@@ -977,7 +996,7 @@ pub struct ReadRequest {
 }
 
 /// The text of a document, or of one section of it.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct DocumentText {
     /// The document.
     pub document: DocumentSummary,
@@ -999,6 +1018,11 @@ pub struct DocumentText {
     /// JSON, the page's manifest without the text).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub page: Option<PageSummary>,
+    /// For a whiteboard: what it holds, and every element as data. Its `content` is the
+    /// listing of its elements, one per line (the same in Markdown and as plain text; as
+    /// JSON, the stored scene as Excalidraw stores it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub board: Option<BoardInfo>,
 }
 
 /// An image of a document, as a result shows it.
@@ -1720,6 +1744,270 @@ pub struct PageListed {
     pub page: DocumentSummary,
     /// What it is made of, where it came from, when it was taken.
     pub summary: PageSummary,
+    /// Whether it is in the trash.
+    pub trashed: bool,
+}
+
+// ----- whiteboards -----------------------------------------------------------------------
+
+/// A request to make a whiteboard: a drawing in the library, drawn in the app with
+/// Excalidraw, empty or with elements to start with.
+///
+/// The elements are Excalidraw's element skeletons, in Excalidraw's own camelCase
+/// (`{"type":"rectangle","id":"api","x":100,"y":80,"width":200,"height":90,
+/// "label":{"text":"API"}}`); see [`AddToBoardRequest`] for what a skeleton may say. A
+/// skeleton of type `image` names a picture file of this Mac with `path`: it is read in
+/// the process that was asked and travels with the request ([`BoardPicture`]).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CreateBoardRequest {
+    /// Its name. A whiteboard's title is the name it was given and never follows what is
+    /// drawn on it. Without one: "Untitled".
+    pub title: String,
+    /// The folder to make it in. Without it: the top of the library.
+    pub folder: Option<Target>,
+    /// When `folder` is a path that does not exist yet, create it (every missing level)
+    /// instead of failing.
+    pub create_folders: bool,
+    /// Where it goes among the items of the folder. Without it: last.
+    pub placement: Option<Placement>,
+    /// The elements to start with, as skeletons. May be empty.
+    pub elements: Vec<Skeleton>,
+    /// The picture files the `image` skeletons name, as the bytes the library stores.
+    /// Filled by the operation, in the process that was asked, which always reads the
+    /// files again and drops what a caller put here; a caller leaves it empty.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub pictures: Vec<BoardPicture>,
+    /// What a relative `path` of an `image` skeleton is relative to (the folder of the
+    /// file the skeletons came from). Never sent to the app: the files are read before
+    /// the request travels.
+    #[serde(skip)]
+    pub base_dir: Option<PathBuf>,
+    /// Dry run and author.
+    #[serde(flatten)]
+    pub write: WriteOptions,
+}
+
+/// A request to add elements to a whiteboard, on top of what is drawn.
+///
+/// Each element is a skeleton, a JSON object in Excalidraw's own camelCase:
+///
+/// | Type | Needs | May have |
+/// |---|---|---|
+/// | `rectangle`, `ellipse`, `diamond` | `x`, `y` | `width`, `height`, `label` |
+/// | `text` | `x`, `y`, `text` | `fontSize`, `fontFamily`, `textAlign`, `verticalAlign` |
+/// | `arrow` | `x`, `y`, and `points`, or `width`/`height`, or `start`/`end` | `start`, `end` (`{"id": "<element>"}`), `startArrowhead`, `endArrowhead`, `label` |
+/// | `line` | `x`, `y`, and `points` or `width`/`height` | |
+/// | `freedraw` | `x`, `y`, `points` | |
+/// | `frame` | `children` (ids), or `x`, `y`, `width`, `height` | `name` |
+/// | `image` | `x`, `y`, `path` (a picture file of this Mac) | `width`, `height` |
+///
+/// Every type may also have `id` (kept when it is unique on the whiteboard), `angle`,
+/// `strokeColor`, `backgroundColor`, `fillStyle`, `strokeWidth`, `strokeStyle`,
+/// `roughness`, `opacity`, `roundness`, `groupIds`, `link` and `locked` (a picture has no
+/// stroke and no fill). A text is measured, never given a size. An element that would be
+/// invisibly small, a field that is not known and an id named by `start`, `end` or
+/// `children` that is neither on the whiteboard nor in the request are refused, and
+/// nothing is changed. The ids, seeds and nonces that are made are derived from the
+/// request and the whiteboard, never random: a dry run names the ids the real run gives.
+///
+/// The whiteboard as it was is kept as a version first ("Before a drawing by Claude").
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AddToBoardRequest {
+    /// The whiteboard.
+    pub board: Target,
+    /// The elements to add, as skeletons.
+    pub elements: Vec<Skeleton>,
+    /// The picture files the `image` skeletons name, as the bytes the library stores.
+    /// Filled by the operation (see [`CreateBoardRequest::pictures`]).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub pictures: Vec<BoardPicture>,
+    /// What a relative `path` of an `image` skeleton is relative to. Never sent to the
+    /// app.
+    #[serde(skip)]
+    pub base_dir: Option<PathBuf>,
+    /// Dry run and author.
+    #[serde(flatten)]
+    pub write: WriteOptions,
+}
+
+/// A picture file an `image` skeleton names, read and made where the request was asked:
+/// an SVG document as it came, anything else as `innerword_image::prepare` makes it (a
+/// PNG, a JPEG or a GIF; upright, at most 4096 pixels and 16 MB, without a GPS position).
+#[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct BoardPicture {
+    /// The skeleton's `path` as written: what the skeleton finds it by.
+    pub source: String,
+    /// The id of the bytes as the library stores them: 32 hex digits.
+    pub file: String,
+    /// What the bytes are: `image/png`, `image/jpeg`, `image/gif` or `image/svg+xml`.
+    pub mime_type: String,
+    /// Width and height in pixels, upright (for an SVG: the size it declares).
+    pub pixels: (u32, u32),
+    /// Pixels to the inch the file declares; 72 when it says nothing, and for an SVG.
+    pub density: u32,
+    /// Whether the bytes are the file's own: nothing was converted, scaled, turned or
+    /// taken out.
+    pub untouched: bool,
+    /// The bytes as the library stores them; base64 in JSON. Empty in a dry run, and
+    /// once the app's listener stored them.
+    #[serde(with = "base64_bytes")]
+    pub data: Vec<u8>,
+    /// Whether the app's listener stored the bytes (`live::store_page_files`). Set only
+    /// there, after the request was read: it never travels.
+    #[serde(skip)]
+    pub stored: bool,
+}
+
+impl std::fmt::Debug for BoardPicture {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Megabytes of picture are of no use in a log.
+        f.debug_struct("BoardPicture")
+            .field("source", &self.source)
+            .field("file", &self.file)
+            .field("mime_type", &self.mime_type)
+            .field("pixels", &self.pixels)
+            .field("density", &self.density)
+            .field("untouched", &self.untouched)
+            .field("data", &format_args!("{} bytes", self.data.len()))
+            .field("stored", &self.stored)
+            .finish()
+    }
+}
+
+/// A request to change elements of a whiteboard by id.
+///
+/// Each change is a JSON object with the `id` of an element and what changes: `x`, `y`
+/// (where it is) or `dx`, `dy` (how far it moves), `width`, `height`, `angle`, `text` (of
+/// a text, or of the label of a shape or an arrow: a shape without one gets one), the
+/// style fields of a skeleton, `fontSize`, `fontFamily`, `textAlign`, `link` (`null`
+/// removes it), `locked`, `name` (of a frame), `start` and `end` (an arrow bound again),
+/// `points`. What follows by itself does, as when the writer drags: a shape's label and
+/// the bound ends of its arrows move with it, a frame moves what it holds. A picture can
+/// be moved, resized and turned like any element; its file cannot be changed.
+///
+/// The whiteboard as it was is kept as a version first ("Before an edit by Claude").
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct UpdateBoardRequest {
+    /// The whiteboard.
+    pub board: Target,
+    /// The changes, each with the id of its element.
+    pub changes: Vec<ElementChange>,
+    /// Dry run and author.
+    #[serde(flatten)]
+    pub write: WriteOptions,
+}
+
+/// A request to remove elements of a whiteboard by id.
+///
+/// A shape goes with its label, and the arrows bound to it stay, unbound; an arrow goes
+/// with its label; the id of a label removes only the label; a frame goes and what it
+/// holds stays. The whiteboard as it was is kept as a version first ("Before a removal by
+/// Claude"), so nothing is lost for good.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RemoveFromBoardRequest {
+    /// The whiteboard.
+    pub board: Target,
+    /// The ids of the elements to remove.
+    pub ids: Vec<String>,
+    /// Dry run and author.
+    #[serde(flatten)]
+    pub write: WriteOptions,
+}
+
+/// A picture an operation put on a whiteboard, as the file was made.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PictureAdded {
+    /// The id of its element.
+    pub id: String,
+    /// The skeleton's `path` as written.
+    pub source: String,
+    /// What the stored bytes are: `image/png`, `image/jpeg`, `image/gif` or
+    /// `image/svg+xml`.
+    pub mime_type: String,
+    /// Width and height of the picture in pixels.
+    pub pixels: (u32, u32),
+    /// Whether the bytes are the file's own (false: it was converted, made smaller,
+    /// turned upright or had its GPS position taken out).
+    pub untouched: bool,
+    /// How wide it is drawn on the whiteboard.
+    pub width: f64,
+    /// How high it is drawn.
+    pub height: f64,
+}
+
+/// What an operation on a whiteboard did (or, in a dry run, would do).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct BoardChanged {
+    /// The whiteboard as it is after the change (a new one in a dry run has the id 0).
+    pub board: DocumentSummary,
+    /// The elements that were added, in the order of the request, each with the ids of
+    /// what came with it (its label). In a dry run: the ids the real run gives.
+    pub added: Vec<AddedElement>,
+    /// The ids of the elements that were changed, those that followed included (a
+    /// label, the bound end of an arrow, what a frame holds). (Not `changed`, which is
+    /// whether the library was changed.)
+    pub updated: Vec<String>,
+    /// The ids of the elements that were removed, labels included.
+    pub removed: Vec<String>,
+    /// The ids of the arrows that were bound to a removed element and stay, unbound.
+    pub unbound: Vec<String>,
+    /// The pictures that were added, with what was made of their files.
+    #[serde(default)]
+    pub pictures: Vec<PictureAdded>,
+    /// The version kept of the whiteboard as it was before the change.
+    pub version: Option<VersionInfo>,
+    /// What could not be kept as written and is no reason to refuse, one sentence each.
+    pub warnings: Vec<String>,
+    /// About the write itself.
+    #[serde(flatten)]
+    pub written: Written,
+}
+
+/// What a whiteboard holds: its counts and drawn area, and (when read) every element as
+/// data.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct BoardInfo {
+    /// How many elements of each type, how many texts and pictures, its words, its drawn
+    /// area.
+    pub summary: BoardSummary,
+    /// Every element, labels included, in the order they are drawn (bottom first): id,
+    /// type, place, size, text, label, container, ends, points, frame, groups, style,
+    /// link, whether it is locked, and for a picture whether the library has it
+    /// (`"stored"` or `"missing"`). Only in [`DocumentText`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub elements: Option<Vec<ListedElement>>,
+}
+
+/// A request for the whiteboards of the library.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct BoardsRequest {
+    /// Only the whiteboards in this folder (at any depth). Without it: every whiteboard.
+    pub folder: Option<Target>,
+}
+
+/// The whiteboards of the library, live and in the trash, the one updated last first.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct BoardsList {
+    /// The whiteboards.
+    pub boards: Vec<BoardListed>,
+}
+
+/// A whiteboard in a [`BoardsList`].
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct BoardListed {
+    /// The whiteboard.
+    pub board: DocumentSummary,
+    /// How many elements it has, as its listing counts them: a label is part of its
+    /// shape or arrow and not counted on its own.
+    pub elements: u64,
+    /// How many pictures it has.
+    pub pictures: u64,
     /// Whether it is in the trash.
     pub trashed: bool,
 }

@@ -27,6 +27,9 @@ base64 = "0.22"
 # Pages: an HTML file or folder made into the files the library keeps, its check as
 # data, its manifest.
 innerword-page.workspace = true
+# Whiteboards: the stored scene, agents' skeletons made into Excalidraw's elements,
+# changes and removals by id, the listing, the delta.
+innerword-board.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

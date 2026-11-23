@@ -2,6 +2,7 @@
 
 use std::path::PathBuf;
 
+use innerword_store::DocumentKind;
 use serde::{Deserialize, Serialize};
 
 /// What kind of thing a request referred to.
@@ -20,11 +21,13 @@ pub enum ItemKind {
     Reply,
     /// A heading inside a document.
     Heading,
+    /// An element of a whiteboard: a shape, an arrow, a text, a frame, a picture.
+    Element,
 }
 
 impl ItemKind {
     /// The word for it in a message: `"document"`, `"folder"`, `"version"`, `"comment"`,
-    /// `"reply"`, `"heading"`.
+    /// `"reply"`, `"heading"`, `"element"`.
     pub fn name(self) -> &'static str {
         match self {
             ItemKind::Document => "document",
@@ -33,6 +36,7 @@ impl ItemKind {
             ItemKind::Comment => "comment",
             ItemKind::Reply => "reply",
             ItemKind::Heading => "heading",
+            ItemKind::Element => "element",
         }
     }
 }
@@ -77,6 +81,10 @@ pub struct Occurrence {
     /// the text. Naming the image as it reads in Markdown makes it part of the match.
     #[serde(default)]
     pub across_image: bool,
+    /// In a whiteboard: the element the text is on, as `reads (arrow label)`, `title
+    /// (text)` or `backend (frame name)`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub element: Option<String>,
 }
 
 /// The kinds of failure, without their details: what an exit code or a `code` field tells
@@ -102,7 +110,8 @@ pub enum ErrorKind {
     NotUnique,
     /// A permanent deletion was asked for without the field that confirms it.
     ConfirmationRequired,
-    /// The item is in the trash, or is not, and the operation needs the opposite.
+    /// The item is in the trash, or is not, and the operation needs the opposite; or a
+    /// whiteboard is empty, and a PDF of it was asked for.
     WrongState,
     /// There is no library at that place.
     LibraryNotFound,
@@ -116,8 +125,9 @@ pub enum ErrorKind {
     /// for something that cannot be kept (data from a service, an embedded site). Nothing
     /// was saved.
     PageIncomplete,
-    /// A text operation on a page (a page cannot be edited), or a page operation on a
-    /// text.
+    /// A text operation on a page (a page cannot be edited) or on a whiteboard (a
+    /// whiteboard is changed by its elements), a page or whiteboard operation on a text,
+    /// or an export in a format the item does not have.
     WrongKind,
 }
 
@@ -390,19 +400,34 @@ pub enum Error {
         problems: Vec<innerword_page::Problem>,
     },
     /// A text operation on a page (a page is kept as it was saved, and its text cannot
-    /// be changed), an export of a page in a format of a text, or a page operation on a
-    /// text.
-    #[error("{}", wrong_kind_message(.name, *.is_page, *.export))]
+    /// be changed) or on a whiteboard (it is changed by its elements), an export of a
+    /// page in a format of a text or of a whiteboard in any format but PDF, or an
+    /// operation of one kind of item on another (a page or a whiteboard operation on a
+    /// text).
+    #[error("{}", wrong_kind_message(.name, *.kind, *.wanted, *.export))]
     WrongKind {
         /// The item's id.
         id: i64,
         /// Its title, quoted.
         name: String,
-        /// Whether the item is a page (and the operation was one for a text).
-        is_page: bool,
-        /// Whether the operation was an export (of a page as Markdown or DOCX), which
-        /// changes nothing and is answered with the formats a page has.
+        /// What the item is.
+        kind: DocumentKind,
+        /// What the operation needed: `None` for a text (an operation on the text of a
+        /// document, and every export of a text's formats), else a page or a whiteboard.
+        wanted: Option<DocumentKind>,
+        /// Whether the operation was an export (of a page as Markdown or DOCX, of a
+        /// whiteboard as anything but a PDF), which changes nothing and is answered with
+        /// the formats the item has.
         export: bool,
+    },
+    /// A PDF of a whiteboard that holds nothing was asked for: there is nothing to put
+    /// on its page.
+    #[error("{name} is empty: there is nothing to export.")]
+    EmptyBoard {
+        /// The whiteboard's id.
+        id: i64,
+        /// Its title, quoted.
+        name: String,
     },
     /// Something else went wrong, said in words: pages cannot be checked here, the page
     /// could not be checked (no window server, WebKit gone), a PDF could not be made.
@@ -425,7 +450,9 @@ impl Error {
             Error::NoMatch { .. } => ErrorKind::NoMatch,
             Error::NotUnique { .. } => ErrorKind::NotUnique,
             Error::ConfirmationRequired { .. } => ErrorKind::ConfirmationRequired,
-            Error::InTrash { .. } | Error::NotInTrash { .. } => ErrorKind::WrongState,
+            Error::InTrash { .. } | Error::NotInTrash { .. } | Error::EmptyBoard { .. } => {
+                ErrorKind::WrongState
+            }
             Error::LibraryNotFound { .. } => ErrorKind::LibraryNotFound,
             Error::Unreadable { .. } => ErrorKind::Unreadable,
             Error::FileExists { .. } => ErrorKind::FileExists,
@@ -750,19 +777,38 @@ fn page_incomplete_message(name: &str, problems: &[innerword_page::Problem]) -> 
 /// add the formats in their own words (`--format`, the tool's `format`).
 pub const PAGE_IS_NOT_A_TEXT_FILE: &str = "a page is not exported as Markdown or DOCX";
 
-fn wrong_kind_message(name: &str, is_page: bool, export: bool) -> String {
-    if is_page && export {
-        format!(
+/// The words of an export of a whiteboard in any format but PDF, which the front ends
+/// look for to say what to type instead.
+pub const BOARD_IS_PDF_ONLY: &str = "a whiteboard is exported as a PDF only";
+
+fn wrong_kind_message(
+    name: &str,
+    kind: DocumentKind,
+    wanted: Option<DocumentKind>,
+    export: bool,
+) -> String {
+    match (kind, wanted, export) {
+        // Every sentence of a page is as it was before whiteboards: the front ends match
+        // their words.
+        (DocumentKind::Page, _, true) => format!(
             "{name} is a page, and {PAGE_IS_NOT_A_TEXT_FILE}: it is written as a folder of its \
              files (the format html), as a PDF (pdf) or as its text (text)."
-        )
-    } else if is_page {
-        format!(
+        ),
+        (DocumentKind::Board, _, true) => {
+            format!("{name} is a whiteboard, and {BOARD_IS_PDF_ONLY}.")
+        }
+        (DocumentKind::Page, None, false) => format!(
             "{name} is a page: it is kept as it was saved, and its text cannot be changed. To \
              bring a newer copy, add it again with its source address."
-        )
-    } else {
-        format!("{name} is a document, not a page.")
+        ),
+        (DocumentKind::Board, None, false) => format!(
+            "{name} is a whiteboard: it is changed with board add, board update and board \
+             remove."
+        ),
+        (kind, Some(wanted), _) if kind != wanted => {
+            format!("{name} is a {}, not a {}.", kind.noun(), wanted.noun())
+        }
+        (kind, _, _) => format!("{name} is a {}.", kind.noun()),
     }
 }
 

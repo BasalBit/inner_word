@@ -50,8 +50,20 @@ impl Library {
         let index = Index::load(store)?;
         let snapshot = snapshot(store, request.version)?;
         let meta = store.document_meta(snapshot.meta.document_id)?;
-        if meta.kind == innerword_store::DocumentKind::Page {
-            return crate::pages::read_version(store, &index, &meta, &snapshot, request.format);
+        match meta.kind {
+            innerword_store::DocumentKind::Text => {}
+            innerword_store::DocumentKind::Page => {
+                return crate::pages::read_version(store, &index, &meta, &snapshot, request.format);
+            }
+            innerword_store::DocumentKind::Board => {
+                return crate::boards::read_version(
+                    store,
+                    &index,
+                    &meta,
+                    &snapshot,
+                    request.format,
+                );
+            }
         }
         let document = content::parse(&meta, &snapshot.content)?;
         Ok(VersionText {
@@ -80,14 +92,10 @@ pub(crate) fn restore_version(
         let expected = index.document(store, expected)?;
         if expected.id != meta.id {
             return Err(Error::invalid(format!(
-                "the version {} is a version of {} {} ({}), not of {} ({}); nothing was \
-                 restored",
+                "the version {} is a version of the {} {} ({}), not of {} ({}); nothing \
+                 was restored",
                 request.version,
-                if meta.kind == innerword_store::DocumentKind::Page {
-                    "the page"
-                } else {
-                    "the document"
-                },
+                meta.kind.noun(),
                 quoted_excerpt(title_of(&meta)),
                 reference_of(&meta),
                 quoted_excerpt(title_of(&expected)),
@@ -95,8 +103,14 @@ pub(crate) fn restore_version(
             )));
         }
     }
-    if meta.kind == innerword_store::DocumentKind::Page {
-        return crate::pages::restore_version(session, &index, &meta, &snapshot, request);
+    match meta.kind {
+        innerword_store::DocumentKind::Text => {}
+        innerword_store::DocumentKind::Page => {
+            return crate::pages::restore_version(session, &index, &meta, &snapshot, request);
+        }
+        innerword_store::DocumentKind::Board => {
+            return crate::boards::restore_version(session, &index, &meta, &snapshot, request);
+        }
     }
     let loaded = content::load(store, &meta)?;
     let restored = content::parse(&meta, &snapshot.content)?;
@@ -145,10 +159,8 @@ pub(crate) fn restore_version(
     Ok(result)
 }
 
-/// `doc:12`, or `page:12` for a page: how a document is referred to in a sentence.
+/// `doc:12`, `page:12` for a page, `board:12` for a whiteboard: how a document is
+/// referred to in a sentence.
 fn reference_of(meta: &innerword_store::DocumentMeta) -> String {
-    match meta.kind {
-        innerword_store::DocumentKind::Page => format!("page:{}", meta.id),
-        _ => format!("doc:{}", meta.id),
-    }
+    format!("{}:{}", meta.kind.reference_prefix(), meta.id)
 }

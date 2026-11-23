@@ -72,6 +72,10 @@ impl PageChecker for Counting {
     fn print(&self, dir: &Path, out: &Path) -> innerword_agent::Result<()> {
         StaticChecker.print(dir, out)
     }
+
+    fn print_board(&self, dir: &Path, out: &Path) -> innerword_agent::Result<()> {
+        StaticChecker.print_board(dir, out)
+    }
 }
 
 /// A fetcher that notes every address it is asked, and answers as `inner` does.
@@ -771,13 +775,15 @@ fn a_page_is_not_a_text_and_a_text_is_not_a_page() {
         Error::WrongKind {
             id: 3,
             name: "\u{201c}Orbitarium\u{201d}".into(),
-            is_page: true,
+            kind: innerword_store::DocumentKind::Page,
+            wanted: None,
             export: false,
         },
         Error::WrongKind {
             id: 3,
             name: "\u{201c}Orbitarium\u{201d}".into(),
-            is_page: true,
+            kind: innerword_store::DocumentKind::Page,
+            wanted: None,
             export: true,
         },
         Error::PageIncomplete {
@@ -829,6 +835,10 @@ fn an_artifact_made_from_a_type_is_refused_as_one() {
 
         fn print(&self, dir: &Path, out: &Path) -> innerword_agent::Result<()> {
             StaticChecker.print(dir, out)
+        }
+
+        fn print_board(&self, dir: &Path, out: &Path) -> innerword_agent::Result<()> {
+            StaticChecker.print_board(dir, out)
         }
     }
     let library = fx

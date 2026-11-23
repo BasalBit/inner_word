@@ -1,6 +1,7 @@
 //! Who checks a page: a headless WebKit load of its files with the network blocked, which
 //! decides whether it is whole and reads the text it shows (docs/pages-design.md,
-//! sections 3 and 4).
+//! sections 3 and 4). The same checker prints a page and a whiteboard as PDFs
+//! (docs/whiteboard-design.md, section 5).
 //!
 //! WebKit never runs in this crate's process. The `innerword` tool runs itself as a child
 //! (`innerword __page-check <dir>`, [`ProcessChecker`]), so that the MCP server, which is the
@@ -27,6 +28,12 @@ pub trait PageChecker: Send + Sync {
     /// A PDF of a page as WebKit prints it (`innerword export <page> x.pdf`): `dir` was
     /// written by innerword_page::write_served_dir.
     fn print(&self, dir: &Path, out: &Path) -> Result<()>;
+    /// The PDF of a whiteboard (`innerword export <board> x.pdf`): one page exactly the
+    /// size of the drawing and a margin, made by the whiteboard's export page in WebKit.
+    /// `dir` was written by `innerword_board::export_dir::write` (`scene.json` and the
+    /// pictures under `_files/`). [`ProcessChecker`] runs `innerword __board-pdf <dir>
+    /// <out>`; [`StaticChecker`] writes a fixed page of the size Rust estimates.
+    fn print_board(&self, dir: &Path, out: &Path) -> Result<()>;
 }
 
 /// The variable that makes [`ProcessChecker`] answer in its own process with
@@ -41,6 +48,14 @@ pub const CHECK_ARGUMENT: &str = "__page-check";
 /// The argument a child that prints a page is started with: `<program> __page-pdf <dir>
 /// <out.pdf>`.
 pub const PDF_ARGUMENT: &str = "__page-pdf";
+
+/// The argument a child that makes the PDF of a whiteboard is started with: `<program>
+/// __board-pdf <dir> <out.pdf>`, `dir` as `innerword_board::export_dir::write` writes it.
+pub const BOARD_PDF_ARGUMENT: &str = "__board-pdf";
+
+/// When the child that makes the PDF of a whiteboard is killed: 60 seconds (the load of
+/// the export page and its PDF take about a second; the child gives itself 50).
+pub const BOARD_PDF_KILL_MS: u64 = 60_000;
 
 /// Whether this run answers with the fake check: a debug build with
 /// `INNER_WORD_PAGE_CHECK=fake`.
@@ -264,6 +279,31 @@ impl PageChecker for ProcessChecker {
             })
     }
 
+    fn print_board(&self, dir: &Path, out: &Path) -> Result<()> {
+        if fake_check() {
+            return write_board_pdf(dir, out);
+        }
+        const WHAT: &str = "the PDF of the whiteboard could not be made";
+        let program = self.program(WHAT)?;
+        let ran = run(
+            program,
+            &[
+                BOARD_PDF_ARGUMENT.as_ref(),
+                dir.as_os_str(),
+                out.as_os_str(),
+            ],
+            self.limit.min(Duration::from_millis(BOARD_PDF_KILL_MS)),
+            WHAT,
+        )?;
+        if !ran.success {
+            return Err(Error::failed(format!("{WHAT}: {}", why(&ran))));
+        }
+        if !out.is_file() {
+            return Err(Error::failed(format!("{WHAT}: its printer wrote no file")));
+        }
+        Ok(())
+    }
+
     fn print(&self, dir: &Path, out: &Path) -> Result<()> {
         if fake_check() {
             return write_fixed_pdf(out);
@@ -299,6 +339,10 @@ impl PageChecker for StaticChecker {
     fn print(&self, _dir: &Path, out: &Path) -> Result<()> {
         write_fixed_pdf(out)
     }
+
+    fn print_board(&self, dir: &Path, out: &Path) -> Result<()> {
+        write_board_pdf(dir, out)
+    }
 }
 
 fn write_fixed_pdf(out: &Path) -> Result<()> {
@@ -308,14 +352,43 @@ fn write_fixed_pdf(out: &Path) -> Result<()> {
     })
 }
 
+/// What the fake checkers make of a whiteboard: one empty page of the size Rust estimates
+/// for its PDF (`Scene::pdf_size`, the drawing's bounds and the margin), or A4 when the
+/// scene in `dir` cannot be read.
+fn write_board_pdf(dir: &Path, out: &Path) -> Result<()> {
+    let size = std::fs::read_to_string(dir.join(innerword_board::export_dir::SCENE_FILE))
+        .ok()
+        .and_then(|scene| innerword_board::Scene::from_stored(&scene).ok())
+        .and_then(|parsed| {
+            parsed.scene.pdf_size(
+                innerword_board::limits::PDF_PADDING,
+                innerword_board::limits::PDF_MAX_SIDE,
+            )
+        });
+    let bytes = match size {
+        Some((width, height)) => pdf_of_size(width, height),
+        None => fixed_pdf(),
+    };
+    std::fs::write(out, bytes).map_err(|source| Error::Io {
+        path: out.to_path_buf(),
+        source,
+    })
+}
+
 /// A PDF of one empty A4 page: what the fake checkers print.
 pub(crate) fn fixed_pdf() -> Vec<u8> {
+    pdf_of_size(595.28, 841.89)
+}
+
+/// A PDF of one empty page `width` x `height` points.
+fn pdf_of_size(width: f64, height: f64) -> Vec<u8> {
     let objects = [
         "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
         "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
-        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595.28 841.89] /Resources << >> \
-         /Contents 4 0 R >>"
-            .to_string(),
+        format!(
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {width} {height}] /Resources << >> \
+             /Contents 4 0 R >>"
+        ),
         "<< /Length 0 >>\nstream\n\nendstream".to_string(),
     ];
     let mut out = b"%PDF-1.4\n".to_vec();

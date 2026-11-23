@@ -2810,6 +2810,7 @@ name = "innerword-agent"
 version = "0.10.1"
 dependencies = [
  "base64",
+ "innerword-board",
  "innerword-core",
  "innerword-export",
  "innerword-image",
@@ -2839,6 +2840,7 @@ name = "innerword-app"
 version = "0.10.1"
 dependencies = [
  "anyhow",
+ "base64",
  "block",
  "gpui",
  "image",
@@ -2847,6 +2849,8 @@ dependencies = [
  "innerword-assistant",
  "innerword-assistant-quick",
  "innerword-assistant-ui",
+ "innerword-board",
+ "innerword-board-web",
  "innerword-comments",
  "innerword-core",
  "innerword-editor",

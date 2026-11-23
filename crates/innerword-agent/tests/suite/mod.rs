@@ -155,6 +155,24 @@ pub fn claude() -> WriteOptions {
     WriteOptions::by("Claude")
 }
 
+/// Skeletons of whiteboard elements, from their JSON.
+pub fn skeletons(json: &str) -> Vec<innerword_agent::Skeleton> {
+    serde_json::from_str(json).expect("skeletons as JSON")
+}
+
+/// Changes of whiteboard elements, from their JSON.
+pub fn changes(json: &str) -> Vec<innerword_agent::ElementChange> {
+    serde_json::from_str(json).expect("changes as JSON")
+}
+
+/// The whiteboard `seed` and the board tests start from: a rectangle with a label, an
+/// ellipse with a label, and an arrow from the one to the other.
+pub const PLAN: &str = r##"[
+  {"type":"rectangle","id":"api","x":100,"y":80,"width":200,"height":90,"backgroundColor":"#a5d8ff","fillStyle":"solid","label":{"text":"API"}},
+  {"type":"ellipse","id":"db","x":420,"y":80,"width":160,"height":90,"label":{"text":"Postgres"}},
+  {"type":"arrow","id":"reads","x":300,"y":125,"start":{"id":"api"},"end":{"id":"db"},"label":{"text":"reads"}}
+]"##;
+
 impl Fixture {
     /// The data directory.
     pub fn data_dir(&self) -> PathBuf {

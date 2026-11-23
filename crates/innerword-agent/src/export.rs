@@ -44,12 +44,39 @@ fn store_format(format: ExportFormat) -> Option<innerword_export::ExportFormat> 
     }
 }
 
-/// "2 pages were left out: a page is exported on its own, as a folder."
-fn pages_left_out(count: usize) -> String {
-    if count == 1 {
-        "1 page was left out: a page is exported on its own, as a folder.".to_string()
-    } else {
-        format!("{count} pages were left out: a page is exported on its own, as a folder.")
+/// "2 pages were left out: a page is exported on its own, as a folder.", "1 whiteboard
+/// was left out: a whiteboard is exported on its own, as a PDF.", or both.
+fn left_out(pages: usize, boards: usize) -> String {
+    let count = |n: usize, one: &str, many: &str| {
+        if n == 1 {
+            format!("1 {one}")
+        } else {
+            format!("{n} {many}")
+        }
+    };
+    match (pages, boards) {
+        (pages, 0) => format!(
+            "{} left out: a page is exported on its own, as a folder.",
+            if pages == 1 {
+                "1 page was".to_string()
+            } else {
+                format!("{pages} pages were")
+            }
+        ),
+        (0, boards) => format!(
+            "{} left out: a whiteboard is exported on its own, as a PDF.",
+            if boards == 1 {
+                "1 whiteboard was".to_string()
+            } else {
+                format!("{boards} whiteboards were")
+            }
+        ),
+        (pages, boards) => format!(
+            "{} and {} were left out: a page is exported on its own as a folder, and a \
+             whiteboard as a PDF.",
+            count(pages, "page", "pages"),
+            count(boards, "whiteboard", "whiteboards")
+        ),
     }
 }
 
@@ -161,22 +188,29 @@ impl Library {
             Some(target) => Some(index.document(store, target)?),
             None => None,
         };
-        // A page has formats of its own.
-        if let Some(meta) = &named
-            && meta.kind == DocumentKind::Page
-        {
-            let format = crate::pages::export_format(meta, request)?;
-            return crate::pages::export(self, store, &index, meta, request, format, path);
+        // A page and a whiteboard have formats of their own.
+        if let Some(meta) = &named {
+            match meta.kind {
+                DocumentKind::Text => {}
+                DocumentKind::Page => {
+                    let format = crate::pages::export_format(meta, request)?;
+                    return crate::pages::export(self, store, &index, meta, request, format, path);
+                }
+                DocumentKind::Board => {
+                    crate::boards::export_format(meta, request)?;
+                    return crate::boards::export(self, store, &index, meta, request, path);
+                }
+            }
         }
         // `original` is the files a page was added from: a text has none.
         if request.original
             && let Some(meta) = &named
         {
-            return Err(crate::content::is_a_text(meta));
+            return Err(crate::content::not_a(meta, DocumentKind::Page));
         }
         if guessed.is_some_and(ExportFormat::is_for_pages) {
             return Err(match &named {
-                Some(meta) => crate::content::is_a_text(meta),
+                Some(meta) => crate::content::not_a(meta, DocumentKind::Page),
                 None => Error::invalid(
                     "a folder is exported as one file of text (Markdown, DOCX or plain text); \
                      a web page folder and a PDF are made of a page",
@@ -216,18 +250,42 @@ impl Library {
                         }
                     }
                 }
-                let before = metas.len();
-                metas.retain(|meta| meta.kind != DocumentKind::Page);
-                let pages = before - metas.len();
-                if pages > 0 {
-                    warnings.push(pages_left_out(pages));
+                // Pages and whiteboards have formats of their own and are left out.
+                let (mut pages, mut boards) = (0, 0);
+                metas.retain(|meta| match meta.kind {
+                    DocumentKind::Text => true,
+                    DocumentKind::Page => {
+                        pages += 1;
+                        false
+                    }
+                    DocumentKind::Board => {
+                        boards += 1;
+                        false
+                    }
+                });
+                if pages + boards > 0 {
+                    warnings.push(left_out(pages, boards));
                 }
                 if metas.is_empty() {
-                    return Err(Error::invalid(if pages > 0 {
-                        "there is no document in that folder, only pages, so there is nothing \
-                         to export as one file: a page is exported on its own, as a folder"
-                    } else {
-                        "there is no document in that folder, so there is nothing to export"
+                    return Err(Error::invalid(match (pages, boards) {
+                        (0, 0) => {
+                            "there is no document in that folder, so there is nothing to export"
+                        }
+                        (_, 0) => {
+                            "there is no document in that folder, only pages, so there is \
+                             nothing to export as one file: a page is exported on its own, as a \
+                             folder"
+                        }
+                        (0, _) => {
+                            "there is no document in that folder, only whiteboards, so there is \
+                             nothing to export as one file: a whiteboard is exported on its own, \
+                             as a PDF"
+                        }
+                        _ => {
+                            "there is no document in that folder, only pages and whiteboards, so \
+                             there is nothing to export as one file: a page is exported on its \
+                             own as a folder, and a whiteboard as a PDF"
+                        }
                     }));
                 }
                 (

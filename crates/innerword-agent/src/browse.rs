@@ -186,8 +186,12 @@ impl Library {
         let store = &session.store;
         let index = Index::load(store)?;
         let meta = index.document(store, &request.document)?;
-        if meta.kind == innerword_store::DocumentKind::Page {
-            return crate::pages::info(store, &index, &meta);
+        match meta.kind {
+            innerword_store::DocumentKind::Text => {}
+            innerword_store::DocumentKind::Page => return crate::pages::info(store, &index, &meta),
+            innerword_store::DocumentKind::Board => {
+                return crate::boards::info(store, &index, &meta);
+            }
         }
         let loaded = content::load(store, &meta)?;
         let document = &loaded.document;
@@ -208,6 +212,7 @@ impl Library {
             versions: store.snapshots(meta.id)?.len(),
             settings: content::settings_info(document.settings()),
             page: None,
+            board: None,
         })
     }
 

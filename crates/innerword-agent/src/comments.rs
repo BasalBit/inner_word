@@ -107,8 +107,12 @@ impl Library {
         let session = self.reader()?;
         let index = Index::load(&session.store)?;
         let meta = index.document(&session.store, &request.document)?;
-        if meta.kind == innerword_store::DocumentKind::Page {
-            return Ok(crate::pages::comments(&session.store, &index, &meta));
+        match meta.kind {
+            innerword_store::DocumentKind::Text => {}
+            // Neither has comments: an empty list, as for a text without any.
+            innerword_store::DocumentKind::Page | innerword_store::DocumentKind::Board => {
+                return Ok(crate::pages::comments(&session.store, &index, &meta));
+            }
         }
         let loaded = content::load(&session.store, &meta)?;
         let mut threads = thread_infos(&loaded.document);

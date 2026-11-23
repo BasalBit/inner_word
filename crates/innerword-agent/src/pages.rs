@@ -454,10 +454,11 @@ fn store_refused(name: &str, error: StoreError) -> Error {
             ids.len(),
             if ids.len() == 1 { "is" } else { "are" }
         )),
-        StoreError::WrongKind { id, kind, .. } => Error::WrongKind {
+        StoreError::WrongKind { id, kind, saving } => Error::WrongKind {
             id,
             name: name.to_string(),
-            is_page: kind == DocumentKind::Page,
+            kind,
+            wanted: Some(saving),
             export: false,
         },
         other => other.into(),
@@ -500,7 +501,11 @@ pub(crate) fn add_page(session: &mut Session<'_>, request: &AddPageRequest) -> R
                 .document_meta(*page)
                 .map_err(|_| changed_meanwhile("the page"))?;
             let name = quoted_excerpt(title_of(&meta));
-            if meta.kind != DocumentKind::Page
+            let a_page = match meta.kind {
+                DocumentKind::Page => true,
+                DocumentKind::Text | DocumentKind::Board => false,
+            };
+            if !a_page
                 || meta.trashed_at.is_some()
                 || source_url.is_none()
                 || meta.source_url != source_url
@@ -528,7 +533,11 @@ pub(crate) fn add_page(session: &mut Session<'_>, request: &AddPageRequest) -> R
             let Some(url) = &source_url else {
                 return Err(changed_meanwhile(&name));
             };
-            if meta.kind != DocumentKind::Page
+            let a_page = match meta.kind {
+                DocumentKind::Page => true,
+                DocumentKind::Text | DocumentKind::Board => false,
+            };
+            if !a_page
                 || meta.trashed_at.is_none()
                 || meta.source_url.as_ref() != Some(url)
                 || session.store.page_by_source_url(url)?.is_some()
@@ -809,6 +818,7 @@ pub(crate) fn read(
         comments: request.comments.then(Vec::new),
         images: Vec::new(),
         page: Some(summary(meta, &manifest)),
+        board: None,
     })
 }
 
@@ -828,6 +838,7 @@ pub(crate) fn info(store: &Store, index: &Index, meta: &DocumentMeta) -> Result<
         versions: store.snapshots(meta.id)?.len(),
         settings: content::settings_info(&innerword_core::DocumentSettings::default()),
         page: Some(summary(meta, &manifest)),
+        board: None,
     })
 }
 
@@ -1018,7 +1029,7 @@ pub(crate) fn export_format(meta: &DocumentMeta, request: &ExportRequest) -> Res
         },
     };
     match format {
-        ExportFormat::Markdown | ExportFormat::Docx => Err(content::page_is_not_a_text_file(meta)),
+        ExportFormat::Markdown | ExportFormat::Docx => Err(content::not_in_that_format(meta)),
         format => Ok(format),
     }
 }
@@ -1195,7 +1206,7 @@ pub(crate) fn export(
                 exported.warnings.push(missing_sentence(&paths));
             }
         }
-        ExportFormat::Markdown | ExportFormat::Docx => return Err(content::is_a_page(meta)),
+        ExportFormat::Markdown | ExportFormat::Docx => return Err(content::not_a_text(meta)),
     }
     Ok(exported)
 }

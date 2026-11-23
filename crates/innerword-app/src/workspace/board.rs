@@ -2660,6 +2660,26 @@ impl Workspace {
                     window.focus(&focus);
                 }
                 this.open_board_menu(window, cx)
+            }))
+            // Duplicate of the open whiteboard while its page holds more than it
+            // posted: the copy gets the last gesture.
+            .capture_action(cx.listener(|this, _: &innerword_library::Duplicate, _, cx| {
+                let Some(id) = this.open_board_id() else {
+                    return;
+                };
+                if !this.board_holds_more() {
+                    return;
+                }
+                cx.stop_propagation();
+                let collect = this.collect_board(id, cx);
+                let panel = this.panel.clone();
+                cx.spawn(async move |_, cx| {
+                    collect.await;
+                    panel
+                        .update(cx, |panel, cx| panel.duplicate_selected(cx))
+                        .ok();
+                })
+                .detach();
             }));
         root = add::<AddText>(root, cx);
         root = add::<AddRectangle>(root, cx);

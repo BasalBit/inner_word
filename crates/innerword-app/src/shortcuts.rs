@@ -600,17 +600,30 @@ fn whiteboard_key_rows() -> Vec<Shortcut> {
     let place = Place::Board;
     let category: SharedString = BOARD_KEYS_CATEGORY.into();
     let heading: SharedString = place.heading(&category).into();
-    let mut rows: Vec<Shortcut> = innerword_board_web::keys::WHITEBOARD_KEYS
-        .iter()
-        .map(|key| {
-            let typed = KeySequence::parse(key.keys).ok();
+    // One row for each thing a key does (two keys clear the canvas).
+    let mut grouped: Vec<(&'static str, Vec<&'static str>)> = Vec::new();
+    for key in innerword_board_web::keys::WHITEBOARD_KEYS {
+        match grouped.iter_mut().find(|(what, _)| *what == key.what) {
+            Some((_, keys)) => keys.push(key.keys),
+            None => grouped.push((key.what, vec![key.keys])),
+        }
+    }
+    let mut rows: Vec<Shortcut> = grouped
+        .into_iter()
+        .map(|(what, keys)| {
+            let typed = KeySequence::parse(keys[0]).ok();
             let hint = typed.as_ref().and_then(hint_of);
+            let shown: Vec<String> = keys
+                .iter()
+                .filter_map(|keys| KeySequence::parse(keys).ok())
+                .map(|keys| key_text(&keys))
+                .collect();
             Shortcut {
-                title: key.what.into(),
+                title: what.into(),
                 category: category.clone(),
                 place,
                 heading: heading.clone(),
-                keys: hint.as_ref().map(KeyHint::text).unwrap_or_default(),
+                keys: shown.join(" "),
                 all_keys: Vec::new(),
                 default_keys: Vec::new(),
                 changed: false,

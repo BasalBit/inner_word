@@ -132,10 +132,18 @@ fn the_keymap_put_back_from_its_parts_resolves_every_key_as_before(cx: &mut Test
             .cloned()
             .collect::<Vec<_>>();
         let parts = take_apart(cx);
-        assert_eq!(before.len(), menu_only.len() + parts.len());
+        // And after them, the fixed bindings that keep GPUI off the
+        // whiteboard's own keys.
+        let fixed = innerword_app::boards::fixed_key_bindings();
+        assert_eq!(before.len(), menu_only.len() + parts.len() + fixed.len());
         cx.clear_key_bindings();
         assert_eq!(cx.key_bindings().borrow().bindings().len(), 0);
-        cx.bind_keys(menu_only.into_iter().chain(parts.iter().map(put_together)));
+        cx.bind_keys(
+            menu_only
+                .into_iter()
+                .chain(parts.iter().map(put_together))
+                .chain(fixed),
+        );
         before
     });
     let after = cx.update(|cx| describe_keymap(cx));
@@ -478,7 +486,10 @@ fn without_changes_the_keymap_is_the_defaults(cx: &mut TestAppContext) {
             .key_bindings()
             .borrow()
             .bindings()
-            .filter(|binding| !menus::is_menu_key_binding(binding))
+            .filter(|binding| {
+                !menus::is_menu_key_binding(binding)
+                    && !innerword_app::boards::is_fixed_binding(binding)
+            })
             .map(|binding| {
                 (
                     keys_of(binding),
@@ -777,7 +788,10 @@ fn a_key_bound_in_two_spellings_is_changed_as_one(cx: &mut TestAppContext) {
             .key_bindings()
             .borrow()
             .bindings()
-            .filter(|binding| !menus::is_menu_key_binding(binding))
+            .filter(|binding| {
+                !menus::is_menu_key_binding(binding)
+                    && !innerword_app::boards::is_fixed_binding(binding)
+            })
             .map(keys_of)
             .collect();
         let defaults: Vec<String> = innerword_app::keymap::defaults(cx)
@@ -1108,7 +1122,10 @@ fn installed(cx: &mut VisualTestContext) -> Vec<(String, String, Option<String>)
         cx.key_bindings()
             .borrow()
             .bindings()
-            .filter(|binding| !menus::is_menu_key_binding(binding))
+            .filter(|binding| {
+                !menus::is_menu_key_binding(binding)
+                    && !innerword_app::boards::is_fixed_binding(binding)
+            })
             .map(|binding| {
                 (
                     keys_of(binding),
@@ -2171,7 +2188,10 @@ fn the_menu_bar_shows_the_keys_the_user_chose(cx: &mut TestAppContext) {
             );
             let real: Vec<String> = keymap
                 .bindings_for_action(action.as_ref())
-                .filter(|binding| !menus::is_menu_key_binding(binding))
+                .filter(|binding| {
+                !menus::is_menu_key_binding(binding)
+                    && !innerword_app::boards::is_fixed_binding(binding)
+            })
                 .map(keys_of)
                 .collect();
             assert!(real.contains(&keys_of(native)), "{name}: {real:?}");
@@ -3499,7 +3519,17 @@ fn every_key_of_the_keymap_is_a_row_and_an_entry_of_the_file(cx: &mut TestAppCon
             .iter()
             .map(|row| row.targets.len().saturating_sub(1))
             .sum();
-        assert_eq!(fixed, 1, "the / that opens the insert menu");
+        // The / that opens the insert menu, a row for each thing a
+        // whiteboard's own key does, and its tool keys.
+        let board_rows = {
+            let mut whats: Vec<&str> = innerword_board_web::keys::WHITEBOARD_KEYS
+                .iter()
+                .map(|key| key.what)
+                .collect();
+            whats.dedup();
+            whats.len()
+        };
+        assert_eq!(fixed, 1 + board_rows + 1);
         assert_eq!(entries.len(), rows.len() - fixed + sharing);
         // No two rows read the same: a title and a place are one row.
         let mut named: Vec<(String, &str)> = rows

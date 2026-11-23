@@ -1228,6 +1228,32 @@ impl Workspace {
             self.show_toast(Toast::new("Open a document to see its versions"), cx);
             return;
         };
+        // A whiteboard whose page holds more than it posted hands it over
+        // and it is saved first, so the list is up to date.
+        if self.open_board_id() == Some(id)
+            && self.board_holds_more()
+            && !self.modal_layer.read(cx).is_open::<VersionHistory>()
+        {
+            let collect = self.collect_board(id, cx);
+            cx.spawn_in(window, async move |this, cx| {
+                collect.await;
+                this.update_in(cx, |this, window, cx| {
+                    this.show_version_history(id, window, cx)
+                })
+                .ok();
+            })
+            .detach();
+            return;
+        }
+        self.show_version_history(id, window, cx);
+    }
+
+    /// Opens (or closes) the version history of `id`, what is on screen
+    /// saved first.
+    fn show_version_history(&mut self, id: DocumentId, window: &mut Window, cx: &mut Context<Self>) {
+        if self.open_item_id() != Some(id) {
+            return;
+        }
         self.flush(cx);
         let workspace = cx.weak_entity();
         let library = self.library.clone();

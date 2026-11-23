@@ -1347,9 +1347,15 @@ fn the_list_of_shortcuts_has_the_rows_of_pages(cx: &mut TestAppContext) {
     let (_fake, _workspace, _text, _page, vcx) = open_page(cx);
     vcx.update(|_, cx| {
         let rows = innerword_app::shortcuts::collect_shortcuts(cx);
-        // Without the assistant (no engine in this test): 355 rows, eleven
-        // of them about pages; the file has every one of its 410 entries.
-        assert_eq!(rows.len(), 355);
+        // Without the assistant (no engine in this test): 411 rows, eleven
+        // of them about pages; the file has every one of its entries. The
+        // rows of before whiteboards (355), and the whiteboard's: New
+        // whiteboard (Anywhere), the whiteboard's menu, Find, the six Add
+        // commands, Mermaid to drawing and the three of the shape library
+        // ("On a whiteboard"), and 43 fixed rows (what each of the
+        // whiteboard's own keys does, 42, and its tool keys); Reload
+        // whiteboard is Reload page.
+        assert_eq!(rows.len(), 355 + 1 + 1 + 1 + 6 + 1 + 3 + 43);
         let on_a_page: Vec<String> = rows
             .iter()
             .filter(|row| row.place == innerword_app::shortcuts::Place::Page)
@@ -1365,11 +1371,15 @@ fn the_list_of_shortcuts_has_the_rows_of_pages(cx: &mut TestAppContext) {
                 "Show the page's context menu"
             ]
         );
+        // The file: the entries of before (410) and the whiteboard's
+        // commands, each in its key context (the fixed rows are no
+        // entries): New whiteboard, the menu, Find, six Add, Mermaid and
+        // three of the shape library.
         assert_eq!(
             innerword_app::workspace::shortcuts_file_catalogue(cx)
                 .entries()
                 .len(),
-            410
+            410 + 1 + 1 + 1 + 6 + 1 + 3
         );
     });
 }

@@ -1372,3 +1372,13 @@ impl crate::pages::FakePages {
         self.post_board(Message::Status(status));
     }
 }
+
+/// Whether `binding` is one of the fixed bindings that keep GPUI off the
+/// whiteboard's own keys ([`fixed_key_bindings`]): no default, no row of a
+/// command, no entry of the shortcuts file.
+pub fn is_fixed_binding(binding: &KeyBinding) -> bool {
+    binding.action().name() == gpui::Action::name(&gpui::NoAction)
+        && binding
+            .predicate()
+            .is_some_and(|predicate| predicate.to_string() == BOARD_VIEW)
+}

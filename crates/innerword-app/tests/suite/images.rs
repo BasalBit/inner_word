@@ -1474,7 +1474,10 @@ fn the_menu_bar_has_insert_image_and_format_image(cx: &mut TestAppContext) {
             "Link…",
             "Comment",
             "-",
-            "Insert Menu…"
+            "Insert Menu…",
+            // Then a separator and Whiteboard (a submenu: the Add commands).
+            "-",
+            "-"
         ]
     );
     // The actions behind them.

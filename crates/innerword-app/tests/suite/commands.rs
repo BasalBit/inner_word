@@ -491,7 +491,11 @@ fn the_list_of_shortcuts_is_generated_from_the_keymap(cx: &mut TestAppContext) {
         .filter(|(title, ..)| title == "Undo")
         .map(|(_, place, ..)| *place)
         .collect();
-    assert_eq!(undo, [Place::Text, Place::CommentList, Place::TextField]);
+    // (On a whiteboard ⌘Z is the whiteboard's own key: a fixed row.)
+    assert_eq!(
+        undo,
+        [Place::Text, Place::Board, Place::CommentList, Place::TextField]
+    );
     // The library moves with the arrows wherever the keyboard is in it and
     // with letters while nothing is typed there: two rows, told apart.
     let in_library: Vec<(&str, &str)> = placed

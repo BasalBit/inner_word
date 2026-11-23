@@ -220,6 +220,47 @@ struct PreviewBlock {
     muted: bool,
 }
 
+/// The preview of a version of a whiteboard: the listing of its elements,
+/// a line each, muted (its first line, the summary, as a heading).
+fn board_preview(
+    snapshot: innerword_library::SnapshotId,
+    scene: &innerword_board::Scene,
+    document: innerword_library::DocumentId,
+    title: &str,
+) -> Preview {
+    let reference = format!("board:{}", document.0);
+    let listing = scene.listing(&innerword_board::ListingHeader {
+        reference: &reference,
+        title,
+        folder: None,
+    });
+    let lines: Vec<&str> = listing
+        .lines()
+        .map(str::trim_end)
+        .filter(|line| !line.trim().is_empty())
+        .collect();
+    let blocks = lines
+        .iter()
+        .take(PREVIEW_BLOCKS + 1)
+        .enumerate()
+        .map(|(ix, line)| PreviewBlock {
+            text: SharedString::from(line.to_string()),
+            heading: (ix == 0).then_some(3),
+            marker: None,
+            quote: false,
+            code: false,
+            image: false,
+            muted: ix > 0,
+        })
+        .collect();
+    Preview {
+        snapshot,
+        blocks,
+        more: lines.len().saturating_sub(PREVIEW_BLOCKS + 1),
+        error: None,
+    }
+}
+
 /// The preview of a version of a page: "31 files", then its text, a
 /// paragraph a line, muted.
 fn page_preview(
@@ -467,12 +508,29 @@ impl VersionHistory {
         if self.preview.as_ref().map(|preview| preview.snapshot) == Some(snapshot) {
             return;
         }
-        let page = self
+        let kind = self
             .library
             .read(cx)
             .document_meta(self.document)
-            .is_ok_and(|meta| meta.kind == innerword_library::DocumentKind::Page);
+            .map(|meta| meta.kind)
+            .unwrap_or_default();
+        let page = kind == innerword_library::DocumentKind::Page;
+        let title = self.title.clone();
+        let document = self.document;
         self.preview = Some(match self.library.read(cx).snapshot(snapshot) {
+            // A version of a whiteboard: the listing of its elements, muted
+            // (the preview is text, not the drawing).
+            Ok(stored) if kind == innerword_library::DocumentKind::Board => {
+                match innerword_board::Scene::from_stored(&stored.content) {
+                    Ok(parsed) => board_preview(snapshot, &parsed.scene, document, &title),
+                    Err(error) => Preview {
+                        snapshot,
+                        blocks: Vec::new(),
+                        more: 0,
+                        error: Some(error.to_string()),
+                    },
+                }
+            }
             // A version of a page: how many files, then the text the page
             // showed, muted (the preview is text, not the page).
             Ok(stored) if page => match innerword_page::Manifest::from_json(&stored.content) {

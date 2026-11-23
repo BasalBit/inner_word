@@ -175,10 +175,10 @@ impl PickerDelegate for LibrarySearchDelegate {
             .positions(marked)
             .detail(hit.snippet.clone())
             .detail_positions(hit.positions.clone())
-            .icon(if hit.kind == innerword_library::DocumentKind::Page {
-                IconName::Globe
-            } else {
-                IconName::Document
+            .icon(match hit.kind {
+                innerword_library::DocumentKind::Page => IconName::Globe,
+                innerword_library::DocumentKind::Board => IconName::Whiteboard,
+                innerword_library::DocumentKind::Text => IconName::Document,
             })
             .into()
     }

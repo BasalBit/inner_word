@@ -156,17 +156,19 @@ impl PickerDelegate for QuickOpenDelegate {
                 let entry = &self.documents[*index];
                 let folder = entry.folder_label();
                 let title = &self.titles[*index];
-                // A page: the globe, and "Page" beside it.
-                let page = entry.kind == innerword_library::DocumentKind::Page;
-                let icon = if page {
-                    IconName::Globe
-                } else {
-                    IconName::Document
+                // A page: the globe, and "Page" beside it; a whiteboard: its
+                // board, and "Whiteboard".
+                let (icon, kind) = match entry.kind {
+                    innerword_library::DocumentKind::Page => (IconName::Globe, Some("Page")),
+                    innerword_library::DocumentKind::Board => {
+                        (IconName::Whiteboard, Some("Whiteboard"))
+                    }
+                    innerword_library::DocumentKind::Text => (IconName::Document, None),
                 };
-                let detail = match (page, folder.is_empty()) {
-                    (true, true) => "Page".to_string(),
-                    (true, false) => format!("Page \u{b7} {folder}"),
-                    (false, _) => folder,
+                let detail = match (kind, folder.is_empty()) {
+                    (Some(kind), true) => kind.to_string(),
+                    (Some(kind), false) => format!("{kind} \u{b7} {folder}"),
+                    (None, _) => folder,
                 };
                 if detail.is_empty() {
                     PickerItem::new(title.clone())

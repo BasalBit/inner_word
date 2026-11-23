@@ -3,16 +3,17 @@
 //! One function per result type. The text is what `innerword` prints and what a tool call
 //! returns beside the structured data, so it is written for an agent reading it: complete
 //! (every id needed for the next step is in it), compact, plain ASCII punctuation, no
-//! decoration. Ids are written the way they can be passed back: `doc:12`, `folder:3`.
+//! decoration. Ids are written the way they can be passed back: `doc:12`, `page:12`,
+//! `board:12`, `folder:3`.
 
 use innerword_agent::live::{CHANGES_SWITCH, Refusal};
 use innerword_agent::{
-    CommentChanged, CommentList, CommentThreadInfo, ContentChanged, DocumentChanged,
-    DocumentCreated, DocumentInfo, DocumentList, DocumentSummary, DocumentText, ExportFormat,
-    Exported, FindResults, FolderChanged, FolderCreated, FolderInfo, FolderSummary, ImageSummary,
-    LibraryStatus, MatchedAs, PageAdded, PageOutcome, PageSummary, PagesList, SearchResults, Time,
-    TrashEmptied, TrashItem, TrashList, Tree, TreeFolder, VersionInfo, VersionList,
-    VersionRestored, VersionText, Written,
+    BoardChanged, BoardInfo, BoardsList, CommentChanged, CommentList, CommentThreadInfo,
+    ContentChanged, DocumentChanged, DocumentCreated, DocumentInfo, DocumentKind, DocumentList,
+    DocumentSummary, DocumentText, ExportFormat, Exported, FindResults, FolderChanged,
+    FolderCreated, FolderInfo, FolderSummary, ImageSummary, LibraryStatus, MatchedAs, PageAdded,
+    PageOutcome, PageSummary, PagesList, SearchResults, Time, TrashEmptied, TrashItem, TrashList,
+    Tree, TreeFolder, VersionInfo, VersionList, VersionRestored, VersionText, Written,
 };
 
 /// A number with thin grouping: `12,345`.
@@ -44,36 +45,29 @@ pub fn time(time: Time) -> String {
 
 /// How a document is named in a sentence: `doc:12 "Book/Chapter 1"`. One that does not
 /// exist yet (a dry run reports it with the id 0) is `a new document "Book/Chapter 1"`.
-/// A page is `page:12 "Claude Pages/Orbitarium"`.
+/// A page is `page:12 "Claude Pages/Orbitarium"`, a whiteboard `board:12
+/// "Sketches/Architecture"` (`a new whiteboard "..."`).
 pub fn document_name(document: &DocumentSummary) -> String {
-    let (kind, prefix) = if document.is_page() {
-        ("page", "page")
-    } else {
-        ("document", "doc")
-    };
     match document.id.0 {
-        0 => format!("a new {kind} \"{}\"", document.path),
-        id => format!("{prefix}:{id} \"{}\"", document.path),
+        0 => format!("a new {} \"{}\"", document.kind.noun(), document.path),
+        _ => format!("{} \"{}\"", reference(document), document.path),
     }
 }
 
-/// The reference of a document as it can be passed back: `doc:12`, or `page:12` for a
-/// page.
+/// The reference of a document as it can be passed back: `doc:12`, `page:12` for a page,
+/// `board:12` for a whiteboard.
 pub fn reference(document: &DocumentSummary) -> String {
-    if document.is_page() {
-        format!("page:{}", document.id.0)
-    } else {
-        format!("doc:{}", document.id.0)
-    }
+    document.reference()
 }
 
 /// What a line of a list says of a document's size: `1,200 words`, or `page` for a page
-/// (its words are those of the text it shows, which nobody wrote here).
+/// (its words are those of the text it shows, which nobody wrote here), `whiteboard` for a
+/// whiteboard (its words are those of its labels).
 fn size_word(document: &DocumentSummary) -> String {
-    if document.is_page() {
-        "page".to_string()
-    } else {
-        plural(document.words, "word", "words")
+    match document.kind {
+        DocumentKind::Text => plural(document.words, "word", "words"),
+        DocumentKind::Page => "page".to_string(),
+        DocumentKind::Board => "whiteboard".to_string(),
     }
 }
 
@@ -315,6 +309,9 @@ pub fn documents(list: &DocumentList) -> String {
 pub fn info(info: &DocumentInfo) -> String {
     if let Some(page) = &info.page {
         return page_info(info, page);
+    }
+    if let Some(board) = &info.board {
+        return board_info(info, board);
     }
     let document = &info.document;
     let settings = &info.settings;
@@ -579,6 +576,264 @@ pub fn pages(list: &PagesList) -> String {
     out
 }
 
+// ----- whiteboards ---------------------------------------------------------------------------
+
+/// A whiteboard's name in a line about it: `board:12 “Architecture”`, or `a new whiteboard
+/// “Architecture”` in a dry run.
+fn board_name(board: &DocumentSummary) -> String {
+    match board.id.0 {
+        0 => format!("a new whiteboard \u{201c}{}\u{201d}", board.title),
+        id => format!("board:{id} \u{201c}{}\u{201d}", board.title),
+    }
+}
+
+/// A number of a drawing without a needless fraction: `120`, `40.5`.
+fn measure(value: f64) -> String {
+    let rounded = (value * 10.0).round() / 10.0;
+    if rounded.fract() == 0.0 {
+        format!("{rounded:.0}")
+    } else {
+        format!("{rounded}")
+    }
+}
+
+/// `innerword info` for a whiteboard: what it holds and where its drawing is.
+fn board_info(info: &DocumentInfo, board: &BoardInfo) -> String {
+    let document = &info.document;
+    let summary = &board.summary;
+    let mut out = String::new();
+    out.push_str(&format!("{}  {}\n", reference(document), document.path));
+    out.push_str(&format!("title:     {} (its name)\n", document.title));
+    out.push_str(
+        "kind:      a whiteboard: a drawing of shapes, arrows, text, frames and pictures; it \
+         is changed element by element, never as a text\n",
+    );
+    match document.folder_id {
+        Some(folder) => out.push_str(&format!(
+            "folder:    {}  folder:{}\n",
+            document.folder, folder.0
+        )),
+        None => out.push_str("folder:    (the top level of the library)\n"),
+    }
+    let kinds: Vec<String> = summary
+        .by_type
+        .iter()
+        .map(|(kind, n)| format!("{n} {kind}"))
+        .collect();
+    out.push_str(&format!(
+        "holds:     {}{}, {}, {}\n",
+        plural(summary.elements, "element", "elements"),
+        if kinds.is_empty() {
+            String::new()
+        } else {
+            format!(" ({})", kinds.join(", "))
+        },
+        plural(summary.pictures, "picture", "pictures"),
+        plural(summary.words, "word", "words"),
+    ));
+    match &summary.bounds {
+        Some(bounds) => out.push_str(&format!(
+            "drawn:     {} x {} at ({}, {})\n",
+            measure(bounds.width),
+            measure(bounds.height),
+            measure(bounds.x),
+            measure(bounds.y)
+        )),
+        None => out.push_str("drawn:     nothing yet (an empty whiteboard has no PDF)\n"),
+    }
+    out.push_str(&format!("created:   {}\n", time(document.created_at)));
+    out.push_str(&format!("changed:   {}\n", time(document.updated_at)));
+    if let Some(trashed) = document.trashed_at {
+        out.push_str(&format!("trashed:   {} (in the trash)\n", time(trashed)));
+    }
+    out.push_str(&format!("versions:  {}\n", info.versions));
+    out
+}
+
+/// What an operation did to a whiteboard, for [`board_changed`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BoardDid {
+    /// `innerword board new`, `create_board`.
+    Made,
+    /// `innerword board add`, `add_to_board`.
+    Added,
+    /// `innerword board update`, `update_board`.
+    Updated,
+    /// `innerword board remove`, `remove_from_board`.
+    Removed,
+}
+
+/// The ids of a list, at most twenty of them, then how many more.
+fn ids(ids: &[String]) -> String {
+    const SHOWN: usize = 20;
+    let mut out = ids
+        .iter()
+        .take(SHOWN)
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(", ");
+    if ids.len() > SHOWN {
+        out.push_str(&format!(" and {} more", count((ids.len() - SHOWN) as u64)));
+    }
+    out
+}
+
+/// The elements an operation added, as a line says them: `rectangle api (label), arrow
+/// reads, image photo (harbour.heic, converted to JPEG, 2880 x 1920 pixels, drawn 1440 x
+/// 960)`.
+fn added_elements(changed: &BoardChanged) -> String {
+    let said: Vec<String> = changed
+        .added
+        .iter()
+        .map(|element| {
+            let mut said = format!("{} {}", element.r#type, element.id);
+            if let Some(picture) = changed
+                .pictures
+                .iter()
+                .find(|picture| picture.id == element.id)
+            {
+                let file = std::path::Path::new(picture.source.trim())
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| picture.source.clone());
+                let kind = picture
+                    .mime_type
+                    .strip_prefix("image/")
+                    .unwrap_or(&picture.mime_type)
+                    .trim_end_matches("+xml")
+                    .to_ascii_uppercase();
+                let made = if picture.untouched {
+                    format!("{kind} as it came")
+                } else {
+                    format!("converted to {kind}")
+                };
+                said.push_str(&format!(
+                    " ({file}, {made}, {} x {} pixels, drawn {} x {})",
+                    picture.pixels.0,
+                    picture.pixels.1,
+                    measure(picture.width),
+                    measure(picture.height)
+                ));
+            } else if !element.with.is_empty() {
+                said.push_str(" (label)");
+            }
+            said
+        })
+        .collect();
+    said.join(", ")
+}
+
+/// `innerword board new|add|update|remove`: what was done to the whiteboard, the version kept
+/// of it before, and the warnings. `named`: the ids a removal was asked for (the others it
+/// removed are their labels).
+///
+/// ```text
+/// made board:12 “Architecture” in Sketches (empty)
+/// added to board:12 “Architecture”: rectangle api (label), ellipse db (label), arrow reads (label)
+/// kept the drawing as it was: version 34 “Before a drawing by Claude”; "innerword history restore 34" brings it back
+/// changed on board:12 “Architecture”: api, api-label, reads
+/// removed from board:12 “Architecture”: db and 1 label; unbound: reads
+/// ```
+pub fn board_changed(did: BoardDid, changed: &BoardChanged, named: &[String]) -> String {
+    let written = &changed.written;
+    let name = board_name(&changed.board);
+    let mut out = String::new();
+    if did != BoardDid::Made
+        && let Some(nothing) = nothing_to_do(written)
+    {
+        out.push_str(&format!("{nothing}: {name} already is so.\n"));
+        warnings(&changed.warnings, &mut out);
+        return out;
+    }
+    out.push_str(dry_run_prefix(written));
+    match did {
+        BoardDid::Made => {
+            let place = if changed.board.folder.is_empty() {
+                "at the top of the library".to_string()
+            } else {
+                format!("in {}", changed.board.folder)
+            };
+            if changed.added.is_empty() {
+                out.push_str(&format!("made {name} {place} (empty)\n"));
+            } else {
+                out.push_str(&format!(
+                    "made {name} {place}: {}\n",
+                    added_elements(changed)
+                ));
+            }
+        }
+        BoardDid::Added => {
+            out.push_str(&format!("added to {name}: {}\n", added_elements(changed)));
+        }
+        BoardDid::Updated => {
+            out.push_str(&format!("changed on {name}: {}\n", ids(&changed.updated)));
+        }
+        BoardDid::Removed => {
+            let asked: Vec<String> = changed
+                .removed
+                .iter()
+                .filter(|id| named.contains(id))
+                .cloned()
+                .collect();
+            let labels = changed.removed.len() - asked.len();
+            let mut line = format!("removed from {name}: {}", ids(&asked));
+            if labels > 0 {
+                line.push_str(&format!(
+                    " and {}",
+                    plural(labels as u64, "label", "labels")
+                ));
+            }
+            if !changed.unbound.is_empty() {
+                line.push_str(&format!("; unbound (they stay): {}", ids(&changed.unbound)));
+            }
+            out.push_str(&line);
+            out.push('\n');
+        }
+    }
+    if let Some(version) = &changed.version {
+        let label = version
+            .label
+            .as_deref()
+            .map(|label| format!(" \u{201c}{label}\u{201d}"))
+            .unwrap_or_default();
+        out.push_str(&format!(
+            "kept the drawing as it was: version {}{label}; \"innerword history restore {}\" brings it back\n",
+            version.id.0, version.id.0
+        ));
+    }
+    warnings(&changed.warnings, &mut out);
+    written_suffix(written, &mut out);
+    finish(out)
+}
+
+/// `innerword boards`: one line a whiteboard, the trashed ones marked.
+///
+/// ```text
+/// board:12  Sketches/Architecture  5 elements, 0 pictures  changed 2026-11-23T10:04Z
+/// ```
+pub fn boards(list: &BoardsList) -> String {
+    if list.boards.is_empty() {
+        return "No whiteboards.\n".to_string();
+    }
+    let mut out = String::new();
+    for listed in &list.boards {
+        let board = &listed.board;
+        out.push_str(&format!(
+            "{}  {}  {}, {}  changed {}",
+            reference(board),
+            board.path,
+            plural(listed.elements, "element", "elements"),
+            plural(listed.pictures, "picture", "pictures"),
+            time(board.updated_at)
+        ));
+        if listed.trashed {
+            out.push_str("  (in the trash)");
+        }
+        out.push('\n');
+    }
+    out
+}
+
 /// `innerword info` for a folder: the folder and what is directly in it.
 pub fn folder_info(info: &FolderInfo) -> String {
     let mut out = String::new();
@@ -625,8 +880,9 @@ pub fn folder_info(info: &FolderInfo) -> String {
 /// `innerword get`: the text and nothing else, unless the comments were asked for.
 pub fn text(text: &DocumentText) -> String {
     let mut out = text.content.clone();
-    // The text a page showed ends where it ends; printed, it ends with a line.
-    if text.page.is_some() && !out.is_empty() && !out.ends_with('\n') {
+    // The text a page showed ends where it ends, and so may the listing of a whiteboard
+    // or its scene; printed, each ends with a line.
+    if (text.page.is_some() || text.board.is_some()) && !out.is_empty() && !out.ends_with('\n') {
         out.push('\n');
     }
     if let Some(threads) = &text.comments {
@@ -672,6 +928,10 @@ pub fn found(results: &FindResults) -> String {
         out.push_str(&format!("  {}  ", occurrence.occurrence));
         if let Some(heading) = &occurrence.heading {
             out.push_str(&format!("[{heading}] "));
+        }
+        // On a whiteboard: the element the text is on (`reads (arrow label): `).
+        if let Some(element) = &occurrence.element {
+            out.push_str(&format!("{element}: "));
         }
         out.push_str(&one_line(&occurrence.context));
         if occurrence.across_image {
@@ -1106,8 +1366,12 @@ pub fn versions(list: &VersionList) -> String {
 /// `innerword history show`: the text and nothing else.
 pub fn version_text(text: &VersionText) -> String {
     let mut out = text.content.clone();
-    // The text a page showed ends where it ends; printed, it ends with a line.
-    if text.document.is_page() && !out.is_empty() && !out.ends_with('\n') {
+    // The text a page showed ends where it ends, and so may a whiteboard's; printed, it
+    // ends with a line.
+    if (text.document.is_page() || text.document.is_board())
+        && !out.is_empty()
+        && !out.ends_with('\n')
+    {
         out.push('\n');
     }
     out
@@ -1156,6 +1420,18 @@ pub fn exported(exported: &Exported) -> String {
         ExportFormat::Html => "a web page folder",
         ExportFormat::Pdf => "PDF",
     };
+    if let [board] = exported.documents.as_slice()
+        && board.is_board()
+    {
+        out.push_str(&format!(
+            "Exported {} to {} ({format}, {} bytes).\n",
+            document_name(board),
+            exported.path.display(),
+            count(exported.bytes)
+        ));
+        warnings(&exported.warnings, &mut out);
+        return out;
+    }
     let page = match exported.documents.as_slice() {
         [document] if document.is_page() => Some(document),
         _ => None,

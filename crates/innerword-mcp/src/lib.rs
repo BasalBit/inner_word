@@ -56,6 +56,9 @@ its size), leave it out and the image is removed; add_image, or a line ![descrip
 the Markdown you write, brings an image in from a file. \
 A page (page:<id>) is a web page kept whole as it was saved: read_document gives the text it shows, export \
 writes it as a folder or a PDF, add_page adds one from an HTML file or folder, and its text cannot be changed. \
+A whiteboard (board:<id>) is a drawing the user makes in the app with Excalidraw: read_document lists its \
+elements with their ids, create_board makes one, add_to_board draws on it (shapes, arrows, text, frames, pictures \
+from files), update_board and remove_from_board change it by id, and export writes it as a PDF. \
 Start with list_library or search_library. To change part of a text use edit_document (an exact piece of \
 text), replace_section or append_to_document rather than replace_document; to review a text without changing \
 it, use add_comment. Before every change the text as it was is kept as a version (list_versions, \

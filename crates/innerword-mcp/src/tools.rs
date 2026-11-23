@@ -13,27 +13,31 @@
 //!
 //! Three operations are not listed as tools and exist only for the command line, which
 //! asks for them with an explicit flag: `delete_document`, `delete_folder` and
-//! `empty_trash` erase for good. `list_images` and `list_pages` are the command line's too
-//! (`innerword images`, `innerword pages`): they only read, and a model has the same in the
-//! result of `read_document` and `list_library`, so the tools that read stay the ones
-//! they were.
+//! `empty_trash` erase for good. `list_images`, `list_pages` and `list_boards` are the
+//! command line's too (`innerword images`, `innerword pages`, `innerword boards`): they only
+//! read, and a model has the same in the result of `read_document` and `list_library`, so
+//! the tools that read stay the ones they were.
 
 use innerword_agent::{
-    AddCommentRequest, AddImageRequest, AddPageRequest, CommentRequest, CreateDocumentRequest,
-    CreateFolderRequest, DeleteCommentRequest, DeleteDocumentRequest, DeleteFolderRequest,
-    DuplicateDocumentRequest, EditRequest, EmptyTrashRequest, Error, ErrorKind, ErrorReport,
-    ExportRequest, FindRequest, FolderInfoRequest, InfoRequest, InsertRequest, Item, ItemKind,
-    Library, ListCommentsRequest, ListVersionsRequest, MoveDocumentRequest, MoveFolderRequest,
-    PagesRequest, ReadRequest, ReadVersionRequest, RecentRequest, RenameDocumentRequest,
+    AddCommentRequest, AddImageRequest, AddPageRequest, AddToBoardRequest, BoardsRequest,
+    CommentRequest, CreateBoardRequest, CreateDocumentRequest, CreateFolderRequest,
+    DeleteCommentRequest, DeleteDocumentRequest, DeleteFolderRequest, DuplicateDocumentRequest,
+    EditRequest, EmptyTrashRequest, Error, ErrorKind, ErrorReport, ExportRequest, FindRequest,
+    FolderInfoRequest, InfoRequest, InsertRequest, Item, ItemKind, Library, ListCommentsRequest,
+    ListVersionsRequest, MoveDocumentRequest, MoveFolderRequest, PagesRequest, ReadRequest,
+    ReadVersionRequest, RecentRequest, RemoveFromBoardRequest, RenameDocumentRequest,
     RenameFolderRequest, ReplaceDocumentRequest, ReplaceSectionRequest, ReplyRequest,
     RestoreDocumentRequest, RestoreFolderRequest, RestoreVersionRequest, SearchRequest, Target,
-    TrashDocumentRequest, TrashFolderRequest, TreeRequest,
+    TrashDocumentRequest, TrashFolderRequest, TreeRequest, UpdateBoardRequest,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value, json};
 
-use crate::args::{self, boolean, integer, integer_between, one_of, string, string_map};
+use crate::args::{
+    self, array_of_objects, array_of_strings, boolean, integer, integer_between, one_of, string,
+    string_map,
+};
 use crate::protocol::{Effect, ToolDef, ToolHost, ToolOutput};
 use crate::render;
 
@@ -163,6 +167,10 @@ const COMMENT: &str = "The id of the comment thread, as list_comments gives it."
 const FIRST: &str = "Put it before its siblings instead of after them.";
 const BEFORE: &str = "Put it directly before this sibling in the destination folder (id or name).";
 const AFTER: &str = "Put it directly after this sibling in the destination folder (id or name).";
+
+const BOARD: &str = "The whiteboard: its id (12 or \"board:12\") or its path in the library (\"Sketches/Architecture\").";
+const ELEMENTS: &str = "The elements, as Excalidraw's element skeletons (objects in Excalidraw's own camelCase): \
+[{\"type\":\"rectangle\",\"id\":\"api\",\"x\":100,\"y\":80,\"width\":200,\"height\":90,\"label\":{\"text\":\"API\"}}].";
 
 /// The schema of a reading operation.
 fn reads(properties: Vec<(&str, Value)>, required: &[&str]) -> Value {
@@ -482,6 +490,62 @@ fn list_pages(library: &Library, arguments: Map<String, Value>) -> Result<Reply,
     reply(&list, render::pages(&list))
 }
 
+/// Why `pictures` is not taken from a caller.
+pub const PICTURES_REFUSED: &str = "\"pictures\" cannot be given: a picture of a whiteboard is \
+always read by the tool that is asked, from the path its element names";
+
+/// Refuses `pictures` in the arguments of an operation that brings the pictures of a
+/// whiteboard: the schema has no such argument, and this says why to whoever builds the
+/// arguments by hand.
+fn no_pictures(arguments: &Map<String, Value>) -> Result<(), Error> {
+    if arguments.contains_key("pictures") {
+        return Err(Error::invalid(PICTURES_REFUSED));
+    }
+    Ok(())
+}
+
+fn create_board(library: &Library, mut arguments: Map<String, Value>) -> Result<Reply, Error> {
+    no_pictures(&arguments)?;
+    placement(&mut arguments)?;
+    let changed = library.create_board(&request::<CreateBoardRequest>(arguments)?)?;
+    reply(
+        &changed,
+        render::board_changed(render::BoardDid::Made, &changed, &[]),
+    )
+}
+
+fn add_to_board(library: &Library, arguments: Map<String, Value>) -> Result<Reply, Error> {
+    no_pictures(&arguments)?;
+    let changed = library.add_to_board(&request::<AddToBoardRequest>(arguments)?)?;
+    reply(
+        &changed,
+        render::board_changed(render::BoardDid::Added, &changed, &[]),
+    )
+}
+
+fn update_board(library: &Library, arguments: Map<String, Value>) -> Result<Reply, Error> {
+    let changed = library.update_board(&request::<UpdateBoardRequest>(arguments)?)?;
+    reply(
+        &changed,
+        render::board_changed(render::BoardDid::Updated, &changed, &[]),
+    )
+}
+
+fn remove_from_board(library: &Library, arguments: Map<String, Value>) -> Result<Reply, Error> {
+    let request = request::<RemoveFromBoardRequest>(arguments)?;
+    let changed = library.remove_from_board(&request)?;
+    reply(
+        &changed,
+        render::board_changed(render::BoardDid::Removed, &changed, &request.ids),
+    )
+}
+
+/// The whiteboards of the library: `innerword boards`.
+fn list_boards(library: &Library, arguments: Map<String, Value>) -> Result<Reply, Error> {
+    let list = library.boards(&request::<BoardsRequest>(arguments)?)?;
+    reply(&list, render::boards(&list))
+}
+
 fn export(library: &Library, arguments: Map<String, Value>) -> Result<Reply, Error> {
     let exported = library.export(&request::<ExportRequest>(arguments)?)?;
     reply(&exported, render::exported(&exported))
@@ -650,7 +714,9 @@ stores. Give a heading to read only that section. The plain text is what edit_do
 against; an image has no text there (not even its description), so the paragraphs around it read as two \
 paragraphs do. An image is a line ![description](image:<id>) in the Markdown: keep that \
 line in a text you write back and the image stays, with its size; the result lists the images with what the \
-line does not say (width, alignment, the description). You cannot see a picture here: export writes the pictures as files.",
+line does not say (width, alignment, the description). You cannot see a picture here: export writes the pictures as files. \
+A whiteboard (board:<id>) reads as the list of its elements, one per line with id, type, place, size and text (as json: the scene \
+as Excalidraw stores it).",
             reads(
                 vec![
                     ("document", string(DOCUMENT)),
@@ -991,6 +1057,113 @@ takes any number. Paths are absolute. The warnings of the result are for the use
                 &["path"],
             ),
             add_page,
+        ),
+        // ----- whiteboards -----------------------------------------------------------
+        add(
+            "create_board",
+            "Make a whiteboard",
+            "Makes a whiteboard: a drawing in the library that the user draws on in the app with \
+Excalidraw (shapes, arrows, text, frames and pictures on a canvas), empty or with elements to start with, \
+and returns its id (board:<id>). Its title is the name it is given and never follows what is drawn. The \
+elements are as add_to_board takes them. A picture: {\"type\":\"image\",\"x\":640,\"y\":80,\
+\"path\":\"/Users/ada/Pictures/photo.jpg\"}; a whole path of this Mac.",
+            false,
+            writes(
+                place(vec![
+                    ("title", string("The name of the whiteboard.")),
+                    (
+                        "folder",
+                        string("The folder to make it in (id or path). Default: the top level."),
+                    ),
+                    (
+                        "create_folders",
+                        boolean("Create the folder path when it does not exist yet."),
+                    ),
+                    (
+                        "elements",
+                        array_of_objects(&format!(
+                            "{ELEMENTS} Leave it out for an empty whiteboard."
+                        )),
+                    ),
+                ]),
+                &[],
+            ),
+            create_board,
+        ),
+        add(
+            "add_to_board",
+            "Draw on a whiteboard",
+            "Adds elements to a whiteboard, on top of what is drawn, as Excalidraw's element skeletons \
+(objects in Excalidraw's own camelCase). rectangle, ellipse, diamond: x, y, width and height (100 each by \
+default), label ({\"text\":\"API\"}: text inside it, the shape made taller when the text needs it); give a \
+shape room for its label. text: x, y, text, fontSize (20), fontFamily, textAlign; never a width or a \
+height. arrow: x, y, and points ([[0,0],[200,0]]) or width and height, or start and end \
+({\"id\":\"api\"}: an element of the whiteboard or of this call, the arrow joined to its edge); it may \
+have a label. line: x, y, and points or width and height. freedraw: x, y, points. frame: children (ids) or \
+x, y, width, height; name. Every element may have id (kept when it is new to the whiteboard; made \
+otherwise), angle, strokeColor, backgroundColor, fillStyle, strokeWidth, strokeStyle, roughness, opacity, \
+roundness, groupIds, link and locked. A picture: {\"type\":\"image\",\"x\":640,\"y\":80,\
+\"path\":\"/Users/ada/Pictures/photo.jpg\"}; a whole path of this Mac (PNG, JPEG, GIF, HEIC, TIFF, WebP, \
+BMP or SVG), drawn at its own size unless width or height is given; it is read here and the library keeps \
+a copy. read_document lists what is drawn, with the ids. The whiteboard as it was is kept as a version \
+first.",
+            false,
+            writes(
+                vec![
+                    ("board", string(BOARD)),
+                    ("elements", array_of_objects(ELEMENTS)),
+                ],
+                &["board", "elements"],
+            ),
+            add_to_board,
+        ),
+        change(
+            "update_board",
+            "Change elements of a whiteboard",
+            "Moves, resizes, restyles or rewrites elements of a whiteboard by id. Each change is an object \
+with the id of an element and what changes: x, y (where it is) or dx, dy (how far it moves), width, \
+height, angle, text (of a text, or of the label of a shape or an arrow; a shape without one gets one), the \
+style fields add_to_board takes, fontSize, fontFamily, textAlign, link (null removes it), locked, name (of \
+a frame), start and end (an arrow joined again), points. What follows by itself does, as when the user \
+drags: a shape's label and the ends of the arrows joined to it move with it, a frame moves what it holds. \
+A picture moves, resizes and turns like any element; its file cannot be changed (remove it and add \
+another). The whiteboard as it was is kept as a version first.",
+            false,
+            writes(
+                vec![
+                    ("board", string(BOARD)),
+                    (
+                        "changes",
+                        array_of_objects(
+                            "The changes, each with the id of its element: [{\"id\":\"api\",\"dx\":40,\"backgroundColor\":\"#ffc9c9\"}].",
+                        ),
+                    ),
+                ],
+                &["board", "changes"],
+            ),
+            update_board,
+        ),
+        change(
+            "remove_from_board",
+            "Remove elements from a whiteboard",
+            "Removes elements of a whiteboard by id. A shape goes with its label, and the arrows joined to it \
+stay, no longer joined; an arrow goes with its label; the id of a label removes only the label; a frame \
+goes and what it holds stays. The whiteboard as it was is kept as a version first, so nothing is lost for \
+good.",
+            false,
+            writes(
+                vec![
+                    ("board", string(BOARD)),
+                    (
+                        "ids",
+                        array_of_strings(
+                            "The ids of the elements to remove, as read_document lists them.",
+                        ),
+                    ),
+                ],
+                &["board", "ids"],
+            ),
+            remove_from_board,
         ),
         // ----- documents -------------------------------------------------------------
         change(
@@ -1335,7 +1508,7 @@ of a Markdown export are written as files into a folder beside it (\"<name> imag
 text: that is how to look at a picture of a document. A DOCX holds its pictures. A page is written as a \
 folder of web files that opens offline (format html; original: the files it was added from), as a PDF the \
 way WebKit prints it (format pdf, or a path ending in .pdf), or as its text (.txt); a folder exported as one \
-file leaves its pages out.",
+file leaves its pages out. A whiteboard is written as a PDF only: one page the size of the drawing.",
             true,
             args::object(
                 vec![
@@ -1397,6 +1570,20 @@ when its content was taken, its files and size.",
                 &[],
             ),
             list_pages,
+        ),
+        hidden_read(
+            "list_boards",
+            "List the whiteboards",
+            "The whiteboards of the library, live and in the trash: for each its id, path, how many \
+elements and pictures it has, and when it last changed.",
+            reads(
+                vec![(
+                    "folder",
+                    string("Only the whiteboards in this folder, at any depth (id or path)."),
+                )],
+                &[],
+            ),
+            list_boards,
         ),
         hidden(
             "delete_document",
@@ -1669,9 +1856,24 @@ fn tool_error_text(failure: &Failure, writes: bool) -> String {
         ErrorKind::WrongKind if writes && failure.message.contains(" is a page: ") => {
             format!("{} {NEWER_PAGE}", failure.message)
         }
+        ErrorKind::WrongKind if failure.message.contains(innerword_agent::BOARD_IS_PDF_ONLY) => {
+            format!("{} {BOARD_FORMAT}", failure.message)
+        }
+        ErrorKind::WrongKind if failure.message.contains(" is a whiteboard: ") => {
+            format!("{} {BOARD_TOOLS}", failure.message)
+        }
         _ => tool_text(&failure.message),
     }
 }
+
+/// What a model is told besides the message when it asked for a text operation on a
+/// whiteboard: the tools that change one.
+const BOARD_TOOLS: &str = "That is add_to_board, update_board or remove_from_board; \
+read_document lists the elements with their ids.";
+
+/// What a model is told besides the message when it asked for a whiteboard in a format
+/// of a text.
+const BOARD_FORMAT: &str = "That is export with format \"pdf\" (or a path ending in .pdf).";
 
 /// What a model is told besides the message when it asked to change the text of a page:
 /// the tool that brings a newer copy.
@@ -1780,7 +1982,8 @@ mod tests {
                 assert!(!properties.contains_key("dry_run"), "{}", operation.name);
             }
         }
-        assert_eq!(toolbox.tools().len(), 37);
+        // 37 before whiteboards; their four tools change the library.
+        assert_eq!(toolbox.tools().len(), 41);
         // Nothing that erases for good is offered as a tool.
         for tool in toolbox.tools() {
             assert!(
@@ -1802,6 +2005,7 @@ mod tests {
             "empty_trash",
             "list_images",
             "list_pages",
+            "list_boards",
         ] {
             assert!(toolbox.operation_names().contains(&hidden));
             assert!(toolbox.tools().iter().all(|tool| tool.name != hidden));
@@ -1854,6 +2058,220 @@ mod tests {
         assert_eq!(
             export.input_schema["properties"]["original"]["type"],
             "boolean"
+        );
+        // The tools of whiteboards: two add, two change (removing is no erasing: the
+        // version kept first has what was removed), none is the assistant's, and the two
+        // that take elements say how a picture is named.
+        for (name, effect) in [
+            ("create_board", Effect::Add),
+            ("add_to_board", Effect::Add),
+            ("update_board", Effect::Change),
+            ("remove_from_board", Effect::Change),
+        ] {
+            let tool = toolbox
+                .tools()
+                .iter()
+                .find(|tool| tool.name == name)
+                .unwrap_or_else(|| panic!("{name} is a tool"));
+            assert_eq!(tool.effect, effect, "{name}");
+            assert!(!tool.idempotent, "{name}");
+            let properties = tool.input_schema["properties"].as_object().unwrap();
+            assert!(!properties.contains_key("pictures"), "{name}");
+            if matches!(name, "create_board" | "add_to_board") {
+                assert_eq!(properties["elements"]["type"], "array", "{name}");
+                assert_eq!(properties["elements"]["items"]["type"], "object", "{name}");
+                assert!(
+                    tool.description.contains(
+                        "A picture: {\"type\":\"image\",\"x\":640,\"y\":80,\"path\":\"/Users/ada/Pictures/photo.jpg\"}; a whole path of this Mac"
+                    ),
+                    "{name}: {}",
+                    tool.description
+                );
+            }
+        }
+        let remove = &toolbox
+            .tools()
+            .iter()
+            .find(|tool| tool.name == "remove_from_board")
+            .unwrap()
+            .input_schema;
+        assert_eq!(remove["properties"]["ids"]["items"]["type"], "string");
+    }
+
+    /// Pictures that come with the arguments are refused, by the schema for a tool call and
+    /// by the operation for whoever builds the arguments by hand: the bytes a whiteboard
+    /// gets are always those of the file the asked process read.
+    #[test]
+    fn pictures_that_come_with_the_arguments_are_refused() {
+        let (_dir, mut toolbox) = toolbox();
+        for (tool, arguments) in [
+            ("create_board", json!({ "title": "Plan", "pictures": [] })),
+            (
+                "add_to_board",
+                json!({ "board": "Plan", "elements": [], "pictures": [{ "file": "x" }] }),
+            ),
+        ] {
+            let output = toolbox
+                .call(tool, arguments.as_object().unwrap(), None)
+                .unwrap();
+            assert!(output.is_error, "{tool}");
+            assert_eq!(output.structured["error"]["code"], "invalid");
+            assert!(
+                output.text.contains("There is no argument \"pictures\""),
+                "{}",
+                output.text
+            );
+        }
+        let mut by_hand = Map::new();
+        by_hand.insert("pictures".into(), json!([]));
+        let error = create_board(toolbox.library(), by_hand.clone()).unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::Invalid);
+        assert_eq!(error.to_string(), PICTURES_REFUSED);
+        by_hand.insert("board".into(), json!("Plan"));
+        let error = add_to_board(toolbox.library(), by_hand).unwrap_err();
+        assert_eq!(error.to_string(), PICTURES_REFUSED);
+    }
+
+    /// The four tools of whiteboards, their hidden list and the reads of a whiteboard,
+    /// through the operations as the server and the command line run them.
+    #[test]
+    fn a_whiteboard_is_made_drawn_on_changed_and_read_through_the_tools() {
+        let (_dir, toolbox) = toolbox();
+        let run = |name: &str, arguments: Value| {
+            toolbox
+                .run(name, arguments.as_object().unwrap(), Some("Claude"))
+                .unwrap()
+        };
+        let made = run(
+            "create_board",
+            json!({ "title": "Architecture", "folder": "Sketches", "create_folders": true }),
+        )
+        .unwrap();
+        assert_eq!(
+            made.text,
+            "made board:1 \u{201c}Architecture\u{201d} in Sketches (empty)\n"
+        );
+        assert_eq!(made.data["board"]["kind"], "board");
+        // The elements as their text, as a model sends them now and then.
+        let elements = json!([
+            {"type":"rectangle","id":"api","x":100,"y":80,"width":200,"height":90,"label":{"text":"API"}},
+            {"type":"ellipse","id":"db","x":420,"y":80,"width":160,"height":90,"label":{"text":"Postgres"}},
+            {"type":"arrow","id":"reads","x":300,"y":125,"start":{"id":"api"},"end":{"id":"db"}},
+            {"type":"text","id":"title","x":100,"y":20,"text":"System overview","fontSize":28}
+        ]);
+        let added = run(
+            "add_to_board",
+            json!({ "board": "board:1", "elements": elements.to_string() }),
+        )
+        .unwrap();
+        assert!(
+            added.text.starts_with(
+                "added to board:1 \u{201c}Architecture\u{201d}: rectangle api (label), ellipse \
+                 db (label), arrow reads, text title\nkept the drawing as it was: version "
+            ),
+            "{}",
+            added.text
+        );
+        assert!(
+            added
+                .text
+                .contains("\u{201c}Before a drawing by Claude\u{201d}"),
+            "{}",
+            added.text
+        );
+        let listing = run("read_document", json!({ "document": "board:1" })).unwrap();
+        assert!(listing.text.starts_with("board:1 "), "{}", listing.text);
+        assert!(listing.text.contains("\"API\""), "{}", listing.text);
+        assert!(listing.text.ends_with('\n'));
+        assert!(listing.data["board"]["elements"].is_array());
+        let changed = run(
+            "update_board",
+            json!({ "board": 1, "changes": [{ "id": "api", "dx": 40 }] }),
+        )
+        .unwrap();
+        assert!(
+            changed
+                .text
+                .starts_with("changed on board:1 \u{201c}Architecture\u{201d}: api"),
+            "{}",
+            changed.text
+        );
+        assert!(
+            changed.text.contains("Before an edit by Claude"),
+            "{}",
+            changed.text
+        );
+        let dry = run(
+            "remove_from_board",
+            json!({ "board": 1, "ids": "db", "dry_run": true }),
+        )
+        .unwrap();
+        assert!(
+            dry.text.starts_with(
+                "Dry run: nothing was changed. The real run would report:\nremoved from \
+                 board:1 \u{201c}Architecture\u{201d}: db and 1 label; unbound (they stay): reads\n"
+            ),
+            "{}",
+            dry.text
+        );
+        let removed = run("remove_from_board", json!({ "board": 1, "ids": ["db"] })).unwrap();
+        assert!(
+            removed.text.contains("Before a removal by Claude"),
+            "{}",
+            removed.text
+        );
+        let found = run("find_in_document", json!({ "document": 1, "text": "API" })).unwrap();
+        assert!(
+            found.text.contains("api (rectangle label): "),
+            "{}",
+            found.text
+        );
+        let info = run("document_info", json!({ "document": "board:1" })).unwrap();
+        assert!(
+            info.text.starts_with("board:1  Sketches/Architecture\n"),
+            "{}",
+            info.text
+        );
+        assert!(
+            info.text.contains("kind:      a whiteboard"),
+            "{}",
+            info.text
+        );
+        let listed = run("list_boards", json!({})).unwrap();
+        assert!(
+            listed
+                .text
+                .starts_with("board:1  Sketches/Architecture  3 elements, 0 pictures  changed "),
+            "{}",
+            listed.text
+        );
+        let tree = run("list_library", json!({})).unwrap();
+        assert!(
+            tree.text
+                .contains("Architecture  board:1  (whiteboard, changed "),
+            "{}",
+            tree.text
+        );
+        // A text operation on a whiteboard: the tools that change one.
+        let failure = run(
+            "append_to_document",
+            json!({ "document": 1, "markdown": "x" }),
+        )
+        .unwrap_err();
+        assert_eq!(failure.kind, ErrorKind::WrongKind);
+        let said = tool_error_text(&failure, true);
+        assert!(said.ends_with(BOARD_TOOLS), "{said}");
+        // An id the whiteboard does not have.
+        let missing = run(
+            "update_board",
+            json!({ "board": 1, "changes": [{ "id": "nope", "dx": 1 }] }),
+        )
+        .unwrap_err();
+        assert_eq!(missing.kind, ErrorKind::NotFound);
+        assert!(
+            missing.message.starts_with("there is no element "),
+            "{}",
+            missing.message
         );
     }
 
@@ -1930,6 +2348,40 @@ mod tests {
             !text.contains("add_page") && !text.contains("cannot be changed"),
             "{text}"
         );
+    }
+
+    #[test]
+    fn a_model_is_told_the_tools_of_a_whiteboard() {
+        let text_op = Failure::from(Error::WrongKind {
+            id: 4,
+            name: "\u{201c}Plan\u{201d}".into(),
+            kind: innerword_agent::DocumentKind::Board,
+            wanted: None,
+            export: false,
+        });
+        let said = tool_error_text(&text_op, true);
+        assert!(said.ends_with(BOARD_TOOLS), "{said}");
+        assert!(said.contains("add_to_board"), "{said}");
+        let export = Failure::from(Error::WrongKind {
+            id: 4,
+            name: "\u{201c}Plan\u{201d}".into(),
+            kind: innerword_agent::DocumentKind::Board,
+            wanted: None,
+            export: true,
+        });
+        let said = tool_error_text(&export, false);
+        assert!(said.contains(innerword_agent::BOARD_IS_PDF_ONLY), "{said}");
+        assert!(said.ends_with(BOARD_FORMAT), "{said}");
+        // A document where a whiteboard is needed is said as it is.
+        let not_board = Failure::from(Error::WrongKind {
+            id: 2,
+            name: "\u{201c}Chapter 1\u{201d}".into(),
+            kind: innerword_agent::DocumentKind::Text,
+            wanted: Some(innerword_agent::DocumentKind::Board),
+            export: false,
+        });
+        let said = tool_error_text(&not_board, true);
+        assert!(said.ends_with("is a document, not a whiteboard."), "{said}");
     }
 
     #[test]

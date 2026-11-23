@@ -1,16 +1,17 @@
 //! Input schemas of the tools and the check of a call's arguments against them.
 //!
 //! The schemas are JSON Schema 2020-12 and use a small part of it on purpose: an object
-//! with named properties that are strings, integers, booleans, one of a list of words or
-//! an object of strings, some of them required, and nothing else allowed. Every client
-//! and every model handles that part the same way.
+//! with named properties that are strings, integers, booleans, one of a list of words, an
+//! object of strings or an array of objects or of strings, some of them required, and
+//! nothing else allowed. Every client and every model handles that part the same way.
 //!
 //! [`check`] is the server's own validation of that part. What it finds wrong is reported
 //! as a tool failure the model can read and correct (the specification asks for input
 //! validation errors as tool results, not protocol errors), naming every problem at once
 //! and the arguments the tool does take. It is forgiving where the meaning is not in
 //! doubt: a number where a string is expected (a document named by its id), digits in a
-//! string where a number is expected, `"true"` for `true`.
+//! string where a number is expected, `"true"` for `true`, the text of an array where an
+//! array is expected, one item where an array of them is.
 
 use serde_json::{Map, Value, json};
 
@@ -49,6 +50,27 @@ pub fn string_map(description: &str) -> Value {
     json!({
         "type": "object",
         "additionalProperties": { "type": "string" },
+        "description": description,
+    })
+}
+
+/// An array property whose items are objects (a whiteboard's elements as skeletons, its
+/// changes). One object alone is taken as an array of one, and so is the text of an array
+/// (models send one as a string now and then).
+pub fn array_of_objects(description: &str) -> Value {
+    json!({
+        "type": "array",
+        "items": { "type": "object" },
+        "description": description,
+    })
+}
+
+/// An array property whose items are strings (the ids of a whiteboard's elements). One
+/// string alone is taken as an array of one, and so is the text of an array.
+pub fn array_of_strings(description: &str) -> Value {
+    json!({
+        "type": "array",
+        "items": { "type": "string" },
         "description": description,
     })
 }
@@ -248,8 +270,53 @@ fn coerce(property: &Value, value: &Value) -> Result<Value, String> {
             Value::String(word) if word == "false" => Ok(json!(false)),
             _ => Err("true or false".into()),
         },
+        Some("array") => {
+            let items = property
+                .get("items")
+                .and_then(|items| items.get("type"))
+                .and_then(Value::as_str);
+            array(items, value)
+        }
         _ => Ok(value.clone()),
     }
+}
+
+/// `value` as an array whose items are of the type `items` names (`"object"` or
+/// `"string"`), or what was expected instead. The text of an array is read as the array
+/// (a model sends one so now and then), and one item alone is an array of one.
+fn array(items: Option<&str>, value: &Value) -> Result<Value, String> {
+    let expected = match items {
+        Some("object") => "an array of objects",
+        Some("string") => "an array of strings",
+        _ => "an array",
+    };
+    let value = match value {
+        Value::String(text) => match serde_json::from_str::<Value>(text.trim()) {
+            Ok(parsed @ Value::Array(_)) => parsed,
+            Ok(parsed @ Value::Object(_)) if items == Some("object") => parsed,
+            // A string that is no array is the one string of an array of strings.
+            _ if items == Some("string") => json!([text]),
+            _ => return Err(expected.into()),
+        },
+        other => other.clone(),
+    };
+    let list = match value {
+        Value::Array(list) => list,
+        one @ Value::Object(_) if items == Some("object") => vec![one],
+        _ => return Err(expected.into()),
+    };
+    let mut out = Vec::with_capacity(list.len());
+    for item in list {
+        match (items, item) {
+            (Some("object"), item @ Value::Object(_)) => out.push(item),
+            // An id written as a number is the same id.
+            (Some("string"), Value::Number(number)) => out.push(json!(number.to_string())),
+            (Some("string"), item @ Value::String(_)) => out.push(item),
+            (Some("object" | "string"), _) => return Err(expected.into()),
+            (_, item) => out.push(item),
+        }
+    }
+    Ok(Value::Array(out))
 }
 
 fn quoted_list(words: &[&str]) -> String {
@@ -401,6 +468,62 @@ mod tests {
                 error.contains("\"externals\" must be an object whose values are strings."),
                 "{error}"
             );
+        }
+    }
+
+    #[test]
+    fn an_array_is_taken_as_an_array_as_its_text_and_as_one_item() {
+        let schema = object(
+            vec![
+                ("elements", array_of_objects("The elements.")),
+                ("ids", array_of_strings("The ids.")),
+            ],
+            &["elements"],
+        );
+        assert_eq!(schema["properties"]["elements"]["type"], "array");
+        assert_eq!(schema["properties"]["elements"]["items"]["type"], "object");
+        assert_eq!(schema["properties"]["ids"]["items"]["type"], "string");
+        let taken = |given: Value| check(&schema, &arguments(given)).unwrap().into_map();
+        let elements = json!([{ "type": "rectangle", "x": 1, "y": 2 }]);
+        assert_eq!(taken(json!({ "elements": elements }))["elements"], elements);
+        // The text of an array, as a model sends one now and then.
+        let text = elements.to_string();
+        assert_eq!(taken(json!({ "elements": text }))["elements"], elements);
+        // One element alone.
+        assert_eq!(
+            taken(json!({ "elements": elements[0] }))["elements"],
+            elements
+        );
+        // Ids: an array, its text, one id, an id written as a number.
+        for (given, read) in [
+            (json!(["api", "db"]), json!(["api", "db"])),
+            (json!("[\"api\", \"db\"]"), json!(["api", "db"])),
+            (json!("api"), json!(["api"])),
+            (json!([12, "db"]), json!(["12", "db"])),
+        ] {
+            assert_eq!(taken(json!({ "elements": [], "ids": given }))["ids"], read);
+        }
+        for (wrong, said) in [
+            (
+                json!({ "elements": [1, 2] }),
+                "\"elements\" must be an array of objects.",
+            ),
+            (
+                json!({ "elements": "rectangle" }),
+                "\"elements\" must be an array of objects.",
+            ),
+            (
+                json!({ "elements": 3 }),
+                "\"elements\" must be an array of objects.",
+            ),
+            (
+                json!({ "elements": [], "ids": [{ "id": "a" }] }),
+                "\"ids\" must be an array of strings.",
+            ),
+        ] {
+            let error = check(&schema, &arguments(wrong)).unwrap_err();
+            assert!(error.contains(said), "{error}");
+            assert!(error.contains("elements (array, required)"), "{error}");
         }
     }
 }

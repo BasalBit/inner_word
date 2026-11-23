@@ -51,6 +51,9 @@ fn the_lists_are_the_servers_own_and_every_tool_is_on_exactly_one() {
             "resolve_",
             "reopen_",
             "delete_",
+            // A whiteboard's elements are changed and removed by id.
+            "update_",
+            "remove_",
             "export",
         ]
         .iter()

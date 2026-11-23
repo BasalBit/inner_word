@@ -385,10 +385,22 @@ mod tests {
         assert!(denied.contains(&"mcp__inner-word__add_image"));
         // And one that adds a page from a folder of the Mac.
         assert!(denied.contains(&"mcp__inner-word__add_page"));
+        // And the four that make and change a whiteboard.
+        for tool in [
+            "create_board",
+            "add_to_board",
+            "update_board",
+            "remove_from_board",
+        ] {
+            assert!(
+                denied.contains(&format!("mcp__inner-word__{tool}").as_str()),
+                "{tool}"
+            );
+        }
         // Every tool of the server is on exactly one of the two lists: the twelve that
-        // only read, and the others.
+        // only read, and the others (41 since whiteboards, 37 before).
         assert_eq!(allowed.len(), 12);
-        assert_eq!(allowed.len() + denied.len(), 37);
+        assert_eq!(allowed.len() + denied.len(), 41);
         assert!(allowed.iter().all(|tool| !denied.contains(tool)));
         // The built-in tools stay off with the server there.
         assert_eq!(value_after(&args, "--tools"), Some(""));

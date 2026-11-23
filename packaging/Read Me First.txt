@@ -366,6 +366,9 @@ updates and sends no crash reports. It reaches the network only here:
   that opens it.
 - A page shown in Inner Word has the network blocked: it shows what was
   stored when it was added, and nothing else.
+- A whiteboard is drawn with Excalidraw, which is inside the app, with the
+  network blocked as for a page: its fonts, its shape library and Mermaid to
+  drawing work offline, and nothing of a drawing leaves your Mac.
 - Spelling is your Mac's own spell checker, on your Mac.
 
 
@@ -399,6 +402,9 @@ Inner Word is open source, under the MIT License. Its source code is at
 The file LICENSE beside this one is the license. THIRD-PARTY-LICENSES.txt
 lists the code of others that is built into the app and the tool, each with
 its license. Both are inside the app too, in Contents/Resources.
+THIRD-PARTY-LICENSES-WHITEBOARD.txt lists what the whiteboard's editor,
+Excalidraw, is made of (JavaScript and fonts), each with its license; inside
+the app it is Contents/Resources/Whiteboard/NOTICES.txt.
 
 
 Report a problem

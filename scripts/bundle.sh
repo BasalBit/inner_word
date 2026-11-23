@@ -28,6 +28,13 @@
 # The second is made from about.toml and about.hbs by cargo-about and records the sha256 of
 # the Cargo.lock it was made from; the script refuses to bundle when Cargo.lock is another.
 #
+# The whiteboard's editor (Excalidraw, built into crates/innerword-board-web/dist, which is
+# committed) goes into Contents/Resources/Whiteboard, one copy for both executables; its
+# licenses (dist/NOTICES.txt) are there and on the disk image as
+# THIRD-PARTY-LICENSES-WHITEBOARD.txt. Where node is, dist/ must be what web/ builds (node
+# build.mjs --check). Both executables are built with INNER_WORD_BUNDLED=1, so that they
+# hold no path of this machine and look for the whiteboard's files only in their bundle.
+#
 # The script is non-interactive and stops at the first failing step.
 
 set -euo pipefail
@@ -50,6 +57,11 @@ LICENSE_FILE="$ROOT/LICENSE"
 NOTICES="$ROOT/THIRD-PARTY-LICENSES.txt"
 NOTICES_COMMAND="scripts/bundle.sh --third-party-licenses"
 PLISTBUDDY=/usr/libexec/PlistBuddy
+# The whiteboard's editor: its built folder, and where it goes in the bundle.
+BOARD_WEB="$ROOT/crates/innerword-board-web"
+BOARD_DIST="$BOARD_WEB/dist"
+BOARD_FOLDER="Whiteboard"
+BOARD_NOTICES_ON_IMAGE="THIRD-PARTY-LICENSES-WHITEBOARD.txt"
 
 UNIVERSAL=0
 SMOKE=1
@@ -59,7 +71,7 @@ for arg in "$@"; do
         --universal) UNIVERSAL=1 ;;
         --no-smoke-test) SMOKE=0 ;;
         --third-party-licenses) NOTICES_ONLY=1 ;;
-        -h|--help) sed -n '2,32p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help) sed -n '2,39p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "bundle: unknown argument: $arg (try --help)" >&2; exit 2 ;;
     esac
 done
@@ -165,6 +177,33 @@ if [[ $NOTICES_ONLY -eq 1 ]]; then
 fi
 check_notices
 
+# ---------------------------------------------------------------- the whiteboard's bundle
+# check_board_folder <folder> <where>: the four files the app and the tool read first are
+# there, and every file MANIFEST.json lists (and no other, but the manifest itself).
+check_board_folder() {
+    local folder="$1" where="$2" f listed present
+    for f in index.html export.html MANIFEST.json NOTICES.txt; do
+        [[ -f "$folder/$f" ]] || die "$f of the whiteboard's editor is missing from $where"
+    done
+    listed="$(grep -o '"path": *"[^"]*"' "$folder/MANIFEST.json" | wc -l | tr -d ' ')"
+    present="$(cd "$folder" && find . -type f ! -name MANIFEST.json | wc -l | tr -d ' ')"
+    [[ "$listed" -gt 0 && "$listed" == "$present" ]] \
+        || die "the whiteboard's editor in $where has $present files, its MANIFEST.json lists $listed"
+}
+check_board_folder "$BOARD_DIST" "crates/innerword-board-web/dist"
+if command -v node >/dev/null; then
+    if [[ -d "$BOARD_WEB/web/node_modules" ]]; then
+        step "Checking that the whiteboard's dist/ is what its sources build"
+        (cd "$BOARD_WEB/web" && node build.mjs --check) \
+            || die "crates/innerword-board-web/dist is not what web/ builds: run node build.mjs there (web/UPGRADING.md) and commit dist/"
+    else
+        echo "the whiteboard's build check was skipped: its packages are not installed (cd crates/innerword-board-web/web && npm ci --ignore-scripts --no-audit --no-fund)"
+    fi
+else
+    echo "the whiteboard's build check was skipped: node is not on the PATH"
+fi
+echo "whiteboard's editor: $(grep -o '"path": *"[^"]*"' "$BOARD_DIST/MANIFEST.json" | wc -l | tr -d ' ') files, $(du -sh "$BOARD_DIST" | awk '{print $1}')"
+
 # ---------------------------------------------------------------- version and targets
 VERSION="$(cargo pkgid -p "$CRATE" | sed -E 's/.*[#@]//')"
 [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+ ]] || die "could not read the version of $CRATE (got '$VERSION')"
@@ -188,7 +227,9 @@ DMG="$DIST/Inner-Word-$VERSION-$ARCH_LABEL.dmg"
 echo "Inner Word $VERSION, $ARCH_LABEL, minimum macOS $MIN_MACOS"
 
 # ---------------------------------------------------------------- build
-# Both executables, each for every architecture asked for.
+# Both executables, each for every architecture asked for. INNER_WORD_BUNDLED: they compile
+# no path of this machine in, and find the whiteboard's editor only in their bundle.
+export INNER_WORD_BUNDLED=1
 BINARY="$WORK/$BIN_NAME"
 TOOL="$WORK/$TOOL_NAME"
 if [[ $UNIVERSAL -eq 1 ]]; then
@@ -254,6 +295,11 @@ chmod 755 "$STAGE_APP/Contents/MacOS/$BIN_NAME" "$STAGE_APP/Contents/MacOS/$TOOL
 cp "$ICNS" "$STAGE_APP/Contents/Resources/InnerWord.icns"
 cp "$LICENSE_FILE" "$STAGE_APP/Contents/Resources/LICENSE"
 cp "$NOTICES" "$STAGE_APP/Contents/Resources/THIRD-PARTY-LICENSES.txt"
+# The whiteboard's editor, once for both executables (sealed by the bundle's signature).
+ditto "$BOARD_DIST" "$STAGE_APP/Contents/Resources/$BOARD_FOLDER"
+diff -rq "$BOARD_DIST" "$STAGE_APP/Contents/Resources/$BOARD_FOLDER" >/dev/null \
+    || die "the whiteboard's editor was not copied whole into the app"
+check_board_folder "$STAGE_APP/Contents/Resources/$BOARD_FOLDER" "the app"
 cp "$PLIST_SRC" "$STAGE_APP/Contents/Info.plist"
 printf 'APPL????' > "$STAGE_APP/Contents/PkgInfo"
 "$PLISTBUDDY" -c "Set :CFBundleShortVersionString $VERSION" "$STAGE_APP/Contents/Info.plist"
@@ -497,8 +543,45 @@ if [[ $SMOKE -eq 1 ]]; then
     wait_for_app "$KEYS_LOG"
     grep -qF -- 'keys=[changed=1]' "$KEYS_LOG" \
         || die "the changed keyboard shortcut was not there at the next launch"
-    unset INNER_WORD_DATA_DIR
     echo "smoke test passed: a key changed in the list is stored with the library and kept"
+
+    # A whiteboard, while the bundled app is open: the bundled tool makes one and draws on
+    # it (the app carries both out), reads it back and exports it as a PDF, which a child
+    # of the bundled tool makes in WebKit from the editor in Contents/Resources/Whiteboard.
+    step "Smoke test: a whiteboard through the bundled tool, the app open"
+    BOARD_LOG="$WORK/board-app.log"
+    # (The switch was turned off by the first run on this library: on again.)
+    INNER_WORD_AUTOMATION="wait:1500; agents:on; log:ready for a whiteboard; agents:2:180000; wait:300; state; quit" \
+        "$APP/Contents/MacOS/$BIN_NAME" >"$BOARD_LOG" 2>&1 &
+    APP_PID=$!
+    TOOL_LOG_SAVED="$TOOL_LOG"
+    TOOL_LOG="$BOARD_LOG"
+    wait_for_log 'ready for a whiteboard' "it was ready for a whiteboard"
+    run_tool 0 board new "Smoke Board" --author Smoke
+    sed 's/^/    /' "$TOOL_OUT"
+    tool_said "made board:"
+    SMOKE_BOARD="$(sed -n -E 's/.*made (board:[0-9]+).*/\1/p' "$TOOL_OUT" | head -1)"
+    [[ -n "$SMOKE_BOARD" ]] || die "the tool did not say which whiteboard it made"
+    run_tool 0 board add "$SMOKE_BOARD" --author Smoke \
+        --content '[{"type":"rectangle","id":"box","x":0,"y":0,"width":260,"height":110,"label":{"text":"Smoke label"}}]'
+    sed 's/^/    /' "$TOOL_OUT"
+    tool_said "added to $SMOKE_BOARD"
+    run_tool 0 get "$SMOKE_BOARD"
+    tool_said 'label "Smoke label"'
+    SMOKE_PDF="$WORK/smoke-board.pdf"
+    run_tool 0 export "$SMOKE_BOARD" "$SMOKE_PDF"
+    sed 's/^/    /' "$TOOL_OUT"
+    # The PDF read back with PDFKit: one page, whose text has the label.
+    PDF_SAYS="$(osascript -l JavaScript -e 'function run(argv) { ObjC.import("PDFKit"); const d = $.PDFDocument.alloc.initWithURL($.NSURL.fileURLWithPath(argv[0])); if (!d || d.isNil()) return "unreadable"; return d.pageCount + " page(s): " + d.string.js; }' "$SMOKE_PDF")"
+    echo "    the PDF: ${PDF_SAYS//$'\n'/ }"
+    [[ "$PDF_SAYS" == "1 page(s): "*"Smoke label"* ]] \
+        || die "the whiteboard's PDF is not one page with the label ($PDF_SAYS)"
+    wait_for_app "$BOARD_LOG"
+    grep -q 'live=\[channel=open switch=on waiting=0 changes=2' "$BOARD_LOG" \
+        || die "the app did not carry out the two changes to the whiteboard"
+    TOOL_LOG="$TOOL_LOG_SAVED"
+    unset INNER_WORD_DATA_DIR
+    echo "smoke test passed: a whiteboard made, drawn on, read and exported as a PDF by the bundled tool"
 else
     step "Smoke test skipped (--no-smoke-test)"
 fi
@@ -512,6 +595,7 @@ ln -s /Applications "$DMG_STAGE/Applications"
 cp "$README" "$DMG_STAGE/Read Me First.txt"
 cp "$LICENSE_FILE" "$DMG_STAGE/LICENSE"
 cp "$NOTICES" "$DMG_STAGE/THIRD-PARTY-LICENSES.txt"
+cp "$BOARD_DIST/NOTICES.txt" "$DMG_STAGE/$BOARD_NOTICES_ON_IMAGE"
 rm -f "$DMG"
 # ULMO (lzma) needs macOS 10.15 to mount, which is also the app's minimum.
 hdiutil create -volname "$APP_NAME" -srcfolder "$DMG_STAGE" -fs HFS+ -format ULMO -ov -quiet "$DMG"
@@ -529,6 +613,10 @@ for f in LICENSE THIRD-PARTY-LICENSES.txt; do
     [[ -f "$MOUNT_POINT/$f" ]] || die "$f is missing from the disk image"
     [[ -f "$MOUNT_POINT/$APP_NAME.app/Contents/Resources/$f" ]] || die "$f is missing from Contents/Resources of the app in the disk image"
 done
+[[ -f "$MOUNT_POINT/$BOARD_NOTICES_ON_IMAGE" ]] || die "$BOARD_NOTICES_ON_IMAGE is missing from the disk image"
+cmp -s "$MOUNT_POINT/$BOARD_NOTICES_ON_IMAGE" "$MOUNT_POINT/$APP_NAME.app/Contents/Resources/$BOARD_FOLDER/NOTICES.txt" \
+    || die "$BOARD_NOTICES_ON_IMAGE on the disk image is not the NOTICES.txt of the whiteboard's editor in the app"
+check_board_folder "$MOUNT_POINT/$APP_NAME.app/Contents/Resources/$BOARD_FOLDER" "the app on the disk image"
 [[ "$(readlink "$MOUNT_POINT/Applications")" == "/Applications" ]] || die "the Applications link is missing from the disk image"
 codesign --verify --deep --strict "$MOUNT_POINT/$APP_NAME.app" || die "the app inside the disk image fails signature verification"
 codesign --verify --strict "$MOUNT_POINT/$APP_NAME.app/Contents/MacOS/$TOOL_NAME" || die "the $TOOL_NAME tool inside the disk image fails signature verification"
@@ -543,6 +631,7 @@ echo "disk image contents and signature verified"
 step "Done"
 echo "app:     $APP ($(du -sh "$APP" | awk '{print $1}'))"
 echo "tool:    $APP/Contents/MacOS/$TOOL_NAME ($(du -h "$APP/Contents/MacOS/$TOOL_NAME" | awk '{print $1}'))"
+echo "editor:  $APP/Contents/Resources/$BOARD_FOLDER ($(du -sh "$APP/Contents/Resources/$BOARD_FOLDER" | awk '{print $1}'))"
 echo "dmg:     $DMG"
 echo "size:    $(stat -f %z "$DMG") bytes ($(du -h "$DMG" | awk '{print $1}'))"
 echo "sha256:  $(shasum -a 256 "$DMG" | awk '{print $1}')"

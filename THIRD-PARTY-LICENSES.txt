@@ -1,5 +1,5 @@
 Third-party licenses of Inner Word
-Generated from Cargo.lock sha256 7ea1a651a547e555be7302488007bd8195b8794737591a572f116475184d3cb4
+Generated from Cargo.lock sha256 77706409a7f844fd485c6b49b3b5d3666ead9102e7cd6bfa9c672a222a44bcd9
 by: scripts/bundle.sh --third-party-licenses (cargo about generate --locked --fail --workspace about.hbs, with about.toml)
 Do not edit by hand. scripts/bundle.sh refuses to bundle once Cargo.lock has changed.
 
@@ -12,6 +12,10 @@ Also compiled in, and not a crate:
 
 - SQLite, through libsqlite3-sys with its "bundled" feature. SQLite is in the public
   domain (https://www.sqlite.org/copyright.html).
+
+The whiteboard's editor, Excalidraw, and its fonts are JavaScript and font files, not
+crates: their licenses are in Contents/Resources/Whiteboard/NOTICES.txt (on the disk
+image: THIRD-PARTY-LICENSES-WHITEBOARD.txt).
 
 Where to find a source:
 

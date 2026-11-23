@@ -2544,7 +2544,9 @@ pub(super) fn the_pdf_is_the_screen(report: &mut Report, rules: &Path) {
 /// test's own, made with a unique name: WebKit reads and writes the pasteboard in the UI
 /// process (this one), through `PlatformPasteboard`, which asks AppKit for it by name, so a
 /// paste: and a copy: of the view go to that pasteboard and the user's is never touched.
-/// Dropping it puts AppKit's own methods back and releases the pasteboard.
+/// Dropping it puts AppKit's own methods back and releases the pasteboard. The general
+/// pasteboard's name is AppKit's constant `NSPasteboardNameGeneral`: nothing of the user's
+/// pasteboard is read, not its name, not its change count, not its contents.
 struct OwnPasteboard {
     board: Id,
     general_name: Id,
@@ -2559,6 +2561,11 @@ unsafe extern "C" {
         method: *mut objc::runtime::Method,
         imp: objc::runtime::Imp,
     ) -> objc::runtime::Imp;
+}
+
+#[link(name = "AppKit", kind = "framework")]
+unsafe extern "C" {
+    static NSPasteboardNameGeneral: Id;
 }
 
 /// The pasteboard of the test and the name of the general one, while an [`OwnPasteboard`]
@@ -2599,9 +2606,7 @@ impl OwnPasteboard {
             let class = class!(NSPasteboard);
             let board: Id = msg_send![class, pasteboardWithUniqueName];
             let _: Id = msg_send![board, retain];
-            let general: Id = msg_send![class, generalPasteboard];
-            let general_name: Id = msg_send![general, name];
-            let general_name: Id = msg_send![general_name, copy];
+            let general_name: Id = NSPasteboardNameGeneral;
             OWN_BOARD.store(board, Ordering::SeqCst);
             GENERAL_NAME.store(general_name, Ordering::SeqCst);
             let with_name_method = class_getClassMethod(class, sel!(pasteboardWithName:));
@@ -2623,15 +2628,9 @@ impl OwnPasteboard {
         }
     }
 
-    /// The change count of the user's general pasteboard, asked of AppKit's own method.
-    fn general_change_count(&self) -> i64 {
-        // SAFETY: AppKit's own `generalPasteboard`, saved before it was replaced.
-        unsafe {
-            let appkit: extern "C" fn(&objc::runtime::Class, Sel) -> Id =
-                std::mem::transmute(self.general.1);
-            let general = appkit(class!(NSPasteboard), sel!(generalPasteboard));
-            msg_send![general, changeCount]
-        }
+    /// The name of the test's pasteboard (unique, made by AppKit for it).
+    fn own_name(&self) -> String {
+        unsafe { name_of(self.board) }
     }
 
     fn change_count(&self) -> i64 {
@@ -2672,9 +2671,47 @@ impl Drop for OwnPasteboard {
             GENERAL_NAME.store(std::ptr::null_mut(), Ordering::SeqCst);
             let _: () = msg_send![self.board, releaseGlobally];
             let _: () = msg_send![self.board, release];
-            let _: () = msg_send![self.general_name, release];
         }
     }
+}
+
+/// The `name` of a pasteboard (never the user's: only the test's or what the replaced
+/// methods answer, which the case requires to be the test's).
+unsafe fn name_of(board: Id) -> String {
+    unsafe {
+        if board.is_null() {
+            return String::new();
+        }
+        let name: Id = msg_send![board, name];
+        if name.is_null() {
+            return String::new();
+        }
+        let utf8: *const std::os::raw::c_char = msg_send![name, UTF8String];
+        std::ffi::CStr::from_ptr(utf8).to_string_lossy().into_owned()
+    }
+}
+
+/// What a failure message says about a text that came from a pasteboard or was pasted:
+/// whether it is the test's own text, and otherwise only its length and a short hash, so
+/// that a message never prints text that could be the user's clipboard.
+fn told(text: &str, ours: &str) -> String {
+    use std::hash::{Hash, Hasher};
+    if text == ours {
+        return "matches the test's text".to_string();
+    }
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    text.hash(&mut hasher);
+    format!(
+        "does not match the test's text: {} characters, hash {:08x}",
+        text.chars().count(),
+        hasher.finish() as u32
+    )
+}
+
+/// [`told`] for each text of a list.
+fn told_all(texts: &[String], ours: &str) -> String {
+    let each: Vec<String> = texts.iter().map(|t| told(t, ours)).collect();
+    format!("{} texts [{}]", texts.len(), each.join("; "))
 }
 
 /// An autoreleased `NSString`.
@@ -2694,9 +2731,12 @@ fn ns_string(text: &str) -> Id {
 /// view's `edit`, which AppKit's menu reaches through the responder chain), Select All, Undo
 /// and Redo as the glue's calls. The page gets the clipboard events and Excalidraw acts on
 /// them: a text pasted is a text on the canvas, a copy writes Excalidraw's clipboard. Every
-/// read and write goes to a pasteboard of the test's own ([`OwnPasteboard`]); the user's
-/// general pasteboard is checked untouched, and the copy is sent only once the paste showed
-/// that the pasteboard WebKit reads is the test's.
+/// read and write goes to a pasteboard of the test's own ([`OwnPasteboard`]): the case checks
+/// that AppKit answers that very pasteboard (by identity and by its unique name) before
+/// anything is sent, and the copy is sent only once the paste showed that the pasteboard
+/// WebKit reads is the test's. Nothing of the user's pasteboard is read, and no message
+/// prints a pasted text or a pasteboard's text (only [`told`]: whether it matches the
+/// test's text, else a length and a hash).
 pub(super) fn the_edit_menu_on_a_whiteboard(report: &mut Report, rules: &Path) {
     let assets = match Assets::find() {
         Ok(assets) => assets,
@@ -2715,7 +2755,6 @@ pub(super) fn the_edit_menu_on_a_whiteboard(report: &mut Report, rules: &Path) {
         return;
     };
     let pasteboard = OwnPasteboard::new();
-    let general_before = pasteboard.general_change_count();
     let words = "Pasted from the test's own pasteboard 7f3c";
     pasteboard.put(words);
     let _ = call(
@@ -2744,8 +2783,16 @@ pub(super) fn the_edit_menu_on_a_whiteboard(report: &mut Report, rules: &Path) {
             msg_send![class, pasteboardWithName: pasteboard.general_name],
         )
     };
-    if answered != (pasteboard.board, pasteboard.board) {
-        report.check(false, &format!("{case}: AppKit answers the test's pasteboard for the general one"));
+    let own_name = pasteboard.own_name();
+    let answered_names = unsafe { (name_of(answered.0), name_of(answered.1)) };
+    let redirected = answered == (pasteboard.board, pasteboard.board)
+        && !own_name.is_empty()
+        && answered_names == (own_name.clone(), own_name.clone());
+    report.check(
+        redirected,
+        &format!("{case}: AppKit answers the test's own pasteboard (the same object, its unique name) for the general one"),
+    );
+    if !redirected {
         return;
     }
     view.edit(EditCommand::Paste);
@@ -2759,13 +2806,27 @@ pub(super) fn the_edit_menu_on_a_whiteboard(report: &mut Report, rules: &Path) {
     let read_ours = clip
         .as_array()
         .is_some_and(|list| list.iter().any(|e| e["kind"] == "paste" && e["text"] == words));
+    let events: Vec<String> = clip
+        .as_array()
+        .map(|list| {
+            list.iter()
+                .map(|e| match e["text"].as_str() {
+                    Some(text) => format!("{} ({})", e["kind"].as_str().unwrap_or("?"), told(text, words)),
+                    None => e["kind"].as_str().unwrap_or("?").to_string(),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
     report.check(
         read_ours,
-        &format!("{case}: paste: reaches the page as a paste event with the text of the test's pasteboard ({clip})"),
+        &format!(
+            "{case}: paste: reaches the page as a paste event with the text of the test's pasteboard (events: {})",
+            events.join(", ")
+        ),
     );
     report.check(
         pasted == vec![words.to_string()],
-        &format!("{case}: Excalidraw puts the pasted text on the canvas ({pasted:?})"),
+        &format!("{case}: Excalidraw puts the pasted text on the canvas ({})", told_all(&pasted, words)),
     );
     if read_ours {
         // The pasted text is selected: copy: writes Excalidraw's clipboard of it.
@@ -2779,9 +2840,10 @@ pub(super) fn the_edit_menu_on_a_whiteboard(report: &mut Report, rules: &Path) {
                 && copied.contains("excalidraw/clipboard")
                 && copied.contains(words),
             &format!(
-                "{case}: copy: reaches the page and Excalidraw writes its clipboard of the selection ({} characters: {})",
+                "{case}: copy: reaches the page and Excalidraw writes its clipboard of the selection ({} characters, Excalidraw's clipboard: {}, the test's text in it: {})",
                 copied.chars().count(),
-                copied.chars().take(80).collect::<String>()
+                if copied.contains("excalidraw/clipboard") { "yes" } else { "no" },
+                if copied.contains(words) { "yes" } else { "no" }
             ),
         );
     } else {
@@ -2798,7 +2860,11 @@ pub(super) fn the_edit_menu_on_a_whiteboard(report: &mut Report, rules: &Path) {
     let after_redo = texts(&view);
     report.check(
         undone.is_ok() && redone.is_ok() && after_undo.is_empty() && after_redo == vec![words.to_string()],
-        &format!("{case}: Undo takes the paste out and Redo brings it back ({after_undo:?}, {after_redo:?})"),
+        &format!(
+            "{case}: Undo takes the paste out and Redo brings it back (after Undo {}, after Redo {})",
+            told_all(&after_undo, words),
+            told_all(&after_redo, words)
+        ),
     );
     let _ = call(&view, calls::SELECT_ALL, "{}");
     wait(Duration::from_millis(300));
@@ -2810,10 +2876,5 @@ pub(super) fn the_edit_menu_on_a_whiteboard(report: &mut Report, rules: &Path) {
         selected.as_u64() == Some(4),
         &format!("{case}: Select All selects the whole drawing (the three rectangles and the text: {selected})"),
     );
-    let general_after = pasteboard.general_change_count();
     drop(pasteboard);
-    report.check(
-        general_after == general_before,
-        &format!("{case}: the user's pasteboard was not touched (its change count {general_before} -> {general_after})"),
-    );
 }

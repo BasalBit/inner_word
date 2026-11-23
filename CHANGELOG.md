@@ -7,9 +7,83 @@ The Writer.
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-11-23
+
+Whiteboards.
+
+### Added
+
+- Whiteboards: a third kind of item in the library, beside documents and pages, drawn with
+  Excalidraw. Excalidraw is built into the app and runs offline, with the network blocked
+  as on a page: its fonts, its shape library and Mermaid to drawing work without a
+  connection, and nothing of a drawing leaves the Mac. Whiteboards need macOS 12.3 or later.
+- Shapes, arrows, lines, text, frames and pictures (paste, a drop from the Finder,
+  Insert > Image...), and Mermaid to drawing, which turns a Mermaid diagram into shapes and
+  arrows that can be edited.
+- A shape library to reuse shapes from, one for every whiteboard, kept in the library:
+  "Show or hide the shape library", "Add selection to shape library" and "Insert from shape
+  library...".
+- New Whiteboard: File > New Whiteboard, the palette, the library's menu and its + menu, and
+  "New Whiteboard Here" on a folder. The new whiteboard is named in place in the sidebar and
+  opens with the keyboard on the canvas.
+- Drawing from the keyboard: "Add text", "Add rectangle", "Add ellipse", "Add diamond", "Add
+  arrow" and "Add frame" (the palette, Insert > Whiteboard, the title's menu and the
+  `ctrl-enter` menu) put an element at the middle of the view; an arrow with two shapes
+  selected connects them. Excalidraw's own keys work on the canvas, and the list of
+  keyboard shortcuts shows them under "On a whiteboard".
+- A whiteboard is saved as it is drawn, at the end of every stroke or edit, and before
+  anything that ends it: another item opened, closing it, Save Now, export, print, closing
+  the window and quitting. A drawing that cannot be saved is written to a recovery file in
+  the library's folder, and the save state says where.
+- Whiteboards are in the trash, the version history (each version's elements listed;
+  Restore takes the old drawing back into the open whiteboard), quick open and the library
+  search, which finds a whiteboard by the words drawn on it.
+- Export as PDF of a whiteboard: one page the size of the drawing, its lines as vector
+  paths and its text as text, in light colours whatever the theme. Print puts it on your
+  paper, turned to the drawing and made smaller to fit. A folder's PDF holds its
+  whiteboards after its documents.
+- The zoom commands and the status bar zoom the canvas (Fit Width and Fit Page show the
+  whole drawing), Find opens Excalidraw's search, and the theme follows the app's.
+- The assistant's side chat reads an open whiteboard as a list of its elements with their
+  text, and can read other whiteboards with its tools. It does not change a whiteboard.
+- Agents draw on whiteboards: `innerword board new`, `board add`, `board update`, `board
+  remove` and `innerword boards`, and the MCP tools `create_board`, `add_to_board`,
+  `update_board` and `remove_from_board`. Elements are given in Excalidraw's own form
+  (shapes with labels, arrows that connect shapes by their ids, text, frames and pictures
+  from a file); `innerword get board:<id>` lists the elements with their ids, positions,
+  sizes and text, and `innerword export board:<id> <file>.pdf` makes the PDF. Every change
+  keeps the drawing as it was as a version first, and `--dry-run` says what would change.
+- While a whiteboard is open, an agent's change arrives in it at once, merged with what is
+  being drawn, and the note at the bottom offers Undo.
+- The skill for agents explains whiteboards, with examples, and exit codes 3 (an element the
+  whiteboard does not have) and 9 (the PDF of an empty whiteboard). The Agents panel offers
+  to update an installed skill.
+- `THIRD-PARTY-LICENSES-WHITEBOARD.txt` on the disk image (and in the app) lists what the
+  whiteboard's editor is made of, JavaScript and fonts, each with its license. "Read Me
+  First.txt" says that whiteboards work offline.
+
 ### Changed
 
-- The landing page lives at <https://innerword.io/>, on its own domain instead of GitHub Pages.
+- The library moves to a new format (schema 5) when it gets its first whiteboard, made in
+  the app or by an agent. Inner Word 0.10 then refuses to open it; a library without a
+  whiteboard stays readable by 0.10.
+- The channel between the `innerword` tool and the open app is at version 4: a tool of 0.10
+  and an app of 0.11 (or the reverse) refuse each other's requests with exit code 5, and say
+  so. The tool inside the app is always the same version as the app.
+- The tool and the MCP server say "Untitled" for an item without a title in every output.
+- Print can make a drawing smaller to fit the paper (used for whiteboards; documents are
+  printed at their real size as before).
+- The disk image is about 3 MB larger, with the whiteboard's editor in it.
+
+### Repository
+
+- The landing page lives at <https://innerword.io/>, on its own domain instead of GitHub
+  Pages.
+- `crates/innerword-board` (a whiteboard's scene in Rust, and the converter that makes
+  agents' skeletons into elements) and `crates/innerword-board-web` (Excalidraw 0.18.1 built
+  offline from `web/` with exact versions and patches by `node build.mjs`; the built
+  `dist/` is committed, and `node build.mjs --check` holds it byte for byte).
+- The design of whiteboards, with what was built, is in `docs/whiteboard-design.md`.
 
 ## [0.10.1] - 2026-11-17
 
@@ -151,7 +225,8 @@ The first public release of Inner Word.
   comments, Vim mode, find and replace, the command palette, export to Markdown, DOCX and
   plain text, and an ad-hoc signed disk image.
 
-[Unreleased]: https://github.com/BasalBit/inner_word/compare/v0.10.1...HEAD
+[Unreleased]: https://github.com/BasalBit/inner_word/compare/v0.11.0...HEAD
+[0.11.0]: https://github.com/BasalBit/inner_word/compare/v0.10.1...v0.11.0
 [0.10.1]: https://github.com/BasalBit/inner_word/compare/v0.10.0...v0.10.1
 [0.10.0]: https://github.com/BasalBit/inner_word/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/BasalBit/inner_word/compare/v0.8.1...v0.9.0

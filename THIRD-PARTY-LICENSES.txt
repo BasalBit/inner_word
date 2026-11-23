@@ -1,5 +1,5 @@
 Third-party licenses of Inner Word
-Generated from Cargo.lock sha256 77706409a7f844fd485c6b49b3b5d3666ead9102e7cd6bfa9c672a222a44bcd9
+Generated from Cargo.lock sha256 1946d8e29151a8bec6c6ae00f67ad57fc26ccf8a3b8dcf746e314f381568b58f
 by: scripts/bundle.sh --third-party-licenses (cargo about generate --locked --fail --workspace about.hbs, with about.toml)
 Do not edit by hand. scripts/bundle.sh refuses to bundle once Cargo.lock has changed.
 

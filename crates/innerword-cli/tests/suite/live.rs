@@ -1005,3 +1005,38 @@ fn several_tools_at_once_are_served_one_after_the_other_while_the_app_is_open() 
     let versions = sandbox.json(&["history", "doc:1"]);
     assert_eq!(versions["versions"].as_array().unwrap().len(), 11);
 }
+
+#[test]
+fn a_change_of_a_whiteboard_that_changes_nothing_is_said_so_by_the_app_too() {
+    let sandbox = Sandbox::new().fake_page_check();
+    let app = sandbox.open_the_app();
+    sandbox.ok(&["board", "new", "Plan", "--content", SHAPES]);
+    app.served();
+    let before = sandbox.ok(&["get", "Plan", "--format", "json"]);
+    let same = r#"[{"id":"api","x":100,"y":80},{"id":"db","dx":0,"text":"Postgres"}]"#;
+    let dry = sandbox.ok(&["board", "update", "Plan", "--content", same, "--dry-run"]);
+    assert!(
+        dry.starts_with(
+            "Dry run: the real run would change nothing: board:1 \u{201c}Plan\u{201d} already \
+             is so.\n"
+        ),
+        "{dry}"
+    );
+    let done = sandbox.json(&[
+        "board",
+        "update",
+        "Plan",
+        "--content",
+        same,
+        "--author",
+        "Claude",
+    ]);
+    assert_eq!(done["changed"], false, "{done}");
+    assert_eq!(done["would_change"], false, "{done}");
+    assert_eq!(done["app_is_open"], true, "{done}");
+    assert!(done.get("version").is_none_or(Value::is_null), "{done}");
+    // The app carried it out, and nothing came of it: no version, the scene as it was.
+    assert!(app.changes().contains(&"update_board"));
+    assert!(sandbox.ok(&["history", "Plan"]).starts_with("No versions"));
+    assert_eq!(sandbox.ok(&["get", "Plan", "--format", "json"]), before);
+}

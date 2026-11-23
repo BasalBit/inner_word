@@ -298,6 +298,244 @@ fn a_whiteboard_is_made_drawn_on_changed_and_read() {
 }
 
 #[test]
+fn one_count_untitled_a_damaged_one_and_a_change_that_changes_nothing() {
+    let sandbox = Sandbox::new().fake_page_check();
+    sandbox.ok(&[
+        "board",
+        "new",
+        "Architecture",
+        "--in",
+        "Sketches",
+        "--create-folders",
+        "--content",
+        SHAPES,
+    ]);
+
+    // One count of elements, whoever asks: a label is part of its shape or arrow (5
+    // elements, 3 of them with a label), in the listing, info, the list and as JSON.
+    let listing = sandbox.ok(&["get", "board:1"]);
+    assert!(listing.contains(": 5 elements, 0 pictures;"), "{listing}");
+    let info = sandbox.ok(&["info", "board:1"]);
+    assert!(
+        info.contains(
+            "holds:     5 elements (1 arrow, 1 ellipse, 1 frame, 1 rectangle, 1 text) with 3 \
+             labels, 0 pictures, "
+        ),
+        "{info}"
+    );
+    assert!(
+        sandbox
+            .ok(&["boards"])
+            .contains("Sketches/Architecture  5 elements, 0 pictures  changed "),
+    );
+    assert_eq!(sandbox.json(&["boards"])["boards"][0]["elements"], 5);
+    assert_eq!(
+        sandbox.json(&["info", "board:1"])["board"]["summary"]["elements"],
+        5
+    );
+    assert_eq!(
+        sandbox.json(&["get", "board:1"])["board"]["summary"]["elements"],
+        5
+    );
+    let mut client = sandbox.mcp();
+    client.initialize("2025-11-25", "Test Agent");
+    let (info, _) = client.call_ok("document_info", json!({ "document": "board:1" }));
+    assert!(info.contains("holds:     5 elements ("), "{info}");
+    let (read, _) = client.call_ok("read_document", json!({ "document": "board:1" }));
+    assert!(read.contains(": 5 elements, 0 pictures;"), "{read}");
+
+    // An id the whiteboard already has is refused, as the help and the tool's description
+    // say: nothing is drawn under another id.
+    let taken = sandbox.fail(
+        &[
+            "board",
+            "add",
+            "board:1",
+            "--content",
+            r#"[{"type":"rectangle","id":"api","x":0,"y":300}]"#,
+        ],
+        2,
+    );
+    assert!(
+        taken.contains("the whiteboard already has an element api; give another id"),
+        "{taken}"
+    );
+    assert!(
+        sandbox
+            .ok(&["board", "add", "--help"])
+            .contains("an id the\nwhiteboard already has is refused"),
+    );
+    let tools = client.request("tools/list", json!({}));
+    let add_to_board = tools["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|tool| tool["name"] == "add_to_board")
+        .unwrap()["description"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(
+        add_to_board.contains(
+            "an id the whiteboard already has, or that two elements of the call share, is refused"
+        ),
+        "{add_to_board}"
+    );
+    assert!(!add_to_board.contains("made otherwise"), "{add_to_board}");
+
+    // A change to what the elements already are changes nothing: no version, no
+    // "changed"; a dry run says it would change nothing.
+    let same = r##"[{"id":"api","x":100,"y":80,"backgroundColor":"#a5d8ff"},{"id":"db","dx":0,"text":"Postgres"}]"##;
+    let dry = sandbox.ok(&["board", "update", "board:1", "--content", same, "--dry-run"]);
+    assert_eq!(
+        dry,
+        "Dry run: the real run would change nothing: board:1 \u{201c}Architecture\u{201d} \
+         already is so.\n"
+    );
+    let done = sandbox.ok(&[
+        "board",
+        "update",
+        "board:1",
+        "--content",
+        same,
+        "--author",
+        "Claude",
+    ]);
+    assert_eq!(
+        done,
+        "Nothing changed: board:1 \u{201c}Architecture\u{201d} already is so.\n"
+    );
+    assert!(
+        sandbox
+            .ok(&["history", "board:1"])
+            .starts_with("No versions")
+    );
+    let (said, data) = client.call_ok(
+        "update_board",
+        json!({ "board": "board:1", "changes": serde_json::from_str::<Value>(same).unwrap() }),
+    );
+    assert!(said.starts_with("Nothing changed: "), "{said}");
+    assert_eq!(data["changed"], false, "{data}");
+
+    // History restore speaks of the drawing, not of a text and its words.
+    sandbox.ok(&[
+        "board",
+        "update",
+        "board:1",
+        "--content",
+        r#"[{"id":"api","dx":40}]"#,
+        "--author",
+        "Claude",
+    ]);
+    let restored = sandbox.ok(&["history", "restore", "board:1", "1"]);
+    assert!(
+        restored.starts_with("Restored version 1 (")
+            && restored.contains(
+                ") of board:1 \"Sketches/Architecture\": the drawing is as it was then.\n"
+            ),
+        "{restored}"
+    );
+    assert!(
+        restored.contains("The drawing as it was is kept as version 2;"),
+        "{restored}"
+    );
+    assert!(
+        !restored.contains("words") && !restored.contains("text"),
+        "{restored}"
+    );
+    let again = sandbox.ok(&["history", "restore", "board:1", "1"]);
+    assert!(
+        again.contains("already has the drawing of version 1"),
+        "{again}"
+    );
+
+    // An untitled whiteboard is "Untitled" in every output.
+    let made = sandbox.ok(&["board", "new"]);
+    assert_eq!(
+        made,
+        "made board:2 \u{201c}Untitled\u{201d} at the top of the library (empty)\n"
+    );
+    let dry = sandbox.ok(&["board", "new", "--dry-run"]);
+    assert!(
+        dry.contains("made a new whiteboard \u{201c}Untitled\u{201d}"),
+        "{dry}"
+    );
+    let added = sandbox.ok(&[
+        "board",
+        "add",
+        "board:2",
+        "--content",
+        r#"[{"type":"text","x":0,"y":0,"text":"Hello"}]"#,
+    ]);
+    assert!(
+        added.starts_with("added to board:2 \u{201c}Untitled\u{201d}: text "),
+        "{added}"
+    );
+    assert!(
+        sandbox
+            .ok(&["info", "board:2"])
+            .contains("title:     Untitled (its name)"),
+    );
+    assert!(
+        sandbox
+            .ok(&["get", "board:2"])
+            .starts_with("board:2 \u{201c}Untitled\u{201d}: ")
+    );
+    assert!(
+        sandbox
+            .ok(&["boards"])
+            .contains("board:2  Untitled  1 element, 0 pictures")
+    );
+    assert!(
+        sandbox
+            .ok(&["list"])
+            .contains("Untitled  board:2  (whiteboard, ")
+    );
+    assert!(
+        sandbox
+            .ok(&["info", "/"])
+            .contains("  Untitled  board:2  (whiteboard, ")
+    );
+    let (made, _) = client.call_ok("create_board", json!({}));
+    assert!(
+        made.starts_with("made board:3 \u{201c}Untitled\u{201d} "),
+        "{made}"
+    );
+    client.close();
+
+    // A whiteboard whose scene cannot be read is listed as such, not as an empty one.
+    let mut store =
+        innerword_store::Store::open(sandbox.library().join(innerword_store::DATABASE_FILE_NAME))
+            .unwrap();
+    store
+        .save_board(
+            innerword_store::DocumentId(2),
+            &innerword_store::BoardContent {
+                scene: r#"{"type":"excalidraw","version":2,"elements":"not a list"}"#,
+                files: &[],
+                plain_text: "",
+                word_count: 0,
+                char_count: 0,
+            },
+            None,
+        )
+        .unwrap();
+    drop(store);
+    let boards = sandbox.ok(&["boards"]);
+    let line = lines_starting(&boards, "board:2  ");
+    assert_eq!(line.len(), 1, "{boards}");
+    assert!(line[0].contains("  cannot be read ("), "{boards}");
+    assert!(!line[0].contains("0 elements"), "{boards}");
+    assert!(
+        sandbox.json(&["boards"])["boards"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|row| row["unreadable"].is_string()),
+    );
+}
+
+#[test]
 fn the_exit_codes_of_a_whiteboard_say_what_to_do() {
     let sandbox = Sandbox::new().fake_page_check();
     sandbox.ok(&["board", "new", "Plan", "--content", SHAPES]);

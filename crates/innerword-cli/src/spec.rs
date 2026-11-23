@@ -674,7 +674,7 @@ the id of the copy.",
     Spec {
         synopsis: "<item> <path>",
         long_synopsis: "<item> (<path> | --to <path>)",
-        summary: "Write a document or folder as Markdown, DOCX or text, a page as files",
+        summary: "Write as Markdown, DOCX or text; a page as files, a whiteboard as PDF",
         about: "Writes a document to a file, or every document of a folder to one file in the order of \
 the library (\"/\" is the whole library). The format is taken from the ending of the path (.md, \
 .docx, .txt) unless --format names it. A file that exists is not replaced unless --overwrite is \

@@ -43,8 +43,9 @@ The elements are a JSON array of Excalidraw's element skeletons, in Excalidraw's
   freedraw                     x, y, points
   frame                        children (ids), or x, y, width, height; name
   image                        x, y, path (a picture file of this Mac); width or height
-Every element may have id (made when not given), angle, strokeColor, backgroundColor,
-fillStyle, strokeWidth, strokeStyle, roughness, opacity, roundness, groupIds, link and locked.
+Every element may have id (1 to 64 of A-Za-z0-9_-, made when not given; an id the
+whiteboard already has is refused), angle, strokeColor, backgroundColor, fillStyle,
+strokeWidth, strokeStyle, roughness, opacity, roundness, groupIds, link and locked.
 Give a shape room for its label. A picture is drawn at its own size unless width or height is
 given; PNG, JPEG, GIF, HEIC, TIFF, WebP, BMP and SVG work. A relative path is taken from the
 folder of --file, else from where the command runs.
@@ -416,6 +417,10 @@ mod tests {
         assert!(
             overview.contains("\n  --json           Print"),
             "the options are indented"
+        );
+        assert!(
+            overview.contains("a whiteboard as PDF"),
+            "the overview says how a whiteboard is exported"
         );
         assert!(overview.contains("5 Inner Word is open and did not make the change"));
         assert!(overview.contains("While Inner Word is open, a change is carried out by the app"));

@@ -1565,7 +1565,7 @@ fn take_tool(view: &WebPage, tool: &str) {
     wait(Duration::from_millis(100));
 }
 
-/// 1. An adopt that waits for the font of an incoming text (held in flight here), while
+/// Case 1: an adopt that waits for the font of an incoming text (held in flight here), while
 /// the writer nudges another shape: the nudge stays, the answer is not `same`, and the
 /// merge is posted at or above the answered rev, with the nudge.
 fn adopt_while_a_font_loads(report: &mut Report, assets: &Assets, rules: &Path) {
@@ -1680,7 +1680,7 @@ fn adopt_while_a_font_loads(report: &mut Report, assets: &Assets, rules: &Path) 
     );
 }
 
-/// 2. An adopt in the middle of a freehand stroke: the whole stroke is on the canvas after
+/// Case 2: an adopt in the middle of a freehand stroke: the whole stroke is on the canvas after
 /// the pointer goes up, and in the last post.
 fn adopt_during_a_stroke(report: &mut Report, assets: &Assets, rules: &Path) {
     let case = "an adopt during a stroke";
@@ -1755,7 +1755,7 @@ fn adopt_during_a_stroke(report: &mut Report, assets: &Assets, rules: &Path) {
     );
 }
 
-/// 3. An adopt right after a stroke has begun (too small yet for Excalidraw to keep in a
+/// Case 3: an adopt right after a stroke has begun (too small yet for Excalidraw to keep in a
 /// restore): the stroke stays, and is drawn whole.
 fn adopt_as_a_stroke_begins(report: &mut Report, assets: &Assets, rules: &Path) {
     let case = "an adopt as a stroke begins";
@@ -1795,7 +1795,7 @@ fn adopt_as_a_stroke_begins(report: &mut Report, assets: &Assets, rules: &Path) 
     );
 }
 
-/// 4. An adopt while a new, empty text is being typed: the text stays and stays in its
+/// Case 4: an adopt while a new, empty text is being typed: the text stays and stays in its
 /// editor, and what is typed after the adopt lands in it.
 fn adopt_while_a_new_text_is_typed(report: &mut Report, assets: &Assets, rules: &Path) {
     let case = "an adopt while a new text is typed";
@@ -1872,7 +1872,7 @@ fn adopt_while_a_new_text_is_typed(report: &mut Report, assets: &Assets, rules: 
     );
 }
 
-/// 5. A `board.json` that is missing or is no stored scene: the start fails with an error
+/// Case 5: a `board.json` that is missing or is no stored scene: the start fails with an error
 /// that says so (`bridge::START_FAILED`), no `ready` comes, and `state` answers at once
 /// behind a call that waits for `ready`.
 fn a_start_without_a_stored_scene(report: &mut Report, assets: &Assets, rules: &Path) {
@@ -1935,7 +1935,7 @@ fn a_start_without_a_stored_scene(report: &mut Report, assets: &Assets, rules: &
     }
 }
 
-/// 6. A shape library longer than one message: posted small, as too large and without its
+/// Case 6: a shape library longer than one message: posted small, as too large and without its
 /// items (and not counted as posted), and `collect` brings it whole.
 fn a_library_longer_than_one_message(report: &mut Report, assets: &Assets, rules: &Path) {
     let case = "a library longer than one message";

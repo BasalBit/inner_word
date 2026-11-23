@@ -237,6 +237,14 @@ pub(super) fn the_bridge(report: &mut Report, rules: &Path) {
 /// its policy; and the whiteboard's policy itself lets no frame of a file and no inline
 /// script in a frame run. The control (no bridge, a page's policy) shows each frame would
 /// run and post otherwise.
+///
+/// The whiteboard's policy alone does **not** keep out a `srcdoc` frame that names a script
+/// of the view's own origin (`<script src="inner.js">`): a `srcdoc` document inherits the
+/// policy, and `script-src 'self'` lets that script run, also in a frame made by a script
+/// after the load (as React makes the `iframe` element of a scene) and in one with
+/// `sandbox="allow-scripts allow-same-origin"` (as Excalidraw's embeds have). That is held
+/// here as a fact of WebKit, so that whoever reads the policy as a wall against frames
+/// learns otherwise; what keeps those frames from the bridge is that the view loads none.
 pub(super) fn frames_never_reach_the_bridge(report: &mut Report, rules: &Path) {
     let files = || {
         vec![
@@ -254,7 +262,11 @@ pub(super) fn frames_never_reach_the_bridge(report: &mut Report, rules: &Path) {
             (
                 "app.js",
                 js(
-                    "window.__ran = window.__ran || []; window.addEventListener('message', (e) => { window.__ran = window.__ran.concat([String(e.data)]); }); if (window.webkit && window.webkit.messageHandlers.innerwordBoard) window.webkit.messageHandlers.innerwordBoard.postMessage(JSON.stringify({ kind: 'ready' }));",
+                    "window.__ran = window.__ran || []; window.addEventListener('message', (e) => { window.__ran = window.__ran.concat([String(e.data)]); }); if (window.webkit && window.webkit.messageHandlers.innerwordBoard) window.webkit.messageHandlers.innerwordBoard.postMessage(JSON.stringify({ kind: 'ready' }));
+const frame = (id, sandbox) => { const f = document.createElement('iframe'); f.id = id; if (sandbox) f.setAttribute('sandbox', 'allow-scripts allow-same-origin'); f.srcdoc = '<script src=\"inner.js\"></script>'; document.body.appendChild(f); };
+frame('made', false);
+frame('sandboxed', true);
+setTimeout(() => { const f = document.getElementById('file'); f.removeAttribute('src'); f.id = 'later'; f.srcdoc = '<script src=\"inner.js\"></script>'; }, 300);",
                 ),
             ),
             (
@@ -264,7 +276,7 @@ pub(super) fn frames_never_reach_the_bridge(report: &mut Report, rules: &Path) {
             (
                 "inner.js",
                 js(
-                    "top.__ran = (top.__ran || []).concat([String(location.href).startsWith('about:srcdoc') ? 'srcdoc' : 'file']); top.webkit.messageHandlers.innerwordBoard.postMessage(JSON.stringify({ kind: 'through top' }));",
+                    "const ran = window.frameElement && window.frameElement.id !== 'file' ? window.frameElement.id : (String(location.href).startsWith('about:srcdoc') ? 'srcdoc' : 'file'); top.__ran = (top.__ran || []).concat([ran]); top.webkit.messageHandlers.innerwordBoard.postMessage(JSON.stringify({ kind: 'through top' }));",
                 ),
             ),
         ]
@@ -329,19 +341,31 @@ pub(super) fn frames_never_reach_the_bridge(report: &mut Report, rules: &Path) {
                 ),
             ),
             _ => report.check(
-                ["data", "file", "inline", "srcdoc"]
-                    .iter()
-                    .all(|kind| ran.iter().any(|r| r == kind)),
+                [
+                    "data",
+                    "file",
+                    "inline",
+                    "srcdoc",
+                    "made",
+                    "sandboxed",
+                    "later",
+                ]
+                .iter()
+                .all(|kind| ran.iter().any(|r| r == kind)),
                 &format!("{what}: every frame runs (ran {ran:?})"),
             ),
         }
         if n == 2 {
+            let own_script: Vec<&String> = ran
+                .iter()
+                .filter(|r| ["srcdoc", "made", "sandboxed", "later"].contains(&r.as_str()))
+                .collect();
             report.note(&format!(
-                "{what}: a srcdoc frame that names a script of the view's own origin {}",
-                if ran.iter().any(|r| r == "srcdoc") {
-                    "runs it (the policy alone does not stop it: the bridge's view loads no frame)"
-                } else {
+                "{what}: a srcdoc frame that names a script of the view's own origin {} (ran {own_script:?})",
+                if own_script.is_empty() {
                     "does not run it"
+                } else {
+                    "runs it: the policy alone does not stop it, the bridge's view loads no frame"
                 }
             ));
         }

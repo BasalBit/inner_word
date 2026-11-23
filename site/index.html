@@ -41,6 +41,7 @@
     <nav class="nav" aria-label="Main">
       <ul>
         <li class="nav__wide"><a href="#features">Features</a></li>
+        <li class="nav__wider"><a href="#whiteboards">Whiteboards</a></li>
         <li class="nav__wide"><a href="#agents">Agents</a></li>
         <li class="nav__wide"><a href="#private">Privacy</a></li>
         <li><a class="nav__dl" href="#download">Download</a></li>
@@ -110,7 +111,7 @@
     <div class="opening__text">
       <h2 id="what-title" class="sr">What Inner Word is</h2>
       <p>Inner Word is for people who write long things. You get a single column of text in a serif made for reading, or real sheets of paper in page view, and very little else on screen. There is no ribbon and no toolbar. Formatting comes from shortcuts, Markdown-style typing, a small format bar over a mouse selection and right-click menus.</p>
-      <p>Your documents live in a library of folders on your own Mac, saved as you type, with versions you can go back to.</p>
+      <p>Your documents live in a library of folders on your own Mac, saved as you type, with versions you can go back to. Saved web pages and whiteboards sit beside them.</p>
     </div>
     <aside class="opening__quote" aria-hidden="true">
       <p>No ribbon. No toolbar.</p>
@@ -300,7 +301,7 @@
     <div class="formats">
       <div>
         <h3 class="subhead">Export and print</h3>
-        <p>Export a document or a whole folder <kbd><span aria-hidden="true">⇧⌘S</span><span class="sr">Shift Command S</span></kbd>. A folder becomes one PDF, each document on its own paper, with page numbers running through. Print goes through the macOS print panel, exactly as page view shows it, at real size.</p>
+        <p>Export a document or a whole folder <kbd><span aria-hidden="true">⇧⌘S</span><span class="sr">Shift Command S</span></kbd>. A folder becomes one PDF, each document on its own paper, with page numbers running through and its whiteboards at the end. Print goes through the macOS print panel, exactly as page view shows it, at real size.</p>
       </div>
       <ul class="formats__list" aria-label="Export formats">
         <li>Markdown<small>with a folder of its pictures</small></li>
@@ -425,6 +426,60 @@
     </figure>
   </div>
 </section>
+
+<!-- VIII. Whiteboards -->
+<section class="chapter" id="whiteboards" aria-labelledby="c8">
+  <div class="wrap chapter__head">
+    <p class="numeral" aria-hidden="true">eight</p>
+    <div>
+      <h2 id="c8">Whiteboards for the plan behind the words</h2>
+      <p class="chapter__lede">Draw the plot of a novel, the outline of a post or the cast of a story on a whiteboard in your library, beside the text it is for. Hand-drawn shapes, arrows, text, frames and pictures, from the real Excalidraw, built into the app and working offline.</p>
+    </div>
+    <ul class="gloss">
+      <li>Saved as you draw, with versions, the trash and library search, like a document.</li>
+      <li>Turn Mermaid text into a drawing, and keep the shapes you reuse in a shape library.</li>
+      <li>Keyboard or mouse: the command palette has Add rectangle, Add text, Add arrow and the rest, and Excalidraw’s own keys work on the canvas.</li>
+      <li>Export as PDF: one page the size of the drawing, with sharp lines and real text. A folder’s PDF includes its whiteboards, and Print fits the drawing to your paper.</li>
+      <li>Whiteboards need macOS 12.3 or later.</li>
+    </ul>
+  </div>
+  <div class="desk">
+    <figure class="shot shot--board reveal">
+      <div class="board">
+        <picture>
+          <source media="(max-width: 600px)" srcset="assets/whiteboard-plot-phone.svg" width="492" height="1158">
+          <img src="assets/whiteboard-plot.svg" width="1076" height="513" loading="lazy" decoding="async"
+            alt="A whiteboard in Excalidraw’s hand-drawn style: a frame named The Lighthouse Keeper, Part One. Three chapters in coloured boxes, 1 The letter, 2 Salt and Lamp Oil and 3 The first storm, joined by arrows labelled she arrives and winter. An arrow labelled the lamp fails leads to a diamond, Does Mara stay?, with yes to She keeps the light and a dashed no to She sails home. A sticky note says: Keep the fog in every chapter. Ask Helen about the ending.">
+        </picture>
+      </div>
+      <figcaption class="shot__cap"><span>The plot of Part One, drawn by an agent with <code>innerword</code>, as Excalidraw exports it.</span></figcaption>
+    </figure>
+    <div class="agents reveal">
+      <figure class="term">
+        <div class="term__bar" aria-hidden="true"><i></i><i></i><i></i></div>
+<pre tabindex="0"><code><span class="term__p" aria-hidden="true">$ </span>innerword board new "Plot of Part One" \
+    --in "The Lighthouse Keeper" --author Claude
+<span class="term__p" aria-hidden="true">$ </span>innerword board add "Plot of Part One" \
+    --author Claude --content '[
+  {"type":"rectangle","id":"ch1","x":0,"y":0,
+   "label":{"text":"1  The letter"}},
+  {"type":"rectangle","id":"ch2","x":380,"y":0,
+   "label":{"text":"2  Salt and Lamp Oil"}},
+  {"type":"arrow","x":0,"y":0,
+   "start":{"id":"ch1"},"end":{"id":"ch2"},
+   "label":{"text":"she arrives"}}
+]'</code></pre>
+        <figcaption>The start of the drawing above, as an agent makes it. The same tools are in the MCP server.</figcaption>
+      </figure>
+      <div class="boardnote">
+        <h3 class="subhead">Agents draw too</h3>
+        <p>Ask your agent to draw the plan. It can make a whiteboard and add shapes, arrows with labels, text and pictures, or move and restyle what is there. A version is kept before every change.</p>
+        <p>If it draws while the whiteboard is open, the change appears on the canvas at once. What you changed meanwhile stays as you made it, and the note offers Undo.</p>
+      </div>
+    </div>
+    <p class="wrap credit">Whiteboards are built on <a href="https://github.com/excalidraw/excalidraw">Excalidraw</a>, under the MIT license.</p>
+  </div>
+</section>
 </div>
 
 <!-- ============ Index of keys ============ -->
@@ -485,7 +540,7 @@
       </a>
     </div>
     <p class="fine dl__req">Not sure which Mac you have? Apple menu &gt; About This Mac: “Chip” means Apple silicon, “Processor” means Intel.</p>
-    <p class="fine dl__req">macOS 10.15.7 or later on an Intel Mac, macOS 11 or later on Apple silicon. Pages (saved web pages) need macOS 12.3. · <a href="https://github.com/BasalBit/inner_word/releases">All releases on GitHub</a></p>
+    <p class="fine dl__req">macOS 10.15.7 or later on an Intel Mac, macOS 11 or later on Apple silicon. Pages (saved web pages) and whiteboards need macOS 12.3. · <a href="https://github.com/BasalBit/inner_word/releases">All releases on GitHub</a></p>
 
     <div class="install" id="install" tabindex="-1">
       <p class="dl__status" role="status" aria-live="polite"></p>
@@ -579,6 +634,10 @@
       <details>
         <summary>Do I need Claude, or any AI agent, to use it?</summary>
         <p>No. Inner Word works fully without any agent. Agents are optional: any agent that can run a command or speak MCP can work with your library, and Claude Code is one of many. The assistant inside the app runs on Claude Code today and appears only when it is installed and signed in; support for other agents is planned. It can be switched off in the settings.</p>
+      </details>
+      <details>
+        <summary>Is the whiteboard Excalidraw?</summary>
+        <p>Yes: the real Excalidraw, under the MIT license, built into the app. It runs offline and loads nothing from the network; what you draw is saved in your library like a document. Its collaboration and AI features are switched off.</p>
       </details>
       <details>
         <summary>Is there a version for Windows or Linux?</summary>

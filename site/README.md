@@ -160,6 +160,20 @@ with the rest of the line painted out in the canvas colour), the comments (the p
 with both threads) and the Agents panel (the switch and the two installed agents: rows
 of the panel stacked as they are in it, with the descriptions between them left out).
 
+The whiteboard of chapter eight is not a screenshot: `whiteboard-plot.svg` (and
+`whiteboard-plot-phone.svg`, the same plot laid out top to bottom for a phone, chosen by a
+`<source media="(max-width: 600px)">`) is Excalidraw's own SVG export of a whiteboard the
+`innerword` tool drew on a temporary library (`innerword board new`, then `board add
+--file`). It was exported by the bundle's own export page (`crates/innerword-board-web/dist/export.html`,
+the call `exportLayout` with a padding of 16, which is what the PDF of a whiteboard is
+made from), served from a scratch copy beside the scene (`innerword get board:<id> --format
+json` as `scene.json`) and run in headless Chrome. Its white background was taken out, so
+the drawing lies on a sheet of the page's paper; its font (Excalifont, a subset) is inside
+the file as a `data:` address, which `.htaccess` lets in for `.svg` files alone. There is
+one file per layout for both themes: in Night the page darkens it with the filter
+Excalidraw darkens its own exports with, `invert(93%) hue-rotate(180deg)`. To change the
+drawing, draw it again with the tool and export it again; do not edit the SVG by hand.
+
 To make a new WebP from a PNG screenshot:
 
 ```bash

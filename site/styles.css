@@ -183,6 +183,9 @@ kbd {
 .nav .nav__gh { color: var(--ink); }
 .nav__wide { display: none; }
 @media (min-width: 720px) { .nav__wide { display: list-item; } }
+/* One more link where the bar has room for it */
+.nav__wider { display: none; }
+@media (min-width: 900px) { .nav__wider { display: list-item; } }
 /* A narrow phone: the GitHub link keeps its icon and its name for screen readers */
 @media (max-width: 479px) {
   .top__inner { gap: 8px; }
@@ -438,6 +441,23 @@ kbd {
 .agentlist { text-align: center; font: 14px/1.7 var(--ui); color: var(--muted); margin: clamp(32px, 5vw, 48px) auto 0; text-wrap: balance; }
 .agentlist span { font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase; font-size: 11px; color: var(--accent-hover); margin-right: 8px; }
 
+/* Whiteboards: Excalidraw's own SVG export (its fonts inside, no background of its own) on a
+   sheet of the page's paper. In Night it is darkened the way Excalidraw darkens its
+   exports, so one file serves both themes. */
+.shot--board { max-width: 1140px; }
+.board {
+  background: var(--page); border: 1px solid var(--hairline); border-radius: 10px;
+  box-shadow: var(--card-shadow); padding: clamp(10px, 3vw, 32px);
+}
+.shot--board img { filter: none; }
+@media (max-width: 600px) { .shot--board { max-width: 420px; } }
+.boardnote { max-width: 34em; }
+.boardnote .subhead { margin-top: 0; }
+.boardnote p { color: var(--muted); }
+.credit { text-align: center; font: 13px/1.5 var(--ui); color: var(--muted); margin: clamp(28px, 4vw, 44px) auto 0; }
+.credit a { color: var(--ink); }
+.credit a:hover { color: var(--accent); }
+
 /* ---------- Back matter: index, privacy, download, colophon, plans, questions ---------- */
 
 .keys h2, .private h2, .source h2, .later h2, .faq h2, .closing h2 { font-size: var(--h2-back); letter-spacing: -0.015em; }
@@ -605,6 +625,10 @@ kbd {
 
 html.js .reveal { opacity: 0; transform: translateY(18px); transition: opacity .8s cubic-bezier(.2,.7,.2,1), transform .8s cubic-bezier(.2,.7,.2,1); }
 html.js .reveal.is-in { opacity: 1; transform: none; }
+
+@media (prefers-color-scheme: dark) {
+  .shot--board img { filter: invert(93%) hue-rotate(180deg); }
+}
 
 @media (prefers-reduced-motion: reduce) {
   html { scroll-behavior: auto; }

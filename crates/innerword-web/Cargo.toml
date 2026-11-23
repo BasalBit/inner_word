@@ -23,6 +23,11 @@ dispatch = "0.2"
 # The messages of the check's probe and its text, written as JSON by the page's side.
 serde_json.workspace = true
 
+[dev-dependencies]
+# The whiteboard's bundle (Excalidraw built, `dist/`) and the contract of its page, for the
+# test program's cases of Excalidraw in a whiteboard's view and on its export page.
+innerword-board-web.workspace = true
+
 # WebKit wants the main thread of the process (a WKWebView, its run loop, a print
 # operation), which a test of the default harness never has: this target is a program
 # of its own (`cargo test -p innerword-web` runs it with the unit tests).

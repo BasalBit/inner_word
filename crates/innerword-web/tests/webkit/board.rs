@@ -1,7 +1,7 @@
 //! A whiteboard's view and its export page (`docs/whiteboard-design.md`, sections 4.2
 //! and 5): the bridge, `call_async`, one document, the whiteboard's policy, `park`,
 //! `run_script` and its PDF. The bundle's own cases (Excalidraw in the view) are in
-//! [`the_bundle`].
+//! `bundle.rs`.
 
 use super::*;
 
@@ -706,9 +706,4 @@ body { width: 3000px; height: 2001px; position: relative; font: 24px Helvetica, 
         matches!(&no_size, Err(why) if why.contains("not a size")),
         &format!("an answer that is no size makes no PDF ({no_size:?})"),
     );
-}
-
-/// Excalidraw in the view and on the export page: the bundle of `innerword-board-web`.
-pub(super) fn the_bundle(report: &mut Report, _server: &Server, _rules: &Path) {
-    report.note("the bundle's cases wait for innerword-board-web's dist/");
 }

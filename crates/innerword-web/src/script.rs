@@ -4,7 +4,8 @@
 //! It generalises the check and the offscreen print: an offscreen window, a web view with
 //! occlusion detection off (Excalidraw draws in animation frames), a data store of its
 //! own, the rule list, the caller's policy on every answer, a host of its own
-//! (`board-export`). The entry is loaded and `didFinish` waited for, then **one**
+//! (`board-export`). The entry is loaded and `didFinish` waited for (and in the page its
+//! `load` event, which can come later: module scripts), then **one**
 //! `callAsyncJavaScript` runs in the page world with the caller's body and argument.
 //! With `pdf`, the answer is `{"width": w, "height": h}` in CSS pixels (points 1:1):
 //! after `document.fonts.ready` and two animation frames (a second call),
@@ -37,6 +38,14 @@ pub(crate) const HOST: &str = "board-export";
 const POLL: Duration = Duration::from_millis(20);
 /// The size of the offscreen window.
 const WINDOW: (f64, f64) = (1280., 900.);
+
+/// Before the caller's body: WebKit reports `didFinish` while the document can still be
+/// `interactive`, before its module scripts ran (seen with the whiteboard's export page:
+/// its calls were not defined yet in about half the runs). The `load` event comes after
+/// them.
+const LOADED: &str = "if (document.readyState !== 'complete') {\n\
+  await new Promise((resolve) => window.addEventListener('load', resolve, { once: true }));\n\
+}\n";
 
 /// After the script answered the size of the PDF: the fonts are ready and two frames
 /// were drawn.
@@ -281,7 +290,7 @@ fn tick(run: &Run) {
                 state.stage = Stage::Running;
                 Next::Call(
                     state.web_view,
-                    state.script.clone(),
+                    format!("{LOADED}{}", state.script),
                     state.argument_json.clone(),
                 )
             }

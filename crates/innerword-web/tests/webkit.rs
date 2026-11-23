@@ -47,6 +47,8 @@ const NIL: Id = std::ptr::null_mut();
 
 #[path = "webkit/board.rs"]
 mod board;
+#[path = "webkit/bundle.rs"]
+mod bundle;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
@@ -437,6 +439,17 @@ impl Host {
         extras: ViewExtras,
         rules: &Path,
     ) -> (WebPage, Rc<Events>) {
+        self.board_from(view_host, source(files), extras, rules)
+    }
+
+    /// The same over a source of the caller's.
+    fn board_from(
+        &self,
+        view_host: &str,
+        files: Arc<dyn PageSource>,
+        extras: ViewExtras,
+        rules: &Path,
+    ) -> (WebPage, Rc<Events>) {
         let events = Rc::new(Events::default());
         let page = unsafe {
             WebPage::new_with(
@@ -444,7 +457,7 @@ impl Host {
                 ViewConfig {
                     host: view_host.to_string(),
                     entry: "index.html".to_string(),
-                    source: source(files),
+                    source: files,
                     rules_dir: rules.to_path_buf(),
                     appearance: Appearance::Light,
                     background: (1., 1., 1.),
@@ -689,8 +702,9 @@ fn main() -> ExitCode {
     if wanted("run_script") {
         board::run_script(&mut report, &rules);
     }
+    // Excalidraw itself: the bundle of innerword-board-web under the whiteboard's policies.
     if wanted("bundle") {
-        board::the_bundle(&mut report, &server, &rules);
+        bundle::the_bundle(&mut report, &server, &rules);
     }
 
     report.check(

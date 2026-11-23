@@ -226,8 +226,10 @@ fn the_text_is_in_reading_order() {
     let summary = scene.summary();
     assert_eq!(summary.words, 10);
     assert_eq!(summary.texts, 5);
-    assert_eq!(summary.elements, 8);
-    assert_eq!(summary.by_type["text"], 5);
+    // A label is part of its shape, as the listing's header counts (section 7.4).
+    assert_eq!(summary.elements, 6);
+    assert_eq!(summary.labels, 2);
+    assert_eq!(summary.by_type["text"], 3);
     assert_eq!(summary.by_type["rectangle"], 2);
     assert_eq!(summary.by_type["frame"], 1);
 }

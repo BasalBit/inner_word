@@ -15,13 +15,18 @@ pub struct ListingHeader<'a> {
     pub folder: Option<&'a str>,
 }
 
-/// What a whiteboard holds, counted.
+/// What a whiteboard holds, counted. The elements are counted as the listing's header
+/// counts them (section 7.4): a label is part of its shape or arrow, not an element of its
+/// own; `labels` says how many there are.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct BoardSummary {
-    /// Elements, labels included.
+    /// Elements, labels not included (the count of the listing's header).
     pub elements: u64,
-    /// Elements by Excalidraw's type.
+    /// Elements by Excalidraw's type, labels not included.
     pub by_type: BTreeMap<String, u64>,
+    /// Labels: texts bound to a shape or an arrow of the whiteboard.
+    #[serde(default)]
+    pub labels: u64,
     /// Text elements (free text and labels).
     pub texts: u64,
     /// Picture elements.
@@ -156,20 +161,27 @@ impl Scene {
 
     /// What the whiteboard holds, counted.
     pub fn summary(&self) -> BoardSummary {
+        let by_id = self.by_id();
         let mut by_type = BTreeMap::new();
+        let mut labels = 0;
         let mut texts = 0;
         let mut pictures = 0;
         for element in &self.elements {
-            *by_type.entry(element.type_name().to_string()).or_insert(0) += 1;
             match element.kind() {
                 ElementType::Text => texts += 1,
                 ElementType::Image => pictures += 1,
                 _ => {}
             }
+            if is_label(element, &by_id) {
+                labels += 1;
+                continue;
+            }
+            *by_type.entry(element.type_name().to_string()).or_insert(0) += 1;
         }
         BoardSummary {
-            elements: self.elements.len() as u64,
+            elements: self.elements.len() as u64 - labels,
             by_type,
+            labels,
             texts,
             pictures,
             words: count_words(&self.text()),

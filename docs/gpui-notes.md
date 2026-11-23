@@ -1187,8 +1187,9 @@ tests on the fake engine, scripted runs in the debug build).
   context ranks like the deepest; among bindings at one depth the one added later wins, and
   a `gpui::NoAction` that wins disables every binding under it (`Keymap::bindings_for_input`,
   read). So the whiteboard's own chords are bound to `NoAction` in `BoardView` after every
-  other binding (`boards::fixed_key_bindings`, appended by `keymap::install` and
-  `measure_install` after the defaults were taken): on a whiteboard GPUI matches nothing on
+  other binding (`boards::WhiteboardKeys::fixed_bindings`, appended by `keymap::install`
+  and `measure_install` after the defaults were taken; none for a key the user gave a
+  command, `boards::whiteboard_keys`): on a whiteboard GPUI matches nothing on
   `cmd-alt-c` and leaves it to the web view; elsewhere the window's binding still works. The
   menu bar is the other way in (AppKit may offer a chord to the menu before the view):
   while a whiteboard is open it is built without those key equivalents, and a click on such

@@ -7,7 +7,7 @@ import { CaptureUpdateAction, convertToExcalidrawElements } from "@excalidraw/ex
 import { markImmediate, postNow, sendStatus, statusNow } from "./autosave.js";
 import { postFile, postSceneText, wellFormed, fitsIn, PART_BYTES } from "./bridge.js";
 import { adopt, insertElements } from "./edit.js";
-import { KEYS_THE_WINDOW_TAKES } from "./keys.js";
+import { KEYS_THE_WINDOW_TAKES, setKeysGivenUp } from "./keys.js";
 import { collectLibrary, libraryCall } from "./library.js";
 import { mermaidCall } from "./mermaid.js";
 import { board, currentRev, namedFileIds, recordVersions, sceneAt, sceneJson, selectedIds, viewCenter } from "./scene.js";
@@ -255,5 +255,13 @@ export const boardCalls = {
 
   state() {
     return statusNow();
+  },
+
+  /** The whiteboard's own keys the user gave a command that runs on a whiteboard
+   * (innerword_keymap's normal form), all of them: from now on no tooltip or menu item of
+   * Excalidraw's names one, and one no longer in the list is named again (4.7). */
+  keys({ givenUp }) {
+    setKeysGivenUp(givenUp);
+    return {};
   },
 };

@@ -331,6 +331,7 @@ pub(super) fn the_bundle(report: &mut Report, server: &Server, rules: &Path) {
     loaded_offline(report, &assets, &scene, rules);
     exported(report, &assets, &scene, rules);
     in_the_view(report, &assets, &scene, rules);
+    keys_given_up(report, &assets, &scene, rules);
     adopted(report, &assets, rules);
     mermaid(report, &assets, server, rules);
     shape_library(report, &assets, &elements, rules);
@@ -790,6 +791,142 @@ fn in_the_view(report: &mut Report, assets: &Assets, scene: &Value, rules: &Path
             ),
         );
     }
+}
+
+/// What Excalidraw's tooltips and its right-click menu name, read in the page: every title
+/// and `aria-keyshortcuts`, and each key of an open menu that is shown.
+const KEYS_SHOWN: &str = r#"const shown = [];
+   for (const el of document.querySelectorAll('[title], [aria-keyshortcuts]')) {
+     shown.push((el.getAttribute('title') || '') + ' | ' + (el.getAttribute('aria-keyshortcuts') || ''));
+   }
+   const menu = [];
+   for (const el of document.querySelectorAll('.context-menu-item__shortcut')) {
+     if (el.textContent && getComputedStyle(el).display !== 'none') menu.push(el.textContent);
+   }
+   return JSON.stringify({ shown, menu, menuItems: document.querySelectorAll('.context-menu-item').length });"#;
+
+/// Whether `said` names `key` as Excalidraw writes it ("Cmd+K"), not a longer key.
+fn names(said: &str, key: &str) -> bool {
+    said.match_indices(key).any(|(at, _)| {
+        !said[at + key.len()..]
+            .chars()
+            .next()
+            .is_some_and(|next| next.is_ascii_alphanumeric() || next == '+')
+    })
+}
+
+/// The whiteboard's own keys the app gave up to commands of the user's (4.7): told at the load
+/// in `board.json` (`keysGivenUp`), the tooltips (the link button's "Link - Cmd+K") and the
+/// right-click menu leave them out while a key still held keeps its place; told again with
+/// the call `keys`, a key given back is named again and a newly given one goes.
+fn keys_given_up(report: &mut Report, assets: &Assets, scene: &Value, rules: &Path) {
+    let source = BundleSource::new(assets);
+    source.set_json(
+        BOARD_PATH,
+        &json!({"stamp": STAMP, "scene": scene, "view": {}, "keysGivenUp": ["cmd-k", "cmd-'"]}),
+    );
+    source.set_json(LIBRARY_PATH, &json!({}));
+    let host = Host::new();
+    let Some((view, events)) = ready_view(
+        report,
+        &host,
+        "keys given up",
+        "board-14-1700000000000",
+        source,
+        rules,
+    ) else {
+        return;
+    };
+    // One element selected: its actions show Link (⌘K), Duplicate (⌘D) and the layers.
+    let select = r#"const api = window.innerwordBoard.api;
+        api.updateScene({ appState: { selectedElementIds: { box: true } } });
+        await new Promise((r) => setTimeout(r, 400));
+        return '';"#;
+    let _ = call(&view, select, "{}");
+    let read = |view: &WebPage| page_json(view, KEYS_SHOWN);
+    let said = |answer: &Value, key: &str| -> Vec<String> {
+        answer["shown"]
+            .as_array()
+            .map(|list| {
+                list.iter()
+                    .filter_map(Value::as_str)
+                    .filter(|said| names(said, key))
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let at_load = read(&view);
+    report.check(
+        said(&at_load, "Cmd+K").is_empty()
+            && !said(&at_load, "Cmd+D").is_empty()
+            && !said(&at_load, "Cmd+[").is_empty(),
+        &format!(
+            "a key given up at the load is gone from the tooltips, a held one stays (⌘K: {:?}, ⌘D: {:?})",
+            said(&at_load, "Cmd+K"),
+            said(&at_load, "Cmd+D")
+        ),
+    );
+
+    // The right-click menu of the canvas: ⌘' (the grid) is given up, ⌘A (select all) held.
+    let open_menu = r#"const canvas = document.querySelector('canvas.excalidraw__canvas.interactive');
+        const api = window.innerwordBoard.api;
+        api.updateScene({ appState: { selectedElementIds: {}, contextMenu: null } });
+        await new Promise((r) => setTimeout(r, 200));
+        canvas.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 3, clientY: 3, button: 2 }));
+        await new Promise((r) => setTimeout(r, 400));
+        return '';"#;
+    let close_menu = r#"window.innerwordBoard.api.updateScene({ appState: { contextMenu: null } });
+        await new Promise((r) => setTimeout(r, 200));
+        return '';"#;
+    let menu_keys = |answer: &Value| -> Vec<String> {
+        answer["menu"]
+            .as_array()
+            .map(|list| {
+                list.iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let _ = call(&view, open_menu, "{}");
+    let in_menu = read(&view);
+    let menu = menu_keys(&in_menu);
+    report.check(
+        in_menu["menuItems"].as_u64().unwrap_or(0) > 3
+            && !menu.iter().any(|key| key == "Cmd+'")
+            && menu.iter().any(|key| key == "Cmd+A"),
+        &format!("the right-click menu leaves out a key given up and keeps a held one ({menu:?})"),
+    );
+    let _ = call(&view, close_menu, "{}");
+
+    // Told again: ⌘K and ⌘' given back, ⌘D given up.
+    let told = call(&view, calls::KEYS, &calls::keys_argument(&["cmd-d"]));
+    let _ = call(&view, select, "{}");
+    let after = read(&view);
+    report.check(
+        told.is_ok()
+            && !said(&after, "Cmd+K").is_empty()
+            && said(&after, "Cmd+D").is_empty()
+            && !said(&after, "Cmd+[").is_empty(),
+        &format!(
+            "after the call keys a key given back is named again and a newly given one goes ({told:?}, ⌘K: {:?}, ⌘D: {:?})",
+            said(&after, "Cmd+K"),
+            said(&after, "Cmd+D")
+        ),
+    );
+    let _ = call(&view, open_menu, "{}");
+    let menu = menu_keys(&read(&view));
+    report.check(
+        menu.iter().any(|key| key == "Cmd+'"),
+        &format!("the right-click menu names a key given back ({menu:?})"),
+    );
+    let _ = call(&view, close_menu, "{}");
+    report.check(
+        page_errors(&events).is_empty(),
+        &format!("no script error ({:?})", page_errors(&events)),
+    );
 }
 
 /// `adopt` by the base rule, every row of section 4.5's table, then `undo` and `redo`.

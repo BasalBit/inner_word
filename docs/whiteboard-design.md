@@ -1487,16 +1487,17 @@ flowchart navigation) added, and `cmd-enter` also editing a line's points; `Boar
   the window's defaults are kept off Excalidraw's chords except the comments' and Vim
   mode's, which have always been held, and a default that ever collides keeps the hold.
   The keymap works it out at every install (`keymap::install` and `measure_install`, one
-  `assemble`), keeps it (`keymap::whiteboard_keys`), and four places ask it, so they cannot
+  `assemble`), keeps it (`keymap::whiteboard_keys`), and five places ask it, so they cannot
   disagree: the fixed bindings (none for a key given up, so GPUI runs the user's command
   and AppKit never reaches the web view); the menu bar while a whiteboard is open
   (`menus::menu_key_bindings(.., whiteboard)`, `WhiteboardKeys::holds_from`: the key stays
   beside the user's command and beside no other item, so `Link…` shows none there); the
-  fixed row of the list (6.8); and the question about a key (6.8). An import of a
-  shortcuts file and "reset all" go through the same install. Excalidraw's function of a
-  key given up is reached from its own menus and toolbar. Not done: Excalidraw's tooltips
-  still name the key (the glue cuts the keys of a fixed list of controls, `keys.js`; a key
-  given up would need that list from the app at load).
+  fixed row of the list (6.8); the question about a key (6.8); and the page, whose
+  tooltips and menus stop naming a key given up (`WhiteboardKeys::given_up`: `keysGivenUp`
+  in `board.json` at every load, and the call `keys` when an install changes them while the
+  whiteboard is open, `Workspace::tell_the_board_its_keys`; "The keys Excalidraw shows"
+  below). An import of a shortcuts file and "reset all" go through the same install.
+  Excalidraw's function of a key given up is reached from its own menus and toolbar.
 - **How the menu bar is kept off them** (reviewer's point, taken: an item is enabled
   whenever its action has a handler anywhere, and four of these have app-wide listeners:
   `ToggleComments`, `NextComment`, `PreviousComment` in `innerword-comments`, `ToggleVimMode`
@@ -1528,13 +1529,19 @@ flowchart navigation) added, and `cmd-enter` also editing a line's points; `Boar
 - **The keys Excalidraw shows.** Excalidraw's interface names keys in two places, and a key
   it names must be one that does it here (product rule 3). Its help dialog is not rendered
   (our main menu's Help and its `?` key post `help`, and the app opens its own list of
-  shortcuts at "On a whiteboard", 4.4). Its tooltips keep the keys that are Excalidraw's on
-  a whiteboard (the tool letters and digits, and the chords of `WHITEBOARD_KEYS`: held
-  unless the user gives one to a command, so they stay true until then), and lose the key of every control whose key the window takes and the
-  user can change (zoom in, zoom out, reset zoom, the command palette, the help, the
-  library's search, save and export): `keys.js` holds that list, a `MutationObserver` cuts
-  the key out of those controls' `title` and `aria-keyshortcuts`, and a WebKit case reads
-  every tooltip of the toolbar against the list.
+  shortcuts at "On a whiteboard", 4.4). Its tooltips and the keys of its menus (the
+  right-click menu, the main menu) keep the keys that are Excalidraw's on a whiteboard (the
+  tool letters and digits, and the chords of `WHITEBOARD_KEYS` that are held), and lose
+  every key the window takes and the user can change (zoom in, zoom out, reset zoom, the
+  command palette, the help, the library's search, save and export: `keys.js`,
+  `KEYS_THE_WINDOW_TAKES`) and every chord of `WHITEBOARD_KEYS` the user gave a command (the
+  app tells the page which, above). A `MutationObserver` reads every `title`,
+  `aria-keyshortcuts` and key of a menu item as Excalidraw writes it (`getShortcutKey`:
+  "Cmd+Option+[", read into the keymap's normal form, `cmd-alt-[`), cuts those keys out (a
+  menu item's key is hidden), and puts a key back when the app gives it back. WebKit cases
+  read every tooltip against the window's list, and a key given up and one held in the
+  tooltips and the right-click menu, at the load and after the call `keys`
+  (`keys_given_up`, `tests/webkit/bundle.rs`).
 - **The Edit menu.** On a whiteboard the workspace's `edit_where_the_keyboard_is` sends Copy,
   Cut and Paste to the web view (`tryToPerform:copy:` and the others: the page gets its
   clipboard events, which Excalidraw handles) and Undo, Redo and Select All to the glue
@@ -3962,7 +3969,7 @@ section 10 are the user's, at the end).
 **As built** (B8 and its fix round; the "Built" notes of sections 4 to 6 say where it
 departed): `boards.rs` (`BOARD_VIEW`, `SHAPE_LIBRARY_SETTING`, `VIEW_COLLECT_PATIENCE`,
 `ADOPT_PATIENCE`, `board_host`, `not_shown_sentence`, `assets(cx)`, `prepare_picture`,
-`picture_type`, `data_url_bytes`, `data_url_of`, `drawn_size`, `fixed_key_bindings`,
+`picture_type`, `data_url_bytes`, `data_url_of`, `drawn_size`, `WhiteboardKeys::fixed_bindings`,
 `key_spellings`, `is_whiteboard_keys`, `is_fixed_binding`, `fake_board_pdf`,
 `stored_library`, `recovery_dir`, `BoardCell`, `SharedCell`, `LibraryBoardSource` (serving
 the bundle, `board.json`, `library.json`, `scene.json` and `_files/<hex>`), `FakeBoard`);

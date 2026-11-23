@@ -446,6 +446,10 @@ impl Workspace {
             cx.subscribe_in(&comments, window, Self::on_comments_event),
             cx.subscribe_in(&vim, window, Self::on_vim_event),
             cx.observe_global::<FontLibrary>(Self::store_recent_fonts),
+            // An install of the keymap may give a whiteboard's own key to a
+            // command of the user's, or give one back: the open whiteboard's
+            // tooltips follow.
+            cx.observe_global::<crate::keymap::AppKeymap>(Self::tell_the_board_its_keys),
             // The note of a print that is preparing, and the one of pages
             // being added, can go by ways the workspace is not told of
             // (`print.rs`, `print_note_went`; `page_import.rs`).

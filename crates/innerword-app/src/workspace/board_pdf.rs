@@ -80,6 +80,7 @@ impl Workspace {
                         .iter()
                         .map(|hex| hex.as_str().to_string())
                         .collect(),
+                    keys_given_up: Vec::new(),
                 }));
                 let source: Arc<dyn innerword_web::PageSource> = Arc::new(
                     boards::LibraryBoardSource::new(assets, self.library.read(cx), cell),

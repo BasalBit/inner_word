@@ -756,6 +756,7 @@ impl Workspace {
                 .iter()
                 .map(|hex| hex.as_str().to_string())
                 .collect(),
+            keys_given_up: crate::keymap::whiteboard_keys(cx).given_up(),
         }));
         let board = BoardState {
             session: SESSIONS.fetch_add(1, Ordering::Relaxed),
@@ -2269,6 +2270,29 @@ impl Workspace {
         let (tx, rx) = pages::answer();
         view.call(body, &argument, move |result| tx.send(result));
         Some(rx)
+    }
+
+    /// The keymap was installed again (or changed otherwise): when the keys
+    /// of the whiteboard's own the user gave a command are no longer what
+    /// the open whiteboard's page was told, it is told them
+    /// ([`calls::KEYS`]), so that no tooltip or menu item of Excalidraw's
+    /// names a key the user gave a command, and one given back is named
+    /// again; a reload is served them in `board.json`.
+    pub(crate) fn tell_the_board_its_keys(&mut self, cx: &mut Context<Self>) {
+        let Some(id) = self.open_board_id() else {
+            return;
+        };
+        let given_up = crate::keymap::whiteboard_keys(cx).given_up();
+        let Some(board) = self.board_of_mut(id) else {
+            return;
+        };
+        match board.cell.lock() {
+            Ok(mut cell) if cell.keys_given_up != given_up => {
+                cell.keys_given_up = given_up.clone();
+            }
+            _ => return,
+        }
+        drop(self.board_call(id, calls::KEYS, calls::keys_argument(&given_up)));
     }
 
     /// A call on the open whiteboard whose answer nobody waits for.

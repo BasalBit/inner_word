@@ -1466,8 +1466,12 @@ document"). Three crates: `innerword-keymap` knows what a change is,
   `a_whiteboard_key_the_user_gave_a_command_runs_it_there`,
   `a_whiteboard_key_a_default_wins_stays_held`; `keybindings.rs`,
   `a_whiteboard_key_given_to_a_command_is_said_and_given_up`). Excalidraw's own tooltips
-  still name the key it no longer has there (the bundle cuts only the keys of a fixed
-  list, `keys.js`).
+  and menu items stop naming such a key: the page is told the keys given up
+  (`WhiteboardKeys::given_up`) in `board.json` (`keysGivenUp`) at every load and by the
+  call `keys` when an install changes them while the whiteboard is open
+  (`Workspace::tell_the_board_its_keys`), and the glue cuts them as it cuts the window's
+  (`keys.js`; `boards.rs`,
+  `the_keys_given_up_reach_the_page_at_the_load_and_after_a_change`).
 - **What the user is told counts commands.** A command is a row of the list, never a
   single key: Italic with two keys of the user's is one, Underline left without a key is
   one, and a command bound in several key contexts of one place is one
@@ -2377,11 +2381,12 @@ the shape library, closing and quitting), `workspace/board_pdf.rs` (its PDF),
   Vim Mode answers with a toast. The list of shortcuts has them as fixed rows "On a
   whiteboard". **A key the user gives a command that works on a whiteboard is that
   command's there** (`boards::whiteboard_keys`, one decision per install for the fixed
-  bindings, the menu bar, the fixed rows and the question: "Changing keys", "A whiteboard's
-  own key given to a command"): the palette given `cmd-k` opens on a whiteboard, the menu
-  bar keeps `cmd-k` beside Command Palette…, the row of Excalidraw's Link says who has it,
-  and Excalidraw's link is reached from its own menus and toolbar; a key whose winner there
-  is a default stays held. The Edit menu's Undo,
+  bindings, the menu bar, the fixed rows, the question and Excalidraw's tooltips: "Changing
+  keys", "A whiteboard's own key given to a command"): the palette given `cmd-k` opens on a
+  whiteboard, the menu bar keeps `cmd-k` beside Command Palette…, the row of Excalidraw's
+  Link says who has it, and Excalidraw's link is reached from its own menus and toolbar,
+  whose tooltips no longer name `cmd-k` (`board.json`'s `keysGivenUp`, the call `keys`); a
+  key whose winner there is a default stays held. The Edit menu's Undo,
   Redo and Select All go to the glue, Copy, Cut and Paste to the view, and those six keep
   their key equivalents on a whiteboard (`menus::keeps_its_key_on_a_board`: Excalidraw 0.18.1
   takes copy and paste only as the `copy:` and `paste:` the items send); a whiteboard that

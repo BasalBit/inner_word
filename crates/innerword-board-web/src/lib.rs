@@ -44,7 +44,9 @@ pub const EXPORT_ENTRY: &str = "export.html";
 /// The export page's scene: the stored scene alone (`innerword_board::export_dir::SCENE_FILE`).
 pub const SCENE_PATH: &str = "scene.json";
 /// The view's scene: `{"stamp": "<ContentStamp>", "scene": <the stored scene>, "view":
-/// <the row's view_state, or {}>}` (section 4.3), as the library holds it at that moment.
+/// <the row's view_state, or {}>, "keysGivenUp": ["cmd-k", ...]}` (section 4.3), as the
+/// library holds it at that moment; `keysGivenUp` are the whiteboard's own keys the user
+/// gave a command, which no tooltip of Excalidraw's names (section 4.7, [`calls::KEYS`]).
 pub const BOARD_PATH: &str = "board.json";
 /// The view's shape library: the setting `board.shape_library` as it is stored (section 4.15),
 /// or `{}` when there is none.

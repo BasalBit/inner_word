@@ -1502,6 +1502,64 @@ fn a_whiteboard_key_the_user_gave_a_command_runs_it_there(cx: &mut TestAppContex
     );
 }
 
+/// The keys given up reach the page, so that Excalidraw's tooltips and menu
+/// items stop naming them: in `board.json` at every load (`keysGivenUp`),
+/// and through the call `keys` when the keymap is installed again while the
+/// whiteboard is open (a key given, a key given back). An install that
+/// changes nothing for the whiteboard tells it nothing.
+#[gpui::test]
+fn the_keys_given_up_reach_the_page_at_the_load_and_after_a_change(cx: &mut TestAppContext) {
+    let (fake, _library, workspace, board, text, vcx) = open_board(cx);
+    let keys_served = |fake: &FakePages| -> Value {
+        let served: Value = serde_json::from_str(&fake.boards_opened().last().unwrap().1).unwrap();
+        served["keysGivenUp"].clone()
+    };
+    let keys_calls = |fake: &FakePages| -> Vec<String> {
+        fake.board_calls()
+            .into_iter()
+            .filter(|call| call.starts_with("keys"))
+            .collect()
+    };
+    assert_eq!(
+        keys_served(&fake),
+        json!([]),
+        "nothing given up at the load"
+    );
+    assert!(keys_calls(&fake).is_empty());
+
+    give_the_palette(&workspace, Some(&["cmd-k"]), vcx);
+    assert_eq!(keys_calls(&fake), ["keys cmd-k"], "told after the change");
+    // A reload is served the keys as they are now.
+    let served = workspace
+        .update(vcx, |w, cx| {
+            w.board_served(innerword_board_web::BOARD_PATH, cx)
+        })
+        .unwrap();
+    let served: Value = serde_json::from_slice(&served.bytes).unwrap();
+    assert_eq!(served["keysGivenUp"], json!(["cmd-k"]));
+
+    // A change that leaves the whiteboard's keys as they were tells it nothing.
+    give_the_palette(&workspace, Some(&["cmd-k", "cmd-shift-p"]), vcx);
+    assert_eq!(keys_calls(&fake), ["keys cmd-k"]);
+
+    // Opened again: the load has them.
+    workspace.update_in(vcx, |w, window, cx| w.open_document(text, true, window, cx));
+    vcx.run_until_parked();
+    workspace.update_in(vcx, |w, window, cx| {
+        w.open_document(board, true, window, cx)
+    });
+    vcx.run_until_parked();
+    fake.board_ready();
+    vcx.run_until_parked();
+    assert_eq!(fake.boards_opened().len(), 2);
+    assert_eq!(keys_served(&fake), json!(["cmd-k"]), "told at the load");
+    assert_eq!(keys_calls(&fake), ["keys cmd-k"], "and not again by a call");
+
+    // Given back: the page names ⌘K again.
+    give_the_palette(&workspace, None, vcx);
+    assert_eq!(keys_calls(&fake), ["keys cmd-k", "keys"]);
+}
+
 /// A key the user gave a command where a default still wins on a whiteboard
 /// stays held: ⌥⌘C is the window's "Show or hide comments" by default (bound
 /// after the palette's, so it wins where both apply) and Excalidraw's copy

@@ -21,6 +21,7 @@ fn bodies() -> Vec<(&'static str, &'static str, &'static str)> {
         ("state", calls::STATE, "calls.js"),
         ("mermaid", calls::MERMAID, "calls.js"),
         ("library", calls::LIBRARY, "calls.js"),
+        ("keys", calls::KEYS, "calls.js"),
         ("exportLayout", calls::EXPORT_LAYOUT, "export.js"),
         ("convertSkeletons", calls::CONVERT_SKELETONS, "export.js"),
     ]
@@ -55,6 +56,8 @@ fn the_arguments() {
     assert_eq!(json(calls::zoom_argument(Zoom::Fit)), serde_json::json!({ "fit": true }));
     assert_eq!(json(calls::search_argument(Some("a \"quoted\"\nline"))), serde_json::json!({ "query": "a \"quoted\"\nline" }));
     assert_eq!(json(calls::search_argument(None)), serde_json::json!({}));
+    assert_eq!(json(calls::keys_argument(&["cmd-k", "cmd-alt-["])), serde_json::json!({ "givenUp": ["cmd-k", "cmd-alt-["] }));
+    assert_eq!(json(calls::keys_argument(&[])), serde_json::json!({ "givenUp": [] }));
     assert_eq!(json(calls::mermaid_argument(Some("flowchart LR\n A --> B"))), serde_json::json!({ "insert": "flowchart LR\n A --> B" }));
     assert_eq!(json(calls::mermaid_argument(None)), serde_json::json!({}));
     assert_eq!(json(calls::library_argument(&LibraryAction::Toggle)), serde_json::json!({ "toggle": true }));

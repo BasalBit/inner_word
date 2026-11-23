@@ -15,7 +15,7 @@ import { editingChanged, installGestureTracking, sceneChanged, sendStatus } from
 import { post, reportError } from "./bridge.js";
 import { boardCalls, defineCalls } from "./calls.js";
 import { loadFontsFor } from "./fonts.js";
-import { installKeys, watchTheInterface } from "./keys.js";
+import { installKeys, setKeysGivenUp, watchTheInterface } from "./keys.js";
 import { itemsOfStored, libraryChanged, postLibrary, servedLibrary, whenLibraryWaitingChanges } from "./library.js";
 import { onLinkOpen, withKeptLinks } from "./links.js";
 import { loadPictures } from "./pictures.js";
@@ -203,6 +203,8 @@ export async function startBoard() {
   const scene = storedScene(stored);
   if (!scene) throw new Error("board.json could not be read: there is no stored scene to start from");
   const stamp = stored.stamp;
+  // The keys of the whiteboard's that the user gave a command: no tooltip names them.
+  setKeysGivenUp(stored.keysGivenUp);
   const elements = scene.elements.filter((e) => e && !e.isDeleted && !NEVER_KEPT.has(e.type));
 
   const files = await loadPictures(scene.files);

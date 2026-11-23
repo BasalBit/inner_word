@@ -190,20 +190,24 @@ pub struct BoardCell {
     pub library: Arc<str>,
     /// The `FileId`s (hex) the source answers under `_files/`.
     pub files: HashSet<String>,
+    /// The whiteboard's own keys the user gave a command
+    /// ([`WhiteboardKeys::given_up`]), which no tooltip of Excalidraw's names.
+    pub keys_given_up: Vec<&'static str>,
 }
 
 /// A [`BoardCell`] shared with a view's source.
 pub type SharedCell = Arc<Mutex<BoardCell>>;
 
 impl BoardCell {
-    /// `board.json`: `{"stamp", "scene", "view"}`, one answer so that its
-    /// parts belong together.
+    /// `board.json`: `{"stamp", "scene", "view", "keysGivenUp"}`, one
+    /// answer so that its parts belong together.
     pub fn board_json(&self) -> String {
         format!(
-            r#"{{"stamp":{},"scene":{},"view":{}}}"#,
+            r#"{{"stamp":{},"scene":{},"view":{},"keysGivenUp":{}}}"#,
             serde_json::to_string(&self.stamp).unwrap_or_else(|_| "\"\"".to_string()),
             raw_or(&self.scene, "null"),
-            raw_or(&self.view, "{}")
+            raw_or(&self.view, "{}"),
+            serde_json::to_string(&self.keys_given_up).unwrap_or_else(|_| "[]".to_string())
         )
     }
 }
@@ -587,6 +591,19 @@ impl WhiteboardKeys {
             None => true,
             Some(target) => target.command.action != action.name(),
         })
+    }
+
+    /// The keys given up to a command of the user's, in the keymap's normal
+    /// form as `WHITEBOARD_KEYS` writes them: what the whiteboard's page is
+    /// told so that no tooltip or menu item of Excalidraw's names them
+    /// (`board.json`'s `keysGivenUp`, then the call
+    /// `innerword_board_web::calls::KEYS` after an install).
+    pub fn given_up(&self) -> Vec<&'static str> {
+        self.keys
+            .iter()
+            .filter(|key| key.given_to.is_some())
+            .map(|key| key.key.keys)
+            .collect()
     }
 
     /// Whether `keys` is held for Excalidraw (one of its own keys, given to
@@ -1084,7 +1101,7 @@ pub(crate) fn status_value(status: &Status) -> Value {
 
 /// What a call's body is: the name of the glue's call it runs.
 pub fn call_name(body: &str) -> &'static str {
-    let known: [(&str, &'static str); 18] = [
+    let known: [(&str, &'static str); 19] = [
         (crate::workspace::board::HOLD_KEYS, "holdKeys"),
         (crate::workspace::board::OPEN_TEXT, "openText"),
         (calls::COLLECT, "collect"),
@@ -1101,6 +1118,7 @@ pub fn call_name(body: &str) -> &'static str {
         (calls::STATE, "state"),
         (calls::MERMAID, "mermaid"),
         (calls::LIBRARY, "library"),
+        (calls::KEYS, "keys"),
         (calls::EXPORT_LAYOUT, "exportLayout"),
         (calls::CONVERT_SKELETONS, "convertSkeletons"),
     ];
@@ -1639,6 +1657,19 @@ impl crate::pages::FakeView {
                     .borrow_mut()
                     .calls
                     .push(format!("search {query}").trim_end().to_string());
+                done(Ok("{}".to_string()));
+            }
+            "keys" => {
+                let given_up: Vec<&str> = argument_value
+                    .get("givenUp")
+                    .and_then(Value::as_array)
+                    .map(|keys| keys.iter().filter_map(Value::as_str).collect())
+                    .unwrap_or_default();
+                pages.board.borrow_mut().calls.push(
+                    format!("keys {}", given_up.join(","))
+                        .trim_end()
+                        .to_string(),
+                );
                 done(Ok("{}".to_string()));
             }
             "center" => {

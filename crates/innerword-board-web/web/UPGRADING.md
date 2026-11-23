@@ -47,9 +47,13 @@ bundled) and change what moved.
 
 - **Keys** (`../src/keys.rs`, `WHITEBOARD_KEYS`; section 4.7): read the actions' `keyTest`s
   and `App.onKeyDown` again (`dist/dev/index.js`: `keyTest:`, `"onKeyDown"`). The keys the glue
-  stops before Excalidraw sees them (`keys.js`, `NOT_EXCALIDRAWS`), the controls whose tooltip
-  loses its key (`CONTROLS_WITHOUT_KEYS`: `.zoom-in-button`, `.zoom-out-button`,
-  `.reset-zoom-button`, `.help-icon`) and Excalidraw's spelling of keys (`getShortcutKey`).
+  stops before Excalidraw sees them (`keys.js`, `NOT_EXCALIDRAWS`), where Excalidraw writes a
+  key (a `title` "Label — Key" or, for the link, "Label - Key"; `aria-keyshortcuts`; the
+  classes `context-menu-item__shortcut`, `dropdown-menu-item__shortcut` and
+  `welcome-screen-menu-item__shortcut`), and its spelling of keys (`getShortcutKey`: "Cmd",
+  "Option", "Shift", "+" between them, "Cmd+Shift+<" for the shifted comma), which `keys.js`
+  reads into the keymap's normal form to cut the keys the window takes and the ones the app
+  gave up (`keyShown`).
 - **Undo, redo, select all** are synthetic key events on `.excalidraw` (`cmd-z`,
   `cmd-shift-z`, `cmd-a`): 0.18.1 has no public undo. `innerword-web`'s WebKit case holds them.
 - **Switches** (section 4.13): `UIOptions`, `aiEnabled`, `validateEmbeddable`, the main menu

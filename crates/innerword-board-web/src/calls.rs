@@ -55,6 +55,12 @@ pub const STATE: &str = body!("state");
 pub const MERMAID: &str = body!("mermaid");
 /// [`library_argument`] -> [`LibraryAnswered`]: the shape library's commands.
 pub const LIBRARY: &str = body!("library");
+/// [`keys_argument`] -> `{}`: the whiteboard's own keys the app gave up to commands of the
+/// user's, all of them: from then on no tooltip or menu item of Excalidraw's names one, and
+/// one left out is named again. The view is told them first in `board.json`
+/// (`keysGivenUp`, [`crate::BOARD_PATH`]); the app calls this when its keymap is installed
+/// again while the whiteboard is open.
+pub const KEYS: &str = body!("keys");
 /// The export page: [`export_argument`] -> [`ExportSize`]. The page then shows the SVG of the
 /// stored scene alone at (0, 0); its PDF is the rect (0, 0, ceil(width), ceil(height)).
 pub const EXPORT_LAYOUT: &str = body!("exportLayout");
@@ -183,6 +189,12 @@ pub fn library_argument(action: &LibraryAction) -> String {
         LibraryAction::Insert(id) => json!({ "insert": id }),
     }
     .to_string()
+}
+
+/// `{"givenUp": ["cmd-k", ...]}`: keys of [`crate::keys::WHITEBOARD_KEYS`] in
+/// `innerword_keymap`'s normal form, as they are written there.
+pub fn keys_argument(given_up: &[&str]) -> String {
+    json!({ "givenUp": given_up }).to_string()
 }
 
 /// `{"skeletons": <skeletons_json>}` (a JSON array).

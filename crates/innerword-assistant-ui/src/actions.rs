@@ -89,6 +89,10 @@ actions!(
         ReplaceSelection,
         /// Copy the answer.
         CopyAnswer,
+        /// Draw the answer's drawing: on the open whiteboard, or as a new
+        /// whiteboard beside the open document (the host says which,
+        /// [`crate::AssistantPanel::set_drawing_target`]).
+        DrawAnswer,
         /// Close the side chat.
         CloseAssistant,
         /// Move to the next control of the header or the context row.
@@ -132,6 +136,11 @@ pub fn key_bindings() -> Vec<KeyBinding> {
         KeyBinding::new("cmd-enter", InsertAtCaret, panel),
         KeyBinding::new("cmd-shift-enter", ReplaceSelection, panel),
         KeyBinding::new("cmd-shift-c", CopyAnswer, panel),
+        // In the panel only: its editors bind nothing on it (InsertAtCaret
+        // is bound a second time below because the editor binds
+        // `cmd-enter` itself), so this binding reaches the composer and the
+        // answers too.
+        KeyBinding::new("cmd-shift-d", DrawAnswer, panel),
         // The editors of any chat: these keys are the editor's own
         // otherwise (`tab` moves to the next field of the window, `cmd-.`
         // is the format menu).
@@ -216,6 +225,14 @@ pub fn commands() -> Vec<CommandDescriptor> {
         ]),
         CommandDescriptor::new("Replace selection with answer", CATEGORY, ReplaceSelection)
             .keywords(["assistant", "apply"]),
+        CommandDescriptor::new("New whiteboard from answer", CATEGORY, DrawAnswer).keywords([
+            "assistant",
+            "draw",
+            "drawing",
+            "diagram",
+            "whiteboard",
+            "apply",
+        ]),
         CommandDescriptor::new("Copy answer", CATEGORY, CopyAnswer)
             .keywords(["assistant", "clipboard"]),
     ]

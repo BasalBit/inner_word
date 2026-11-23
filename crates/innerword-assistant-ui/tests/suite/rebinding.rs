@@ -177,3 +177,57 @@ fn a_control_names_the_key_of_its_own_place(cx: &mut TestAppContext) {
     cx.run_until_parked();
     assert_eq!(ws.fake.stops(), 1);
 }
+
+/// The key of "Draw on Whiteboard" changed: the button names the new key
+/// (asked where the list is), the new key draws, the old one does
+/// nothing.
+#[gpui::test]
+fn the_key_of_the_drawing_that_was_changed(cx: &mut TestAppContext) {
+    use innerword_assistant::DrawingTarget;
+    use innerword_assistant_ui::{ACTION_DRAW, AssistantPanelEvent, DocumentRef, DrawAnswer};
+
+    let (ws, cx) = open_panel(cx);
+    ws.panel.update_in(cx, |panel, window, cx| {
+        panel.set_document(
+            Some(DocumentRef::new(7, "Plan").with_drawing(DrawingTarget::OpenWhiteboard, None)),
+            None,
+            window,
+            cx,
+        )
+    });
+    cx.run_until_parked();
+    ws.fake.reply(
+        "Here.\n\n```whiteboard\n{\"add\": [{\"type\": \"ellipse\", \"id\": \"a\", \"x\": 0, \"y\": 0}]}\n```\n",
+    );
+    ws.send("Draw", cx);
+    assert_eq!(places(&DrawAnswer, cx), ["AssistantPanel"]);
+
+    let button_key = |cx: &mut VisualTestContext| {
+        ws.panel.update_in(cx, |panel, window, cx| {
+            let list = panel.messages().read(cx);
+            let focus = gpui::Focusable::focus_handle(list, cx);
+            list.actions()
+                .iter()
+                .find(|action| action.id.as_ref() == ACTION_DRAW)
+                .and_then(|action| action.key_hint_at(&focus, window, cx))
+                .map(|key| key.text())
+        })
+    };
+    assert_eq!(button_key(cx).as_deref(), Some("⇧⌘D"));
+    assert_eq!(rebind(&DrawAnswer, "cmd-shift-d", "cmd-alt-d", cx), 1);
+    assert_eq!(button_key(cx).as_deref(), Some("⌥⌘D"));
+
+    let draws = |cx: &mut VisualTestContext| {
+        ws.take_events(cx)
+            .iter()
+            .filter(|event| matches!(event, AssistantPanelEvent::Draw { .. }))
+            .count()
+    };
+    draws(cx);
+    cx.simulate_keystrokes("cmd-shift-d");
+    cx.run_until_parked();
+    assert_eq!(draws(cx), 0, "the old key draws nothing");
+    cx.simulate_keystrokes("cmd-alt-d");
+    cx.run_until_parked();
+    assert_eq!(draws(cx), 1);
+}

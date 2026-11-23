@@ -694,6 +694,7 @@ fn an_empty_conversation_offers_example_prompts(cx: &mut TestAppContext) {
                     "Summarise this chapter in five sentences.".into(),
                     "Which sentences are too long?".into(),
                 ],
+                ..EmptyState::default()
             }),
             cx,
         )
@@ -1115,4 +1116,127 @@ fn the_question_of_the_quick_chat_shows_what_it_is_about(cx: &mut TestAppContext
             .unwrap()
             .contains("She was very tired")
     );
+}
+
+/// An action whose state the host gives per answer: hidden under one,
+/// dimmed with the reason under another, last in the menu while it is
+/// first in the row of buttons.
+#[gpui::test]
+fn an_action_is_offered_per_answer(cx: &mut TestAppContext) {
+    use innerword_assistant_ui::{ActionState, ActionWords, AnswerAction};
+
+    let (chat, cx) = open_chat(cx);
+    chat.fake.reply("Plain.");
+    chat.send("One", cx);
+    let plain = chat.last_id(cx);
+    chat.fake.reply("Special.");
+    chat.send("Two", cx);
+    let special = chat.last_id(cx);
+    chat.fake.reply("Dimmed.");
+    chat.send("Three", cx);
+    let dimmed = chat.last_id(cx);
+
+    chat.messages.update(cx, |list, cx| {
+        let mut actions = vec![
+            AnswerAction::new("special", "Special")
+                .tooltip("Do the Special Thing")
+                .menu_last()
+                .state_for(|facts| match facts.message.text.as_str() {
+                    "Special." => ActionState::Enabled,
+                    "Dimmed." => ActionState::Disabled("Not for this one.".into()),
+                    _ => ActionState::Hidden,
+                })
+                .words_for(|facts| {
+                    (facts.message.text == "Dimmed.").then(|| ActionWords {
+                        label: "Special Again".into(),
+                        tooltip: "Again".into(),
+                        menu: "Do It Again".into(),
+                    })
+                }),
+        ];
+        actions.extend(list.actions().iter().cloned());
+        list.set_actions(actions, cx);
+    });
+    cx.run_until_parked();
+
+    // Hidden under the first answer, not in its menu.
+    let row = bounds(format!("assistant-message-{}", plain.0), cx);
+    move_to(row.center(), cx);
+    assert!(try_bounds(format!("assistant-action-special-{}", plain.0), cx).is_none());
+    chat.messages.update(cx, |list, cx| {
+        assert_eq!(list.action_state("special", plain), ActionState::Hidden);
+        assert!(!list.invoke_action("special", plain, cx));
+    });
+    right_click_at(point(row.right() - px(8.), row.bottom() - px(8.)), cx);
+    assert_eq!(
+        menu_labels(cx),
+        ["Replace Selection", "Insert Below", "Copy Answer"]
+    );
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+
+    // Under the second: first in the row, last in the menu.
+    let row = bounds(format!("assistant-message-{}", special.0), cx);
+    move_to(row.center(), cx);
+    let button = bounds(format!("assistant-action-special-{}", special.0), cx);
+    let replace = bounds(format!("assistant-action-replace-{}", special.0), cx);
+    assert!(button.left() < replace.left());
+    right_click_at(point(row.right() - px(8.), row.bottom() - px(8.)), cx);
+    assert_eq!(
+        menu_labels(cx),
+        [
+            "Replace Selection",
+            "Insert Below",
+            "Copy Answer",
+            "Do the Special Thing"
+        ]
+    );
+    choose("Do the Special Thing", cx);
+    assert_eq!(
+        chat.list_events(cx).last(),
+        Some(&MessageListEvent::ActionInvoked {
+            action: "special".into(),
+            message: special
+        })
+    );
+
+    // Under the third: dimmed, with its own words and the reason.
+    let before = chat.list_events(cx).len();
+    click(format!("assistant-action-special-{}", dimmed.0), cx);
+    assert_eq!(chat.list_events(cx).len(), before);
+    chat.messages.update(cx, |list, cx| {
+        assert_eq!(
+            list.action_state("special", dimmed),
+            ActionState::Disabled("Not for this one.".into())
+        );
+        assert_eq!(
+            list.action_words("special", dimmed).unwrap().label.as_ref(),
+            "Special Again"
+        );
+        assert!(!list.invoke_action("special", dimmed, cx));
+    });
+    let row = bounds(format!("assistant-message-{}", dimmed.0), cx);
+    right_click_at(point(row.right() - px(8.), row.bottom() - px(8.)), cx);
+    assert_eq!(
+        menu_labels(cx).last().map(String::as_str),
+        Some("Do It Again (Not for this one)")
+    );
+}
+
+/// A list that does not show drawings (the quick chat) shows a drawing
+/// block as the code it is, as before.
+#[gpui::test]
+fn a_list_without_drawings_shows_the_block_as_code(cx: &mut TestAppContext) {
+    let (chat, cx) = open_chat(cx);
+    chat.fake
+        .reply("Here.\n\n```whiteboard\n{\"add\": [{\"type\": \"ellipse\", \"id\": \"a\", \"x\": 0, \"y\": 0}]}\n```\n");
+    chat.send("Draw", cx);
+    let answer = chat.last_id(cx);
+    assert!(chat.answer_text(answer, cx).contains("\"add\""));
+    chat.messages.read_with(cx, |list, _| {
+        assert!(!list.shows_drawings());
+        let facts = list.facts(answer).unwrap();
+        assert!(facts.drawing.is_none());
+        assert!(facts.has_text);
+    });
 }

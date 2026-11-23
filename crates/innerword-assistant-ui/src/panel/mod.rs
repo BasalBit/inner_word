@@ -22,6 +22,7 @@
 //! | says whether the panel is on screen | [`AssistantPanel::set_shown`], [`AssistantPanel::end_idle_processes`] |
 //! | stores the conversations and the chosen model and effort | [`AssistantPanelEvent::TranscriptChanged`], [`AssistantPanelEvent::SelectionChanged`] |
 //! | carries out what the user does with an answer | [`AssistantPanelEvent::Apply`], [`AssistantPanelEvent::CopyText`] |
+//! | says what an answer's drawing is for, names the elements it names, and draws it | [`DocumentRef::with_drawing`], [`AssistantPanel::set_drawing_target`], [`AssistantPanel::set_element_names`], [`AssistantPanelEvent::Draw`], [`AssistantPanel::mark_drawn`] |
 //! | moves the keyboard back to the text, closes the panel | [`AssistantPanelEvent::FocusTextRequested`], [`AssistantPanelEvent::CloseRequested`] |
 //! | remembers that the note about where the text goes was read | [`AssistantPanelEvent::PrivacyNoticeAcknowledged`] |
 //!
@@ -33,25 +34,50 @@
 //! must not remember what the user no longer sees). The conversation that
 //! went can be brought back until the next message is sent (the toast's
 //! "Undo", [`AssistantPanel::restore_cleared`]).
+//!
+//! # Drawings
+//!
+//! An answer can hold a drawing (`innerword_assistant::answer_drawing`). The
+//! host says what a drawing of the open item is for
+//! (`innerword_assistant::DrawingTarget`: on the open whiteboard, as a new
+//! whiteboard beside the open document, or nothing), on the
+//! [`DocumentRef`] of the item, so each item's conversation starts with its
+//! own prompt. The answer shows its drawing as one line
+//! (`innerword_assistant::shown_markdown`), and its first button ("Draw" or
+//! "New Whiteboard"), the last item of its menu, [`DrawAnswer`]'s key and
+//! its command ask the host to draw it ([`AssistantPanelEvent::Draw`]).
+//! The panel draws nothing itself. Insert, Replace and Copy take the
+//! answer without its drawing.
+//!
+//! An answer drawn before ([`AssistantPanel::mark_drawn`]) says so on its
+//! button ("Draw Again"); its key and its command draw it only at a second
+//! press within [`DRAW_AGAIN_WITHIN`], the first press saying so.
 
-use std::sync::Arc;
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use gpui::{
     AnyWindowHandle, App, AppContext, Context, DismissEvent, Entity, EventEmitter, FocusHandle,
     Focusable, Global, SharedString, Subscription, Task, WeakEntity, WeakFocusHandle, Window,
 };
 use innerword_assistant::{
-    Attachment, AttachmentKind, Availability, Backend, BackendInfo, Catalog, ChatSession,
-    MessageId, Mode, OpenDocument, Role, Selection, ToolServer, Transcript,
+    Attachment, AttachmentKind, Availability, Backend, BackendInfo, Catalog, ChatSession, Drawing,
+    DrawingProblem, DrawingTarget, MessageId, Mode, OpenDocument, Role, Selection, ToolServer,
+    Transcript, answer_drawing, drawing_blocks, drawing_fits, without_drawings,
 };
 use innerword_ui::{Toast, toast::show_toast};
 
 use crate::{
     ChatKeys,
-    actions::{CopyAnswer, InsertAtCaret, ReplaceSelection, SIDE_EDITOR_FLAG},
+    actions::{CopyAnswer, DrawAnswer, InsertAtCaret, ReplaceSelection, SIDE_EDITOR_FLAG},
     composer::{Composer, ComposerEvent, ComposerOptions},
     markdown::AnswerStyle,
-    messages::{AnswerAction, EmptyState, MessageList, MessageListEvent, MessageListOptions},
+    messages::{
+        ActionState, ActionWords, AnswerAction, AnswerFacts, EmptyState, MessageList,
+        MessageListEvent, MessageListOptions, SharedElementNames,
+    },
     notice::Notice,
     pickers::{ControlBounds, PickerKind, open_picker_menu, picker_has_choices},
 };
@@ -69,6 +95,31 @@ pub const ACTION_INSERT: &str = "insert";
 pub const ACTION_REPLACE: &str = "replace";
 /// The name of the "Copy" action of an answer.
 pub const ACTION_COPY: &str = "copy";
+/// The name of the drawing action of an answer ("Draw", "New
+/// Whiteboard").
+pub const ACTION_DRAW: &str = "draw";
+
+/// How soon a second press of the key or the command draws an answer that
+/// was drawn before.
+pub const DRAW_AGAIN_WITHIN: Duration = Duration::from_secs(5);
+
+/// What the key and the command of a drawing say where no drawing can be
+/// applied, when the host gave no reason of its own.
+pub const DRAWING_UNAVAILABLE: &str = "Open a whiteboard or a document to draw the answer.";
+/// What the key and the command say for an answer without a drawing.
+pub const NO_DRAWING: &str = "The answer has no drawing.";
+/// What they say for an answer that is still being written.
+pub const STILL_WRITTEN: &str = "The answer is still being written.";
+/// What they say at the first press for an answer drawn on a whiteboard
+/// before.
+pub const DRAWN_ALREADY: &str = "This answer was drawn already. Press again to draw it once more.";
+/// What they say at the first press for an answer made into a whiteboard
+/// before.
+pub const MADE_ALREADY: &str =
+    "This answer was made into a whiteboard already. Press again to make another one.";
+/// Why Insert, Replace and Copy are dimmed under an answer that is a
+/// drawing and nothing else.
+pub const ONLY_A_DRAWING: &str = "The answer has nothing but a drawing.";
 
 /// The document that is open beside the side chat: whose conversation is
 /// shown, and what its chip says.
@@ -79,6 +130,15 @@ pub struct DocumentRef {
     pub id: Option<i64>,
     /// Its title, for the chip.
     pub title: String,
+    /// What drawings the item offers (`None` unless told).
+    pub drawing_target: DrawingTarget,
+    /// With `DrawingTarget::None`: what the key and the command say (else
+    /// [`DRAWING_UNAVAILABLE`]), e.g. why a whiteboard cannot be drawn on
+    /// now.
+    pub drawing_unavailable: Option<SharedString>,
+    /// The empty state's line about where the item came from ("Drawn from
+    /// an answer about “Chapter 2”."), shown until its first message.
+    pub origin_note: Option<SharedString>,
 }
 
 impl DocumentRef {
@@ -87,7 +147,24 @@ impl DocumentRef {
         Self {
             id: Some(id),
             title: title.into(),
+            drawing_target: DrawingTarget::None,
+            drawing_unavailable: None,
+            origin_note: None,
         }
+    }
+
+    /// The item offers the drawings of `target` (`why_not` with
+    /// `DrawingTarget::None`: what the key and the command say).
+    pub fn with_drawing(mut self, target: DrawingTarget, why_not: Option<SharedString>) -> Self {
+        self.drawing_target = target;
+        self.drawing_unavailable = why_not;
+        self
+    }
+
+    /// The empty state names where the item came from.
+    pub fn with_origin_note(mut self, note: impl Into<SharedString>) -> Self {
+        self.origin_note = Some(note.into());
+        self
     }
 }
 
@@ -152,6 +229,18 @@ pub enum AssistantPanelEvent {
     /// The panel looked again for the agent ("Check Again") and found
     /// this.
     AvailabilityChanged(Availability),
+    /// The drawing of an answer is to be applied: on the open whiteboard
+    /// (`DrawingTarget::OpenWhiteboard`), or as a new whiteboard
+    /// (`NewWhiteboard`). The button, its menu item, [`DrawAnswer`]'s key
+    /// or its command ([`AssistantPanel::draw`]).
+    Draw {
+        /// The answer.
+        message: MessageId,
+        /// What the drawing is for.
+        target: DrawingTarget,
+        /// The drawing, read from the answer's blocks.
+        drawing: Drawing,
+    },
 }
 
 /// What an [`AssistantPanel`] is made with.
@@ -290,6 +379,11 @@ pub struct AssistantPanel {
     pub(crate) model_bounds: ControlBounds,
     pub(crate) effort_bounds: ControlBounds,
     pub(crate) add_bounds: ControlBounds,
+    /// The names of the open whiteboard's elements, from the host.
+    element_names: Option<SharedElementNames>,
+    /// The first press of the key or the command on an answer drawn
+    /// before: the chat, the answer, when.
+    draw_again: Option<(u64, MessageId, Instant)>,
     _subscriptions: Vec<Subscription>,
     _picker_subscription: Option<Subscription>,
 }
@@ -328,7 +422,8 @@ impl AssistantPanel {
             MessageList::new(
                 MessageListOptions::new(info.clone())
                     .style(AnswerStyle::default())
-                    .keys(keys.clone()),
+                    .keys(keys.clone())
+                    .drawings(true),
                 window,
                 cx,
             )
@@ -355,6 +450,7 @@ impl AssistantPanel {
             &options.tools,
             &selection,
             None,
+            DrawingTarget::None,
             Transcript::new(),
             0,
             window,
@@ -392,6 +488,8 @@ impl AssistantPanel {
             model_bounds: ControlBounds::new(),
             effort_bounds: ControlBounds::new(),
             add_bounds: ControlBounds::new(),
+            element_names: None,
+            draw_again: None,
             _subscriptions: subscriptions,
             _picker_subscription: None,
         };
@@ -406,6 +504,7 @@ impl AssistantPanel {
         tools: &Option<ToolServer>,
         selection: &Selection,
         document: Option<i64>,
+        target: DrawingTarget,
         transcript: Transcript,
         key: u64,
         window: &mut Window,
@@ -413,6 +512,7 @@ impl AssistantPanel {
     ) -> Chat {
         let session = ChatSession::side(backend.clone(), tools.clone())
             .with_selection(selection.clone())
+            .with_drawing_target(target)
             .with_transcript(transcript);
         let events = session.events();
         let pump = cx.spawn_in(window, async move |this, cx| {
@@ -554,8 +654,14 @@ impl AssistantPanel {
             .map(|message| format!("{:?}", message.state))
             .unwrap_or_else(|| "none".into());
         let last = last.split(['(', ' ']).next().unwrap_or("").to_lowercase();
+        let drawn = transcript
+            .messages
+            .iter()
+            .rev()
+            .find(|message| message.role == Role::Assistant)
+            .is_some_and(|message| message.drawn_at.is_some());
         format!(
-            "document={} messages={} answering={} last={} model={} effort={} attached={} notices=[{}] focus={}",
+            "document={} messages={} answering={} last={} model={} effort={} attached={} notices=[{}] focus={} draw={} drawn={}",
             self.document
                 .as_ref()
                 .map(|document| format!("{:?}", document.title))
@@ -579,6 +685,12 @@ impl AssistantPanel {
                 None if self.picker.is_some() => "picker",
                 None => "elsewhere",
             },
+            match self.drawing_target() {
+                DrawingTarget::OpenWhiteboard => "whiteboard",
+                DrawingTarget::NewWhiteboard => "new",
+                DrawingTarget::None => "none",
+            },
+            if drawn { "yes" } else { "no" },
         )
     }
 
@@ -605,14 +717,23 @@ impl AssistantPanel {
         cx: &mut Context<Self>,
     ) {
         let key = document.as_ref().and_then(|document| document.id);
+        let target = document
+            .as_ref()
+            .map_or(DrawingTarget::None, |document| document.drawing_target);
         let same = self.chat.document == key && self.document.is_some() == document.is_some();
         self.document = document;
         if same {
+            self.drawing_target_changed(target, cx);
+            self.sync_empty_state(cx);
             cx.notify();
             return;
         }
         let chat = match self.parked.iter().position(|chat| chat.document == key) {
-            Some(index) if key.is_some() => self.parked.remove(index),
+            Some(index) if key.is_some() => {
+                let mut chat = self.parked.remove(index);
+                chat.session.set_drawing_target(target);
+                chat
+            }
             _ => {
                 let chat_key = self.next_chat_key;
                 self.next_chat_key += 1;
@@ -621,6 +742,7 @@ impl AssistantPanel {
                     &self.tools,
                     &self.selection,
                     key,
+                    target,
                     stored.unwrap_or_default(),
                     chat_key,
                     window,
@@ -637,6 +759,7 @@ impl AssistantPanel {
         // program ends with it.)
         self.cleared = None;
         self.waiting_to_send = None;
+        self.draw_again = None;
         // A message that waited for the host was about the other document:
         // it is not sent, and what was typed goes back into the composer.
         self.give_back_held(cx);
@@ -644,7 +767,59 @@ impl AssistantPanel {
         self.context_index = 0;
         // Another conversation: its messages have the same ids.
         self.messages.update(cx, |list, cx| list.clear(cx));
+        self.drawing_target_changed(target, cx);
         self.sync(window, cx);
+    }
+
+    /// A change of what the open item offers while the same item stays
+    /// open (a page engine found or gone, the whiteboard drawable or not).
+    /// Sets the shown chat's session (from its next message on), the
+    /// drawing action's label, tooltip and state, and the empty state.
+    pub fn set_drawing_target(
+        &mut self,
+        target: DrawingTarget,
+        why_not: Option<SharedString>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(document) = &mut self.document else {
+            return;
+        };
+        if document.drawing_target == target && document.drawing_unavailable == why_not {
+            return;
+        }
+        document.drawing_target = target;
+        document.drawing_unavailable = why_not;
+        self.drawing_target_changed(target, cx);
+        self.sync_empty_state(cx);
+        cx.notify();
+    }
+
+    /// What drawings the open item offers, as the host said.
+    pub fn drawing_target(&self) -> DrawingTarget {
+        self.document
+            .as_ref()
+            .map_or(DrawingTarget::None, |document| document.drawing_target)
+    }
+
+    /// The names of the open whiteboard's elements for the line of a
+    /// drawing (`None` over a document, or when the host has none). The
+    /// lines already shown are made again; the host sets it when the scene
+    /// it holds of the open whiteboard changed.
+    pub fn set_element_names(&mut self, names: Option<SharedElementNames>, cx: &mut Context<Self>) {
+        self.element_names = names;
+        let target = self.drawing_target();
+        let names = self.element_names.clone();
+        self.messages
+            .update(cx, |list, cx| list.set_drawings(target, names, cx));
+    }
+
+    /// The shown chat, the list and the actions follow `target`.
+    fn drawing_target_changed(&mut self, target: DrawingTarget, cx: &mut Context<Self>) {
+        self.chat.session.set_drawing_target(target);
+        let names = self.element_names.clone();
+        self.messages
+            .update(cx, |list, cx| list.set_drawings(target, names, cx));
+        self.sync_actions(cx);
     }
 
     /// Changes the title on the chip of the open document.
@@ -1093,7 +1268,14 @@ impl AssistantPanel {
         else {
             return false;
         };
-        if !allowed {
+        // What goes into the text or onto the clipboard is the answer
+        // without its drawing.
+        let markdown = if drawing_blocks(&markdown).is_empty() {
+            markdown
+        } else {
+            without_drawings(&markdown)
+        };
+        if !allowed || markdown.trim().is_empty() {
             return false;
         }
         cx.emit(AssistantPanelEvent::Apply {
@@ -1124,20 +1306,243 @@ impl AssistantPanel {
         }
     }
 
+    // ----- drawing an answer ----------------------------------------------------------
+
+    /// Tells the host to apply answer `message`'s drawing
+    /// ([`AssistantPanelEvent::Draw`]). Nothing happens for an answer that
+    /// is being written or has no usable drawing for the target; then a
+    /// toast says why, when `say` (the key, the command). An answer drawn
+    /// before (`drawn_at`) is drawn by the button at once; by the key or
+    /// the command (`say`) only at a second press of the same answer within
+    /// [`DRAW_AGAIN_WITHIN`], the first press saying so. Returns whether
+    /// the host was told.
+    pub fn draw(&mut self, message: MessageId, say: bool, cx: &mut Context<Self>) -> bool {
+        let target = self.drawing_target();
+        let drawing = match self.drawing_of(message, target) {
+            Ok(drawing) => drawing,
+            Err(why) => {
+                if say {
+                    show_toast(Toast::new(why), cx);
+                }
+                return false;
+            }
+        };
+        let drawn_before = self
+            .transcript()
+            .message(message)
+            .is_some_and(|found| found.drawn_at.is_some());
+        if say && drawn_before {
+            let now = cx.background_executor().now();
+            let again = self.draw_again.is_some_and(|(chat, id, at)| {
+                chat == self.chat.key
+                    && id == message
+                    && now.saturating_duration_since(at) <= DRAW_AGAIN_WITHIN
+            });
+            if !again {
+                self.draw_again = Some((self.chat.key, message, now));
+                show_toast(
+                    Toast::new(match target {
+                        DrawingTarget::NewWhiteboard => MADE_ALREADY,
+                        _ => DRAWN_ALREADY,
+                    }),
+                    cx,
+                );
+                return false;
+            }
+        }
+        self.draw_again = None;
+        cx.emit(AssistantPanelEvent::Draw {
+            message,
+            target,
+            drawing,
+        });
+        true
+    }
+
+    /// The drawing of answer `message` that can be applied for `target`,
+    /// or what the key says when there is none.
+    fn drawing_of(&self, message: MessageId, target: DrawingTarget) -> Result<Drawing, String> {
+        if target == DrawingTarget::None {
+            return Err(self.drawing_unavailable());
+        }
+        let Some(found) = self
+            .transcript()
+            .message(message)
+            .filter(|found| found.role == Role::Assistant)
+        else {
+            return Err(NO_DRAWING.into());
+        };
+        if found.is_streaming() {
+            return Err(STILL_WRITTEN.into());
+        }
+        let nothing_drawn =
+            |problem: DrawingProblem| format!("Nothing was drawn: {}.", problem.reason());
+        match answer_drawing(&found.text) {
+            None => Err(NO_DRAWING.into()),
+            Some(Err(problem)) => Err(nothing_drawn(problem)),
+            Some(Ok(drawing)) => match drawing_fits(&drawing, target) {
+                Ok(()) => Ok(drawing),
+                Err(problem) => Err(nothing_drawn(problem)),
+            },
+        }
+    }
+
+    /// What the key and the command say where no drawing can be applied.
+    fn drawing_unavailable(&self) -> String {
+        self.document
+            .as_ref()
+            .and_then(|document| document.drawing_unavailable.clone())
+            .map(|why| why.to_string())
+            .unwrap_or_else(|| DRAWING_UNAVAILABLE.into())
+    }
+
+    /// The answer [`DrawAnswer`]'s key would draw now: the marked answer
+    /// while the keyboard is in the message list, else the latest answer.
+    pub fn draw_target(&self, window: &Window, cx: &App) -> Option<MessageId> {
+        let list = self.messages.read(cx);
+        if list.contains_focus(window, cx)
+            && let Some(marked) = list.selected()
+        {
+            return list
+                .message(marked)
+                .filter(|message| message.role == Role::Assistant)
+                .map(|message| message.id);
+        }
+        self.transcript()
+            .messages
+            .iter()
+            .rev()
+            .find(|message| message.role == Role::Assistant)
+            .map(|message| message.id)
+    }
+
+    /// What `cmd-shift-d` and the command do: [`AssistantPanel::draw`]
+    /// with the answer of [`AssistantPanel::draw_target`], saying why when
+    /// nothing is drawn.
+    pub fn draw_target_answer(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        match self.draw_target(window, cx) {
+            Some(message) => self.draw(message, true, cx),
+            None => {
+                let why = match self.drawing_target() {
+                    DrawingTarget::None => self.drawing_unavailable(),
+                    _ => NO_DRAWING.into(),
+                };
+                show_toast(Toast::new(why), cx);
+                false
+            }
+        }
+    }
+
+    /// Marks answer `message` in the message list (as `up` / `down` would)
+    /// and scrolls it into view, without taking the keyboard.
+    pub fn show_answer(&mut self, message: MessageId, cx: &mut Context<Self>) {
+        self.messages
+            .update(cx, |list, cx| list.select(Some(message), cx));
+        cx.notify();
+    }
+
+    /// Records that answer `message`'s drawing was applied (its button reads
+    /// "Draw Again" from now on) and reports the conversation
+    /// ([`AssistantPanelEvent::TranscriptChanged`]), so that it is stored.
+    pub fn mark_drawn(&mut self, message: MessageId, cx: &mut Context<Self>) {
+        if !self
+            .chat
+            .session
+            .mark_drawn(message, innerword_assistant::time::now_millis())
+        {
+            return;
+        }
+        let messages = self.chat.session.transcript().messages.clone();
+        self.messages.update(cx, |list, cx| {
+            list.update_in_place(&messages, cx);
+        });
+        self.report_transcript(cx);
+        cx.notify();
+    }
+
+    /// Puts `text` into the composer when it is empty (the keyboard stays
+    /// where it is). Returns whether it did: the host offers the writer a
+    /// message to send.
+    pub fn offer_message(&mut self, text: &str, cx: &mut Context<Self>) -> bool {
+        if !self.composer.read(cx).is_blank(cx) {
+            return false;
+        }
+        self.composer
+            .update(cx, |composer, cx| composer.set_text(text, cx));
+        true
+    }
+
     fn sync_actions(&mut self, cx: &mut Context<Self>) {
-        let actions = vec![
+        let besides_a_drawing = |facts: &AnswerFacts<'_>| match facts.has_text {
+            true => ActionState::Enabled,
+            false => ActionState::Disabled(ONLY_A_DRAWING.into()),
+        };
+        let mut actions = Vec::new();
+        let target = self.drawing_target();
+        let words = match target {
+            DrawingTarget::OpenWhiteboard => Some((
+                "Draw",
+                "Draw on Whiteboard",
+                ActionWords {
+                    label: "Draw Again".into(),
+                    tooltip: "Already drawn once: drawing it again adds its elements again \
+                              and moves again what it moves"
+                        .into(),
+                    menu: "Draw Again on Whiteboard".into(),
+                },
+            )),
+            DrawingTarget::NewWhiteboard => Some((
+                "New Whiteboard",
+                "New Whiteboard from Answer",
+                ActionWords {
+                    label: "New Whiteboard Again".into(),
+                    tooltip: "Already made into a whiteboard once: this makes another one".into(),
+                    menu: "New Whiteboard from Answer Again".into(),
+                },
+            )),
+            DrawingTarget::None => None,
+        };
+        if let Some((label, tooltip, again)) = words {
+            actions.push(
+                AnswerAction::new(ACTION_DRAW, label)
+                    .tooltip(tooltip)
+                    .key_of(DrawAnswer)
+                    .menu_last()
+                    .state_for(move |facts| {
+                        let cannot = |problem: DrawingProblem| {
+                            ActionState::Disabled(
+                                format!("Drawing that cannot be used: {}.", problem.reason())
+                                    .into(),
+                            )
+                        };
+                        match facts.drawing {
+                            None => ActionState::Hidden,
+                            Some(Err(problem)) => cannot(problem.clone()),
+                            Some(Ok(drawing)) => match drawing_fits(drawing, target) {
+                                Ok(()) => ActionState::Enabled,
+                                Err(problem) => cannot(problem),
+                            },
+                        }
+                    })
+                    .words_for(move |facts| facts.message.drawn_at.map(|_| again.clone())),
+            );
+        }
+        actions.extend([
             AnswerAction::new(ACTION_INSERT, "Insert")
                 .tooltip("Insert at Caret")
                 .enabled(self.can_insert)
-                .key_of(InsertAtCaret),
+                .key_of(InsertAtCaret)
+                .state_for(besides_a_drawing),
             AnswerAction::new(ACTION_REPLACE, "Replace")
                 .tooltip("Replace Selection")
                 .enabled(self.can_replace)
-                .key_of(ReplaceSelection),
+                .key_of(ReplaceSelection)
+                .state_for(besides_a_drawing),
             AnswerAction::new(ACTION_COPY, "Copy")
                 .tooltip("Copy Answer")
-                .key_of(CopyAnswer),
-        ];
+                .key_of(CopyAnswer)
+                .state_for(besides_a_drawing),
+        ]);
         self.messages
             .update(cx, |list, cx| list.set_actions(actions, cx));
     }
@@ -1147,41 +1552,70 @@ impl AssistantPanel {
     /// Shows the conversation as it is now.
     fn sync(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let messages = self.chat.session.transcript().messages.clone();
-        let empty = EmptyState {
-            title: match &self.document {
-                Some(_) => "Ask about this document".into(),
-                None => "Ask the assistant".into(),
+        self.sync_empty_state(cx);
+        self.messages.update(cx, |list, cx| {
+            list.set_messages(&messages, window, cx);
+        });
+        let busy = self.chat.session.is_answering() || self.held.is_some();
+        self.composer.update(cx, |composer, cx| {
+            composer.set_busy(busy, cx);
+        });
+        cx.notify();
+    }
+
+    /// What an empty conversation shows, and the composer's placeholder, for
+    /// the open item.
+    fn sync_empty_state(&mut self, cx: &mut Context<Self>) {
+        let whiteboard = self.drawing_target() == DrawingTarget::OpenWhiteboard;
+        let note = self
+            .document
+            .as_ref()
+            .and_then(|document| document.origin_note.clone())
+            .unwrap_or_default();
+        let empty = match (&self.document, whiteboard) {
+            (Some(_), true) => EmptyState {
+                title: "Ask about this whiteboard".into(),
+                text: "The assistant reads the whiteboard's elements as they are when you send \
+                       a message. It can propose a drawing; you decide whether it goes on the \
+                       whiteboard."
+                    .into(),
+                note,
+                examples: vec![
+                    "Group these into frames by topic.".into(),
+                    "Add a legend that explains the colours.".into(),
+                    "What is missing from this diagram?".into(),
+                ],
             },
-            text: match &self.document {
-                Some(_) => "The assistant reads the document as it is when you send a message, \
+            (Some(_), false) => EmptyState {
+                title: "Ask about this document".into(),
+                text: "The assistant reads the document as it is when you send a message, \
                      and what you add as context. It suggests; you decide what goes into \
                      the text."
                     .into(),
-                None => "Open a document to ask about it.".into(),
-            },
-            examples: match &self.document {
-                Some(_) => vec![
+                note,
+                examples: vec![
                     "Where does this lose pace, and why?".into(),
                     "Which sentences are harder to read than they need to be?".into(),
                     "Summarise this in three sentences.".into(),
                 ],
-                None => Vec::new(),
+            },
+            (None, _) => EmptyState {
+                title: "Ask the assistant".into(),
+                text: "Open a document to ask about it.".into(),
+                note: SharedString::default(),
+                examples: Vec::new(),
             },
         };
-        self.messages.update(cx, |list, cx| {
-            list.set_empty_state(Some(empty), cx);
-            list.set_messages(&messages, window, cx);
-        });
-        let busy = self.chat.session.is_answering() || self.held.is_some();
-        let placeholder: SharedString = match &self.document {
-            Some(_) => "Ask about this document".into(),
-            None => "Ask the assistant".into(),
+        let placeholder: SharedString = match (&self.document, whiteboard) {
+            (Some(_), true) => "Ask about this whiteboard".into(),
+            (Some(_), false) => "Ask about this document".into(),
+            (None, _) => "Ask the assistant".into(),
         };
+        self.messages
+            .update(cx, |list, cx| list.set_empty_state(Some(empty), cx));
         self.composer.update(cx, |composer, cx| {
-            composer.set_busy(busy, cx);
             composer.set_placeholder(placeholder, cx);
         });
-        cx.notify();
     }
 
     fn report_transcript(&mut self, cx: &mut Context<Self>) {
@@ -1256,7 +1690,9 @@ impl AssistantPanel {
     ) {
         match event {
             MessageListEvent::ActionInvoked { action, message } => {
-                if let Some(kind) = ApplyKind::from_action(action) {
+                if action.as_ref() == ACTION_DRAW {
+                    self.draw(*message, false, cx);
+                } else if let Some(kind) = ApplyKind::from_action(action) {
                     self.apply(kind, *message, cx);
                 }
             }

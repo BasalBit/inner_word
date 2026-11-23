@@ -17,6 +17,21 @@
 //! and keeps its actions; a failed one says what happened and what to do
 //! in the engine's words, with "Try Again".
 //!
+//! An action can be offered under some answers and not others, or offered
+//! dimmed with the reason: the host says so per answer
+//! ([`AnswerAction::state_for`], from the [`AnswerFacts`] of the answer).
+//! An action can also stand last in the answer's menu while it is first in
+//! the row of buttons ([`AnswerAction::menu_last`]).
+//!
+//! # Drawings
+//!
+//! A list made with [`MessageListOptions::drawings`] shows each drawing
+//! block of an answer (a fenced block of `innerword_assistant::DRAWING_INFO`)
+//! as the one line `innerword_assistant::shown_markdown` writes for it, never
+//! its JSON, and hands the drawing read from the blocks to the host with the
+//! answer's facts. What a drawing is for (and what it is drawn on) is the
+//! host's: it says it with [`MessageList::set_drawings`].
+//!
 //! The list follows an answer that is being written: while its end is in
 //! view it stays in view. Scrolling away stops that, scrolling back to the
 //! end (or sending a message) starts it again.
@@ -64,6 +79,7 @@ use std::{
     collections::{HashMap, hash_map::DefaultHasher},
     hash::{Hash, Hasher},
     rc::Rc,
+    sync::Arc,
     time::Duration,
 };
 
@@ -73,7 +89,10 @@ use gpui::{
     MouseButton, MouseDownEvent, Pixels, Point, Render, SharedString, Subscription, Window, div,
     list, point, prelude::*, px,
 };
-use innerword_assistant::{BackendInfo, Message, MessageId, MessageState, Role};
+use innerword_assistant::{
+    BackendInfo, Drawing, DrawingProblem, DrawingTarget, ElementNames, Message, MessageId,
+    MessageState, Role, answer_drawing, shown_markdown, without_drawings,
+};
 use innerword_core::Document;
 use innerword_editor::{CompactOptions, ContextMenuRequest, Editor, EditorConfig, EditorEvent};
 use innerword_ui::{
@@ -104,6 +123,45 @@ const LIST_OVERDRAW: Pixels = px(320.);
 /// then the actions).
 const FOOTER_HEIGHT: Pixels = px(26.);
 
+/// Whether an action is offered under one answer.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ActionState {
+    /// Not under this answer, nor in its menu.
+    Hidden,
+    /// Shown, and does what it says.
+    Enabled,
+    /// Shown dimmed; its tooltip and its menu item say why (an empty
+    /// reason: dimmed without one).
+    Disabled(SharedString),
+}
+
+/// What the list knows of one answer, made once each time its text
+/// changes.
+#[derive(Clone, Copy)]
+pub struct AnswerFacts<'a> {
+    /// The answer.
+    pub message: &'a Message,
+    /// Its drawing (`innerword_assistant::answer_drawing`), when the list
+    /// shows drawings and it has one.
+    pub drawing: Option<&'a Result<Drawing, DrawingProblem>>,
+    /// Whether it has text besides its drawings.
+    pub has_text: bool,
+}
+
+/// The words of an action under one answer.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ActionWords {
+    /// The words on the button.
+    pub label: SharedString,
+    /// Its tooltip.
+    pub tooltip: SharedString,
+    /// Its item in the answer's menu.
+    pub menu: SharedString,
+}
+
+type StateFn = Rc<dyn Fn(&AnswerFacts<'_>) -> ActionState>;
+type WordsFn = Rc<dyn Fn(&AnswerFacts<'_>) -> Option<ActionWords>>;
+
 /// One thing that can be done with an answer: a small button under it and
 /// an item of its menu. The host supplies the list and carries the action
 /// out ([`MessageListEvent::ActionInvoked`]).
@@ -117,6 +175,9 @@ pub struct AnswerAction {
     /// Whether it can be done now (Replace Selection needs a selection).
     pub enabled: bool,
     key_of: Option<Box<dyn Action>>,
+    state: Option<StateFn>,
+    words: Option<WordsFn>,
+    menu_last: bool,
 }
 
 impl AnswerAction {
@@ -130,7 +191,71 @@ impl AnswerAction {
             label,
             enabled: true,
             key_of: None,
+            state: None,
+            words: None,
+            menu_last: false,
         }
+    }
+
+    /// The action's state under each answer. Without it the action is
+    /// under every answer that can be applied, enabled as
+    /// [`AnswerAction::enabled`] says.
+    pub fn state_for(mut self, state: impl Fn(&AnswerFacts<'_>) -> ActionState + 'static) -> Self {
+        self.state = Some(Rc::new(state));
+        self
+    }
+
+    /// Its state under the answer of `facts` (`enabled` false wins over
+    /// what [`AnswerAction::state_for`] says is enabled).
+    pub fn state(&self, facts: &AnswerFacts<'_>) -> ActionState {
+        let state = match &self.state {
+            Some(state) => state(facts),
+            None => ActionState::Enabled,
+        };
+        match state {
+            ActionState::Enabled if !self.enabled => ActionState::Disabled(SharedString::default()),
+            state => state,
+        }
+    }
+
+    /// Other words under some answers: `words` gives the words under an
+    /// answer, or `None` for [`AnswerAction::label`] and
+    /// [`AnswerAction::tooltip`] (the menu says the tooltip). "Draw Again"
+    /// under an answer that was drawn before.
+    pub fn words_for(
+        mut self,
+        words: impl Fn(&AnswerFacts<'_>) -> Option<ActionWords> + 'static,
+    ) -> Self {
+        self.words = Some(Rc::new(words));
+        self
+    }
+
+    /// Its words under the answer of `facts`.
+    pub fn words(&self, facts: &AnswerFacts<'_>) -> ActionWords {
+        self.words
+            .as_ref()
+            .and_then(|words| words(facts))
+            .unwrap_or_else(|| self.plain_words())
+    }
+
+    fn plain_words(&self) -> ActionWords {
+        ActionWords {
+            label: self.label.clone(),
+            tooltip: self.tooltip.clone(),
+            menu: self.tooltip.clone(),
+        }
+    }
+
+    /// In the answer's menu the action comes after the others; the row of
+    /// buttons keeps the order of the list of actions.
+    pub fn menu_last(mut self) -> Self {
+        self.menu_last = true;
+        self
+    }
+
+    /// Whether the action comes last in the answer's menu.
+    pub fn is_menu_last(&self) -> bool {
+        self.menu_last
     }
 
     /// Sets what the tooltip and the menu say.
@@ -182,6 +307,9 @@ impl Clone for AnswerAction {
             tooltip: self.tooltip.clone(),
             enabled: self.enabled,
             key_of: self.key_of.as_ref().map(|action| action.boxed_clone()),
+            state: self.state.clone(),
+            words: self.words.clone(),
+            menu_last: self.menu_last,
         }
     }
 }
@@ -203,6 +331,9 @@ pub struct EmptyState {
     pub title: SharedString,
     /// One or two sentences under it. May be empty.
     pub text: SharedString,
+    /// A line of its own above the examples (where the item came from).
+    /// May be empty.
+    pub note: SharedString,
     /// Example prompts. A click on one, or `enter` on the marked one,
     /// hands it to the host ([`MessageListEvent::ExampleChosen`]).
     pub examples: Vec<SharedString>,
@@ -217,6 +348,9 @@ pub struct MessageListOptions {
     pub style: AnswerStyle,
     /// The key context flags of the host.
     pub keys: ChatKeys,
+    /// Show drawings: each drawing block of an answer as its line, and the
+    /// facts of an answer carry its drawing.
+    pub drawings: bool,
 }
 
 impl MessageListOptions {
@@ -227,7 +361,15 @@ impl MessageListOptions {
             info,
             style: AnswerStyle::default(),
             keys: ChatKeys::default(),
+            drawings: false,
         }
+    }
+
+    /// Show drawings: each drawing block of an answer as its line (see the
+    /// [module docs](self)); the facts carry drawings.
+    pub fn drawings(mut self, on: bool) -> Self {
+        self.drawings = on;
+        self
     }
 
     /// Sets how answers are set.
@@ -276,10 +418,26 @@ pub enum MessageListEvent {
 struct AnswerView {
     editor: Entity<Editor>,
     /// A fingerprint of the Markdown and the streaming flag the editor's
-    /// document was made from.
+    /// document was made from (and of the drawing's words, when the list
+    /// shows drawings).
     shown: u64,
+    /// The answer's drawing, read with its text.
+    drawing: Option<Result<Drawing, DrawingProblem>>,
+    /// Whether the answer has text besides its drawings.
+    has_text: bool,
     _subscription: Subscription,
 }
+
+/// What an answer view is made from: the document, the drawing, whether
+/// there is text besides it.
+struct AnswerParts {
+    document: Document,
+    drawing: Option<Result<Drawing, DrawingProblem>>,
+    has_text: bool,
+}
+
+/// The names of the open whiteboard's elements, as the host gives them.
+pub type SharedElementNames = Arc<dyn ElementNames + Send + Sync>;
 
 /// See the [module docs](self).
 pub struct MessageList {
@@ -298,6 +456,14 @@ pub struct MessageList {
     info: BackendInfo,
     style: AnswerStyle,
     keys: ChatKeys,
+    /// Whether drawings are shown as their lines.
+    drawings: bool,
+    /// What a drawing is offered for (the words of its line).
+    drawing_target: DrawingTarget,
+    /// The names of the elements the line names.
+    element_names: Option<SharedElementNames>,
+    /// Counts the changes of the two above, for the fingerprints.
+    drawing_words: u64,
     /// The left button went down on a control of a row (a button under an
     /// answer): that press is not a press on the row.
     control_pressed: bool,
@@ -314,11 +480,22 @@ impl Focusable for MessageList {
     }
 }
 
-fn fingerprint(markdown: &str, streaming: bool) -> u64 {
+fn fingerprint(markdown: &str, streaming: bool, words: u64) -> u64 {
     let mut hasher = DefaultHasher::new();
     markdown.hash(&mut hasher);
     streaming.hash(&mut hasher);
+    words.hash(&mut hasher);
     hasher.finish()
+}
+
+/// `text` cut at `limit` characters, with "…" when it was longer.
+pub(crate) fn cut(text: &str, limit: usize) -> String {
+    if text.chars().count() <= limit {
+        return text.to_string();
+    }
+    let mut cut: String = text.chars().take(limit.saturating_sub(1)).collect();
+    cut.push('…');
+    cut
 }
 
 impl MessageList {
@@ -344,6 +521,10 @@ impl MessageList {
             info: options.info,
             style: options.style,
             keys: options.keys,
+            drawings: options.drawings,
+            drawing_target: DrawingTarget::None,
+            element_names: None,
+            drawing_words: 0,
             control_pressed: false,
             rows_built: 0,
         }
@@ -414,24 +595,12 @@ impl MessageList {
                 continue;
             }
             let id = message.id;
-            let streaming = message.is_streaming();
-            let shown = fingerprint(&message.text, streaming);
-            match self.views.get(&id) {
-                Some(view) if view.shown == shown => {}
-                Some(view) => {
-                    let document = answer_document(&message.text, &self.style, streaming);
-                    view.editor.update(cx, |editor, cx| {
-                        if editor.document() != &document {
-                            editor.set_document(document, cx);
-                        }
-                    });
-                    if let Some(view) = self.views.get_mut(&id) {
-                        view.shown = shown;
-                    }
-                }
-                None => {
-                    let document = answer_document(&message.text, &self.style, streaming);
-                    let view = self.new_answer_view(id, document, shown, window, cx);
+            match self.views.contains_key(&id) {
+                true => self.refresh_view(index, cx),
+                false => {
+                    let shown = self.shown_of(message);
+                    let parts = self.parts_of(message);
+                    let view = self.new_answer_view(id, parts, shown, window, cx);
                     self.views.insert(id, view);
                 }
             }
@@ -442,10 +611,158 @@ impl MessageList {
         cx.notify();
     }
 
+    /// The fingerprint of what the view of `message` shows.
+    fn shown_of(&self, message: &Message) -> u64 {
+        let words = if self.drawings { self.drawing_words } else { 0 };
+        fingerprint(&message.text, message.is_streaming(), words)
+    }
+
+    /// What the view of `message` is made from.
+    fn parts_of(&self, message: &Message) -> AnswerParts {
+        let streaming = message.is_streaming();
+        if !self.drawings {
+            return AnswerParts {
+                document: answer_document(&message.text, &self.style, streaming),
+                drawing: None,
+                has_text: !message.text.trim().is_empty(),
+            };
+        }
+        let names = self
+            .element_names
+            .as_deref()
+            .map(|names| names as &dyn ElementNames);
+        let shown = shown_markdown(&message.text, streaming, self.drawing_target, names);
+        let drawing = answer_drawing(&message.text);
+        let has_text = match &drawing {
+            None => !message.text.trim().is_empty(),
+            Some(_) => !without_drawings(&message.text).trim().is_empty(),
+        };
+        AnswerParts {
+            document: answer_document(&shown, &self.style, streaming),
+            drawing,
+            has_text,
+        }
+    }
+
+    /// Makes the view of the message at `index` show it as it is now.
+    fn refresh_view(&mut self, index: usize, cx: &mut Context<Self>) {
+        let Some(message) = self.messages.get(index) else {
+            return;
+        };
+        let id = message.id;
+        let shown = self.shown_of(message);
+        if self.views.get(&id).is_none_or(|view| view.shown == shown) {
+            return;
+        }
+        let parts = self.parts_of(message);
+        let Some(view) = self.views.get_mut(&id) else {
+            return;
+        };
+        let document = parts.document;
+        view.editor.update(cx, |editor, cx| {
+            if editor.document() != &document {
+                editor.set_document(document, cx);
+            }
+        });
+        view.shown = shown;
+        view.drawing = parts.drawing;
+        view.has_text = parts.has_text;
+    }
+
+    /// Says what a drawing is offered for (the words of its line,
+    /// `innerword_assistant::shown_markdown`) and the names of the elements it
+    /// may name. The answers shown are made again. Nothing happens in a list
+    /// that does not show drawings.
+    pub fn set_drawings(
+        &mut self,
+        target: DrawingTarget,
+        names: Option<SharedElementNames>,
+        cx: &mut Context<Self>,
+    ) {
+        let same_names = match (&self.element_names, &names) {
+            (None, None) => true,
+            (Some(old), Some(new)) => Arc::ptr_eq(old, new),
+            _ => false,
+        };
+        if self.drawing_target == target && same_names {
+            return;
+        }
+        self.drawing_target = target;
+        self.element_names = names;
+        self.drawing_words += 1;
+        if self.drawings {
+            for index in 0..self.messages.len() {
+                self.refresh_view(index, cx);
+            }
+            cx.notify();
+        }
+    }
+
+    /// What a drawing is offered for, as the host said.
+    pub fn drawing_target(&self) -> DrawingTarget {
+        self.drawing_target
+    }
+
+    /// Whether the list shows drawings.
+    pub fn shows_drawings(&self) -> bool {
+        self.drawings
+    }
+
+    /// Takes `messages` in place of the messages shown when they are the
+    /// same messages with the same text (a mark of an answer changed, not
+    /// what it says), without a window. Returns whether it did.
+    pub(crate) fn update_in_place(&mut self, messages: &[Message], cx: &mut Context<Self>) -> bool {
+        let same = messages.len() == self.messages.len()
+            && messages.iter().zip(&self.messages).all(|(new, old)| {
+                new.id == old.id && new.text == old.text && new.state == old.state
+            });
+        if same {
+            self.messages = messages.to_vec();
+            cx.notify();
+        }
+        same
+    }
+
+    /// What the list knows of answer `id`, `None` for another message.
+    pub fn facts(&self, id: MessageId) -> Option<AnswerFacts<'_>> {
+        let message = self.message(id)?;
+        if message.role != Role::Assistant {
+            return None;
+        }
+        let view = self.views.get(&id);
+        Some(AnswerFacts {
+            message,
+            drawing: view.and_then(|view| view.drawing.as_ref()),
+            has_text: view.is_some_and(|view| view.has_text),
+        })
+    }
+
+    /// The state of the action `action` under answer `message`
+    /// ([`ActionState::Hidden`] for an action the list does not have or a
+    /// message that is no answer).
+    pub fn action_state(&self, action: &str, message: MessageId) -> ActionState {
+        let Some(facts) = self.facts(message) else {
+            return ActionState::Hidden;
+        };
+        self.actions
+            .iter()
+            .find(|candidate| candidate.id.as_ref() == action)
+            .map_or(ActionState::Hidden, |candidate| candidate.state(&facts))
+    }
+
+    /// The words of the action `action` under answer `message`.
+    pub fn action_words(&self, action: &str, message: MessageId) -> Option<ActionWords> {
+        let facts = self.facts(message)?;
+        self.actions
+            .iter()
+            .find(|candidate| candidate.id.as_ref() == action)
+            .map(|candidate| candidate.words(&facts))
+    }
+
     fn new_answer_view(
         &mut self,
         id: MessageId,
-        document: Document,
+        parts: AnswerParts,
         shown: u64,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -459,6 +776,11 @@ impl MessageList {
         )
         .read_only(true);
         let flag = self.keys.editor_flag.clone();
+        let AnswerParts {
+            document,
+            drawing,
+            has_text,
+        } = parts;
         let editor = cx.new(|cx| {
             let mut editor = Editor::new(document, config, window, cx);
             editor.add_key_context_flag(CHAT_EDITOR_FLAG, cx);
@@ -487,6 +809,8 @@ impl MessageList {
         AnswerView {
             editor,
             shown,
+            drawing,
+            has_text,
             _subscription: subscription,
         }
     }
@@ -778,19 +1102,20 @@ impl MessageList {
         message: MessageId,
         cx: &mut Context<Self>,
     ) -> bool {
-        let known = self
+        let applicable = self.message(message).is_some_and(Message::is_applicable);
+        if !applicable || self.action_state(action, message) != ActionState::Enabled {
+            return false;
+        }
+        let Some(action) = self
             .actions
             .iter()
-            .find(|candidate| candidate.id.as_ref() == action && candidate.enabled)
-            .map(|candidate| candidate.id.clone());
-        let applicable = self.message(message).is_some_and(Message::is_applicable);
-        match known {
-            Some(action) if applicable => {
-                cx.emit(MessageListEvent::ActionInvoked { action, message });
-                true
-            }
-            _ => false,
-        }
+            .find(|candidate| candidate.id.as_ref() == action)
+            .map(|candidate| candidate.id.clone())
+        else {
+            return false;
+        };
+        cx.emit(MessageListEvent::ActionInvoked { action, message });
+        true
     }
 
     /// Hands an example prompt to the host.
@@ -891,17 +1216,38 @@ impl MessageList {
                     items.push(ContextMenuItem::separator());
                 }
                 let applicable = message.is_applicable();
-                for action in &self.actions {
+                let facts = self.facts(id);
+                // The actions in their order, those that come last in the
+                // menu after the others.
+                let ordered = self
+                    .actions
+                    .iter()
+                    .filter(|action| !action.menu_last)
+                    .chain(self.actions.iter().filter(|action| action.menu_last));
+                for action in ordered {
+                    let (state, tooltip) = match &facts {
+                        Some(facts) => (action.state(facts), action.words(facts).menu),
+                        None => (ActionState::Enabled, action.tooltip.clone()),
+                    };
+                    let (title, disabled): (SharedString, bool) = match state {
+                        ActionState::Hidden => continue,
+                        ActionState::Enabled => (tooltip, !applicable),
+                        ActionState::Disabled(reason) if reason.is_empty() => (tooltip, true),
+                        ActionState::Disabled(reason) => (
+                            format!("{tooltip} ({})", cut(reason.trim_end_matches('.'), 60)).into(),
+                            true,
+                        ),
+                    };
                     let list = list.clone();
                     let action_id = action.id.clone();
                     items.push(
-                        ContextMenuItem::new(action.tooltip.clone(), move |_, cx| {
+                        ContextMenuItem::new(title, move |_, cx| {
                             list.update(cx, |list, cx| {
                                 list.invoke_action(&action_id, id, cx);
                             })
                             .ok();
                         })
-                        .disabled(!action.enabled || !applicable)
+                        .disabled(disabled)
                         .key_hint(action.key_hint_at(
                             &self.focus_handle,
                             window,
@@ -1210,24 +1556,32 @@ impl MessageList {
                         .opacity(0.)
                         .group_hover(group, |style| style.opacity(1.));
                 }
+                let facts = self.facts(id);
                 for action in &self.actions {
+                    let (state, ActionWords { label, tooltip, .. }) = match &facts {
+                        Some(facts) => (action.state(facts), action.words(facts)),
+                        None => (ActionState::Enabled, action.plain_words()),
+                    };
+                    let (enabled, tooltip) = match state {
+                        ActionState::Hidden => continue,
+                        ActionState::Enabled => (true, tooltip),
+                        ActionState::Disabled(reason) if reason.is_empty() => (false, tooltip),
+                        ActionState::Disabled(reason) => (false, reason),
+                    };
                     let name = format!("assistant-action-{}-{}", action.id, id.0);
                     let action_id = action.id.clone();
                     let button = text_button(
                         SharedString::from(name.clone()),
                         name,
-                        action.label.clone(),
+                        label,
                         None,
-                        Some((
-                            action.tooltip.clone(),
-                            action.key_hint_at(&self.focus_handle, window, cx),
-                        )),
+                        Some((tooltip, action.key_hint_at(&self.focus_handle, window, cx))),
                         Look::Ghost,
-                        !action.enabled,
+                        !enabled,
                         false,
                         colors,
                     );
-                    buttons = buttons.child(if action.enabled {
+                    buttons = buttons.child(if enabled {
                         button.on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                             cx.stop_propagation();
                             this.invoke_action(&action_id, id, cx);
@@ -1271,6 +1625,18 @@ impl MessageList {
                     .line_height(px(17.))
                     .text_color(colors.muted)
                     .child(empty.text.clone()),
+            );
+        }
+        if !empty.note.is_empty() {
+            body = body.child(
+                div()
+                    .debug_selector(|| "assistant-empty-note".into())
+                    .mt(SPACE_2)
+                    .text_size(UI_TEXT_SM)
+                    .line_height(px(17.))
+                    .text_color(colors.muted)
+                    .italic()
+                    .child(empty.note.clone()),
             );
         }
         for (index, example) in empty.examples.iter().enumerate() {

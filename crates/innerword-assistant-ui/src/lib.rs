@@ -156,14 +156,21 @@
 //!     AssistantPanelEvent::CloseRequested => workspace.close_side_chat(window, cx),
 //!     AssistantPanelEvent::PrivacyNoticeAcknowledged => workspace.store_notice_read(cx),
 //!     AssistantPanelEvent::AvailabilityChanged(found) => workspace.assistant_availability_changed(found, cx),
+//!     // "Draw" / "New Whiteboard" under an answer, `cmd-shift-d`, the command:
+//!     AssistantPanelEvent::Draw { message, target, drawing } => workspace.draw(*message, *target, drawing, window, cx),
 //!     _ => {}
 //! })
 //! .detach();
 //!
-//! // Whenever another document is opened (and once for the one that is open):
+//! // Whenever another document is opened (and once for the one that is open),
+//! // with what an answer's drawing is for over it:
 //! panel.update(cx, |panel, cx| {
-//!     panel.set_document(Some(DocumentRef::new(id, title)), stored_conversation(id), window, cx)
+//!     let document = DocumentRef::new(id, title).with_drawing(target, why_not);
+//!     panel.set_document(Some(document), stored_conversation(id), window, cx)
 //! });
+//! // When that changes while it stays open, and after the host drew an answer:
+//! panel.update(cx, |panel, cx| panel.set_drawing_target(target, why_not, cx));
+//! panel.update(cx, |panel, cx| panel.mark_drawn(message, cx));
 //! // When the title of the open document changes:
 //! panel.update(cx, |panel, cx| panel.set_document_title(title, cx));
 //! // When the selection of the text changes, or the document becomes read-only:
@@ -178,7 +185,7 @@
 //! ```
 //!
 //! The panel's commands ([`commands`]: new chat, clear, stop, choose
-//! model, choose effort, add context, insert, replace, copy) reach the
+//! model, choose effort, add context, insert, replace, copy, draw) reach the
 //! panel of the active window from wherever the keyboard is, as the
 //! comment commands do: [`init`] installs global listeners for them, and a
 //! panel answers while its host says it is on screen
@@ -189,6 +196,7 @@
 //! | anywhere in the panel | `tab` / `shift-tab` | header, context, messages, composer, and round again |
 //! | anywhere in the panel | `escape` | back to the text ([`AssistantPanelEvent::FocusTextRequested`]) |
 //! | anywhere in the panel | `cmd-enter` / `cmd-shift-enter` / `cmd-shift-c` | insert at caret / replace selection / copy: the marked answer in the message list, else the latest |
+//! | anywhere in the panel | `cmd-shift-d` | draw the answer's drawing (on the open whiteboard, or as a new whiteboard): the marked answer, else the latest; an answer drawn before at a second press |
 //! | anywhere in the panel | `cmd-.` | stop the answer |
 //! | anywhere in the panel | `cmd-alt-n` / `cmd-alt-k` | new chat / clear |
 //! | anywhere in the panel | `cmd-shift-m` / `cmd-alt-e` | the model menu / the effort menu |
@@ -223,7 +231,7 @@ pub mod pickers;
 pub use actions::{
     ANSWER_EDITOR_FLAG, ActivateSelected, AddContext, CATEGORY, CHAT_EDITOR_FLAG, COMPOSER_CONTEXT,
     COMPOSER_EDITOR_FLAG, CONTEXT_ROW_CONTEXT, ChooseEffort, ChooseModel, ClearChat,
-    CloseAssistant, CopyAnswer, CopyMessage, DismissChat, FocusComposer, FocusNextArea,
+    CloseAssistant, CopyAnswer, CopyMessage, DismissChat, DrawAnswer, FocusComposer, FocusNextArea,
     FocusPreviousArea, HEADER_CONTEXT, InsertAtCaret, MESSAGES_CONTEXT, NewChat, NextControl,
     PANEL_CONTEXT, PressControl, PreviousControl, RemoveContext, ReplaceSelection,
     SIDE_EDITOR_FLAG, SelectFirstMessage, SelectLastMessage, SelectNextMessage,
@@ -231,11 +239,16 @@ pub use actions::{
 };
 pub use composer::{COMPOSER_MAX_HEIGHT, Composer, ComposerEvent, ComposerOptions};
 pub use markdown::{AnswerFont, AnswerStyle, answer_document, answer_plain_text};
-pub use messages::{AnswerAction, EmptyState, MessageList, MessageListEvent, MessageListOptions};
+pub use messages::{
+    ActionState, ActionWords, AnswerAction, AnswerFacts, EmptyState, MessageList, MessageListEvent,
+    MessageListOptions, SharedElementNames,
+};
 pub use notice::{Notice, NoticeKind, NoticeRow, notice_row};
 pub use panel::{
-    ACTION_COPY, ACTION_INSERT, ACTION_REPLACE, ApplyKind, AssistantPanel, AssistantPanelEvent,
-    AssistantPanelOptions, DocumentRef, HeaderControl, PanelArea, PanelNotice,
+    ACTION_COPY, ACTION_DRAW, ACTION_INSERT, ACTION_REPLACE, ApplyKind, AssistantPanel,
+    AssistantPanelEvent, AssistantPanelOptions, DRAW_AGAIN_WITHIN, DRAWING_UNAVAILABLE,
+    DRAWN_ALREADY, DocumentRef, HeaderControl, MADE_ALREADY, NO_DRAWING, ONLY_A_DRAWING, PanelArea,
+    PanelNotice, STILL_WRITTEN,
     context::{ContextPicker, ContextPickerDelegate},
 };
 pub use pickers::{

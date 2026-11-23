@@ -1178,7 +1178,7 @@ fn the_commands_reach_the_panel_from_wherever_the_keyboard_is(cx: &mut TestAppCo
     cx.dispatch_action(ClearChat);
     cx.run_until_parked();
     assert!(ws.texts(cx).is_empty());
-    assert_eq!(innerword_assistant_ui::commands().len(), 9);
+    assert_eq!(innerword_assistant_ui::commands().len(), 10);
 }
 
 // ----- the keyboard ---------------------------------------------------------------------

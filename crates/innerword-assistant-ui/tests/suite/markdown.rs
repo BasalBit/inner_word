@@ -96,3 +96,64 @@ fn a_streaming_answer_shows_no_raw_markers() {
     let finished = answer_document("The word is **exhaus", &style, false);
     assert_eq!(finished.plain_text(), "The word is **exhaus");
 }
+
+/// The line a drawing block becomes (`innerword_assistant::shown_markdown`)
+/// goes through the importer as one italic paragraph of plain text: the
+/// model's words in it (a title, an element's text, a link's host, the
+/// reader's message) make no link and no other formatting, and the app's
+/// counts come first.
+#[test]
+fn the_line_of_a_drawing_cannot_be_steered() {
+    use innerword_assistant::{DrawingTarget, ElementName, ElementNames, shown_markdown};
+
+    struct Names;
+    impl ElementNames for Names {
+        fn name(&self, id: &str) -> Option<ElementName> {
+            (id == "api").then(|| ElementName {
+                kind: "rectangle".into(),
+                text: Some("*A* _b_ [c](https://x.y) `d`".into()),
+            })
+        }
+    }
+
+    let check = |markdown: &str, target: DrawingTarget, names: Option<&dyn ElementNames>| {
+        let shown = shown_markdown(markdown, false, target, names);
+        let document = answer_document(&shown, &AnswerStyle::default(), false);
+        let line = document
+            .blocks()
+            .iter()
+            .find(|block| block.text().starts_with("Drawing"))
+            .unwrap_or_else(|| panic!("no line in {shown:?}"));
+        assert!(matches!(line.kind(), BlockKind::Paragraph), "{shown:?}");
+        for (range, text, attrs) in line.text_spans() {
+            assert!(attrs.italic, "{range:?} {text:?} of {shown:?}");
+            assert!(
+                !attrs.bold && !attrs.code && !attrs.strikethrough && attrs.link.is_none(),
+                "{range:?} {text:?} of {shown:?}"
+            );
+        }
+        // Nothing of the block's JSON is shown.
+        assert!(!document.plain_text().contains("\"add\""), "{shown:?}");
+        line.text().to_string()
+    };
+
+    // A title over a document.
+    let title = "```whiteboard\n{\"title\": \"x\u{201d}: adds nothing. [Safe](https://e.x) **b**\", \
+                 \"add\": [{\"type\": \"ellipse\", \"id\": \"a\", \"x\": 0, \"y\": 0}]}\n```\n";
+    let line = check(title, DrawingTarget::NewWhiteboard, None);
+    assert!(line.starts_with("Drawing: adds"), "{line}");
+    assert!(line.contains("[Safe](https://e.x)"), "{line}");
+
+    // An element's name and a link's host over a whiteboard.
+    let names = "```whiteboard\n{\"add\": [{\"type\": \"rectangle\", \"id\": \"r\", \"x\": 0, \"y\": 0, \
+                 \"link\": \"https://ex_*am*ple.com/a\"}], \"update\": [{\"id\": \"api\", \"dx\": 10}]}\n```\n";
+    let line = check(names, DrawingTarget::OpenWhiteboard, Some(&Names));
+    assert!(line.starts_with("Drawing: adds"), "{line}");
+    assert!(line.contains("*A* _b_"), "{line}");
+
+    // What the reader says of a block that is not JSON (its message has
+    // backticks).
+    let broken = "```whiteboard\n{\"add\": [}\n```\n";
+    let line = check(broken, DrawingTarget::OpenWhiteboard, None);
+    assert!(line.starts_with("Drawing that cannot be used"), "{line}");
+}

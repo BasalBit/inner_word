@@ -37,9 +37,9 @@ use super::{
 use crate::{
     actions::{
         AddContext, CONTEXT_ROW_CONTEXT, ChooseEffort, ChooseModel, ClearChat, CloseAssistant,
-        CopyAnswer, DismissChat, FocusComposer, FocusNextArea, FocusPreviousArea, HEADER_CONTEXT,
-        InsertAtCaret, NewChat, NextControl, PANEL_CONTEXT, PressControl, PreviousControl,
-        RemoveContext, ReplaceSelection, StopAnswer,
+        CopyAnswer, DismissChat, DrawAnswer, FocusComposer, FocusNextArea, FocusPreviousArea,
+        HEADER_CONTEXT, InsertAtCaret, NewChat, NextControl, PANEL_CONTEXT, PressControl,
+        PreviousControl, RemoveContext, ReplaceSelection, StopAnswer,
     },
     controls::{Look, icon_button, keep_focus, keyboard_mark, text_button},
     notice::notice_row,
@@ -88,6 +88,9 @@ pub(crate) fn global_actions(cx: &mut App) {
         },
         CopyAnswer => |panel, window, cx| {
             panel.apply_to_target(ApplyKind::Copy, window, cx);
+        },
+        DrawAnswer => |panel, window, cx| {
+            panel.draw_target_answer(window, cx);
         },
     );
 }
@@ -141,6 +144,9 @@ impl Render for AssistantPanel {
             }))
             .on_action(cx.listener(|this, _: &CopyAnswer, window, cx| {
                 this.apply_to_target(ApplyKind::Copy, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &DrawAnswer, window, cx| {
+                this.draw_target_answer(window, cx);
             }))
             .on_action(cx.listener(|_, _: &CloseAssistant, _, cx| {
                 cx.emit(AssistantPanelEvent::CloseRequested);

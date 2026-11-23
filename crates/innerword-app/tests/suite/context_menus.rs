@@ -645,6 +645,7 @@ fn shift_f10_is_a_second_key_for_the_context_menu(cx: &mut TestAppContext) {
         [
             "In the text",
             "On a page",
+            "On a whiteboard",
             "In the comment list",
             "In the library",
             "In keyboard shortcuts",

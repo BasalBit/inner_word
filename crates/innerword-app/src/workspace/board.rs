@@ -190,8 +190,12 @@ pub(crate) struct BoardState {
     parts: Option<Parts>,
     /// The rev last saved.
     pub saved: u64,
-    /// An outside write is being taken into the view: posts are dropped.
+    /// An outside write is being taken into the view: posts wait.
     pub adopting: bool,
+    /// The newest post that came while an adopt was answered: the merge the
+    /// page posts can come before the adopt's answer; it is taken when its
+    /// rev is at or above the one the adopt answers.
+    pending_post: Option<Held>,
     /// Posts below this rev are dropped (they left the page before a merge).
     pub floor: u64,
     pub status: Status,
@@ -505,6 +509,7 @@ impl Workspace {
             parts: None,
             saved: 0,
             adopting: false,
+            pending_post: None,
             floor: 0,
             status: Status::default(),
             pictures: HashMap::new(),
@@ -664,9 +669,17 @@ impl Workspace {
         let Some(board) = self.board_of_mut(id) else {
             return;
         };
+        // While an adopt is answered a post waits: one from before the merge
+        // is dropped when the answer comes, the merge itself is taken.
+        if board.adopting {
+            if board.pending_post.as_ref().is_none_or(|held| held.rev < rev) {
+                board.pending_post = Some(Held { rev, json });
+            }
+            return;
+        }
         // A post that left the page before a merge: the merged canvas holds
         // what it held, and it would write over the outside change.
-        if board.adopting || rev < board.floor {
+        if rev < board.floor {
             return;
         }
         if board.held.as_ref().is_some_and(|held| held.rev > rev) {
@@ -811,7 +824,7 @@ impl Workspace {
             return;
         }
         if !background {
-            self.save_board_now(id, cx);
+            self.save_board_asking(id, true, cx);
             return;
         }
         let Some(held) = board.held.clone() else {
@@ -930,6 +943,14 @@ impl Workspace {
     /// Returns `false` when it could not be saved (then it is retried, or a
     /// recovery file has it).
     pub(crate) fn save_board_now(&mut self, id: DocumentId, cx: &mut Context<Self>) -> bool {
+        self.save_board_asking(id, false, cx)
+    }
+
+    /// [`Workspace::save_board_now`]; with `ask`, a scene that names pictures
+    /// the app does not know asks the page for them first and is saved once
+    /// they are there (an autosave), instead of being saved without them (a
+    /// flush, which cannot wait).
+    fn save_board_asking(&mut self, id: DocumentId, ask: bool, cx: &mut Context<Self>) -> bool {
         self.saver.settle();
         // A picture still being stored: made ready and stored through the
         // library's own connection, so the save names no bytes that are not
@@ -958,6 +979,10 @@ impl Workspace {
         let expect = board.stamp;
         let prepared = match super::saver::prepare_board(&held.json, &stored, &known) {
             Ok(prepared) => prepared,
+            Err(NotPrepared::NeedsFiles(ids)) if ask => {
+                self.ask_for_board_files(id, ids, cx);
+                return false;
+            }
             Err(NotPrepared::NeedsFiles(ids)) => {
                 // Not answered in time: saved without them (their elements
                 // stay and show Excalidraw's missing picture).
@@ -1203,6 +1228,17 @@ impl Workspace {
         .detach();
     }
 
+    /// Whiteboard `id` was written by someone else (an agent's request, a
+    /// write the app did not make): the stored scene is taken into its view
+    /// by the base rule, one step of its undo, and from here until the view
+    /// answers its posts are dropped (section 4.6, "After an outside write").
+    pub fn adopt_outside_write(&mut self, id: DocumentId, cx: &mut Context<Self>) {
+        let Ok(stored) = self.library.read(cx).document(id) else {
+            return;
+        };
+        self.adopt_stored_scene(id, &stored.content, true, cx);
+    }
+
     /// The view answered an adopt.
     fn board_adopted(&mut self, id: DocumentId, adopted: calls::Adopted, cx: &mut Context<Self>) {
         let Some(board) = self.board_of_mut(id) else {
@@ -1213,6 +1249,15 @@ impl Workspace {
         board.base_rev = adopted.rev;
         if adopted.same {
             board.saved = board.saved.max(adopted.rev);
+        }
+        // The merge, posted before this answer came.
+        let pending = board
+            .pending_post
+            .take()
+            .filter(|held| held.rev >= adopted.rev && held.rev > board.saved);
+        if let Some(held) = pending {
+            board.held = Some(held);
+            self.schedule_board_save(id, Duration::ZERO, cx);
         }
         if !adopted.conflicts.is_empty() {
             eprintln!(
@@ -1238,6 +1283,7 @@ impl Workspace {
             return;
         };
         board.adopting = false;
+        board.pending_post = None;
         let theirs = Scene::from_stored(&theirs_content)
             .map(|parsed| parsed.scene)
             .unwrap_or_else(|_| Scene::empty());

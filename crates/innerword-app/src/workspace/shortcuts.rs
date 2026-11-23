@@ -551,8 +551,15 @@ impl Workspace {
         });
     }
 
+    /// [`Workspace::shortcuts_listing`], for tests: what this window's list
+    /// says about a key.
+    pub fn shortcuts_listing_here(&self, cx: &App) -> Option<Listing> {
+        self.shortcuts_listing(cx)
+    }
+
     /// [`listing`] as this window's list shows it: with what it says about
-    /// a key while Vim mode is on ([`VIM_TAKES_KEYS_FIRST`]).
+    /// a key on a whiteboard ([`BOARD_TAKES_KEYS_FIRST`]) and while Vim mode
+    /// is on ([`VIM_TAKES_KEYS_FIRST`]).
     fn shortcuts_listing(&self, cx: &App) -> Option<Listing> {
         // The whiteboard sees its own keys first, always.
         let listing = listing(cx)?.sees_keys_first(

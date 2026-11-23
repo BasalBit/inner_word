@@ -1382,3 +1382,19 @@ pub fn is_fixed_binding(binding: &KeyBinding) -> bool {
             .predicate()
             .is_some_and(|predicate| predicate.to_string() == BOARD_VIEW)
 }
+
+impl crate::pages::FakePages {
+    /// The page posts `json` as the scene of `rev`, as it is (a scene the app
+    /// cannot read: `{"elements": 5}`).
+    pub fn post_scene_raw(&self, json: &str, rev: u64) {
+        self.post_board(Message::Scene {
+            rev,
+            scene: raw(json.to_string()),
+        });
+    }
+
+    /// The status the open whiteboard's page holds now.
+    pub fn board_status(&self) -> Status {
+        self.board.borrow().status.clone()
+    }
+}

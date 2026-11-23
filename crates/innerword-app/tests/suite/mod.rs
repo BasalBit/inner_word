@@ -4,6 +4,7 @@
 mod agents;
 mod assembly;
 mod assistant;
+mod boards;
 mod commands;
 mod context_menus;
 mod export;

@@ -9,7 +9,9 @@ use innerword_app::{
     actions::{Export, ExportPdf, Print, ReloadPage},
     automation::describe_state,
     boards::FakeFailure,
-    export::{ExportChoice, ExportDelegate, ExportDestination, ExportScope, ExportTarget, FileFormat},
+    export::{
+        ExportChoice, ExportDelegate, ExportDestination, ExportScope, ExportTarget, FileFormat,
+    },
     pages::{self, FakePages},
     printing,
     workspace::{
@@ -56,7 +58,11 @@ fn stored(library: &Entity<Library>, id: DocumentId, cx: &mut VisualTestContext)
 }
 
 fn ids(scene: &Scene) -> Vec<String> {
-    scene.elements().iter().map(|e| e.id().to_string()).collect()
+    scene
+        .elements()
+        .iter()
+        .map(|e| e.id().to_string())
+        .collect()
 }
 
 fn toasts(workspace: &Entity<Workspace>, cx: &mut VisualTestContext) -> Vec<String> {
@@ -117,7 +123,10 @@ fn new_whiteboard_makes_one_and_opens_it_in_the_view(cx: &mut TestAppContext) {
     let meta = library.read_with(vcx, |l, _| l.document_meta(board).unwrap());
     assert_eq!(meta.kind, DocumentKind::Board);
     assert_eq!(meta.title, "Plan");
-    assert_eq!(workspace.read_with(vcx, |w, _| w.open_board_id()), Some(board));
+    assert_eq!(
+        workspace.read_with(vcx, |w, _| w.open_board_id()),
+        Some(board)
+    );
     let opened = fake.boards_opened();
     assert_eq!(opened.len(), 1);
     let served: Value = serde_json::from_str(&opened[0].1).unwrap();
@@ -140,18 +149,27 @@ fn a_gesture_is_saved_and_the_own_save_neither_adopts_nor_reloads(cx: &mut TestA
     fake.draw(&scene(&[rect("a", 0.0, 1)]));
     settle(vcx);
     assert_eq!(ids(&stored(&library, board, vcx)), ["a"]);
-    assert!(fake.adopted().is_empty(), "its own save is no outside change");
+    assert!(
+        fake.adopted().is_empty(),
+        "its own save is no outside change"
+    );
     assert_eq!(fake.reloads(), 0);
     assert_eq!(fake.boards_opened().len(), 1);
     let line = state_line(&workspace, vcx);
-    assert!(line.contains("dirty=no") && line.contains("saved=1"), "{line}");
+    assert!(
+        line.contains("dirty=no") && line.contains("saved=1"),
+        "{line}"
+    );
     // A rename while saving keeps the new title.
     library.update(vcx, |l, cx| l.rename_document(board, "Plan B", cx).unwrap());
     fake.draw(&scene(&[rect("a", 10.0, 2)]));
     settle(vcx);
     let meta = library.read_with(vcx, |l, _| l.document_meta(board).unwrap());
     assert_eq!(meta.title, "Plan B");
-    assert_eq!(workspace.read_with(vcx, |w, _| w.page_title().map(str::to_string)), Some("Plan B".into()));
+    assert_eq!(
+        workspace.read_with(vcx, |w, _| w.page_title().map(str::to_string)),
+        Some("Plan B".into())
+    );
 }
 
 #[gpui::test]
@@ -166,9 +184,15 @@ fn switching_away_while_the_post_has_not_come_parks_the_view_and_keeps_the_strok
         w.open_document(text, true, window, cx);
     });
     vcx.run_until_parked();
-    assert_eq!(workspace.read_with(vcx, |w, _| w.open_document_id()), Some(text));
+    assert_eq!(
+        workspace.read_with(vcx, |w, _| w.open_document_id()),
+        Some(text)
+    );
     assert!(fake.parked(), "the closing view is parked");
-    assert_eq!(workspace.read_with(vcx, |w, _| w.board_closing()), Some(board));
+    assert_eq!(
+        workspace.read_with(vcx, |w, _| w.board_closing()),
+        Some(board)
+    );
     assert!(ids(&stored(&library, board, vcx)).is_empty(), "not yet");
     // Opening the same whiteboard meanwhile waits for its save.
     workspace.update_in(vcx, |w, window, cx| {
@@ -180,7 +204,10 @@ fn switching_away_while_the_post_has_not_come_parks_the_view_and_keeps_the_strok
     vcx.run_until_parked();
     assert_eq!(ids(&stored(&library, board, vcx)), ["late"]);
     assert_eq!(workspace.read_with(vcx, |w, _| w.board_closing()), None);
-    assert_eq!(workspace.read_with(vcx, |w, _| w.open_board_id()), Some(board));
+    assert_eq!(
+        workspace.read_with(vcx, |w, _| w.open_board_id()),
+        Some(board)
+    );
     assert_eq!(fake.boards_opened().len(), 2, "opened again once saved");
 }
 
@@ -243,10 +270,13 @@ fn outside_write(
     elements: &[Value],
     cx: &mut VisualTestContext,
 ) {
-    let scene = Scene::from_stored(&json!({
-        "type": "excalidraw", "version": 2, "source": "inner-word",
-        "elements": elements, "appState": {}, "files": {},
-    }).to_string())
+    let scene = Scene::from_stored(
+        &json!({
+            "type": "excalidraw", "version": 2, "source": "inner-word",
+            "elements": elements, "appState": {}, "files": {},
+        })
+        .to_string(),
+    )
     .unwrap()
     .scene;
     let content = scene.to_stored();
@@ -280,7 +310,12 @@ fn a_save_that_finds_the_row_changed_adopts_and_keeps_both(cx: &mut TestAppConte
     let (fake, library, _workspace, board, _, vcx) = open_board(cx);
     fake.draw(&scene(&[rect("mine", 0.0, 1)]));
     settle(vcx);
-    outside_write(&library, board, &[rect("mine", 0.0, 1), rect("theirs", 300.0, 1)], vcx);
+    outside_write(
+        &library,
+        board,
+        &[rect("mine", 0.0, 1), rect("theirs", 300.0, 1)],
+        vcx,
+    );
     vcx.run_until_parked();
     // The writer draws on: the save is stale, the stored scene is adopted by
     // the base rule, and the merge the page posts is saved.
@@ -291,7 +326,11 @@ fn a_save_that_finds_the_row_changed_adopts_and_keeps_both(cx: &mut TestAppConte
     let mut kept = ids(&saved);
     kept.sort();
     assert_eq!(kept, ["mine", "theirs"]);
-    assert_eq!(saved.element("mine").unwrap().x(), 50.0, "the writer's move stays");
+    assert_eq!(
+        saved.element("mine").unwrap().x(),
+        50.0,
+        "the writer's move stays"
+    );
 }
 
 #[gpui::test]
@@ -300,7 +339,12 @@ fn a_post_from_before_an_adopt_is_not_saved_over_it(cx: &mut TestAppContext) {
     fake.draw(&scene(&[rect("mine", 0.0, 1)]));
     settle(vcx);
     let content = library.read_with(vcx, |l, _| l.document(board).unwrap().content);
-    outside_write(&library, board, &[rect("mine", 0.0, 1), rect("theirs", 300.0, 1)], vcx);
+    outside_write(
+        &library,
+        board,
+        &[rect("mine", 0.0, 1), rect("theirs", 300.0, 1)],
+        vcx,
+    );
     let after = library.read_with(vcx, |l, _| l.document(board).unwrap().content);
     assert_ne!(content, after);
     workspace.update(vcx, |w, cx| w.adopt_outside_write(board, cx));
@@ -317,7 +361,12 @@ fn a_failed_adopt_merges_in_rust_saves_and_reloads(cx: &mut TestAppContext) {
     let (fake, library, _workspace, board, _, vcx) = open_board(cx);
     fake.draw(&scene(&[rect("mine", 0.0, 1)]));
     settle(vcx);
-    outside_write(&library, board, &[rect("mine", 0.0, 1), rect("theirs", 300.0, 1)], vcx);
+    outside_write(
+        &library,
+        board,
+        &[rect("mine", 0.0, 1), rect("theirs", 300.0, 1)],
+        vcx,
+    );
     fake.fail_adopts(FakeFailure::Throws);
     fake.draw(&scene(&[rect("mine", 0.0, 1), rect("new", 600.0, 1)]));
     settle(vcx);
@@ -342,7 +391,10 @@ fn a_pasted_picture_is_stored_before_the_save_that_names_it(cx: &mut TestAppCont
     settle(vcx);
     let saved = stored(&library, board, vcx);
     let entry = saved.files().get("pasted").expect("a files entry");
-    assert_eq!(entry.file.as_ref().map(|f| f.as_str().to_string()), Some(file.clone()));
+    assert_eq!(
+        entry.file.as_ref().map(|f| f.as_str().to_string()),
+        Some(file.clone())
+    );
     assert_eq!(entry.mime_type, "image/png");
     let id = innerword_library::store::FileId::parse(&file).unwrap();
     assert!(library.read_with(vcx, |l, _| l.store().file_info(&id).unwrap().is_some()));
@@ -361,22 +413,38 @@ fn a_scene_naming_a_picture_whose_file_never_came_asks_for_it(cx: &mut TestAppCo
     settle(vcx);
     assert!(fake.board_calls().iter().any(|call| call == "files late"));
     let saved = stored(&library, board, vcx);
-    assert!(saved.files().get("late").and_then(|e| e.file.clone()).is_some());
+    assert!(
+        saved
+            .files()
+            .get("late")
+            .and_then(|e| e.file.clone())
+            .is_some()
+    );
 }
 
 #[gpui::test]
 fn an_html_file_posted_as_an_svg_is_refused(cx: &mut TestAppContext) {
     let (fake, library, workspace, board, _, vcx) = open_board(cx);
-    fake.paste_picture("bad", "image/svg+xml", b"<!doctype html><html><body>no</body></html>");
+    fake.paste_picture(
+        "bad",
+        "image/svg+xml",
+        b"<!doctype html><html><body>no</body></html>",
+    );
     let mut picture = rect("pic", 0.0, 1);
     picture["type"] = json!("image");
     picture["fileId"] = json!("bad");
     fake.draw(&scene(&[picture]));
     settle(vcx);
-    assert!(!toasts(&workspace, vcx).is_empty(), "a toast names the refusal");
+    assert!(
+        !toasts(&workspace, vcx).is_empty(),
+        "a toast names the refusal"
+    );
     let saved = stored(&library, board, vcx);
     assert_eq!(ids(&saved), ["pic"], "the element stays");
-    assert!(saved.files().get("bad").is_none(), "no entry for what was refused");
+    assert!(
+        saved.files().get("bad").is_none(),
+        "no entry for what was refused"
+    );
 }
 
 #[gpui::test]
@@ -385,7 +453,10 @@ fn a_scene_that_cannot_be_read_goes_to_the_recovery_copy(cx: &mut TestAppContext
     fake.post_scene_raw(r#"{"elements": 5}"#, 1);
     settle(vcx);
     let recovered = workspace.read_with(vcx, |w, _| w.board_recovered());
-    assert!(matches!(recovered, Some(Recovered::Memory(_))), "{recovered:?}");
+    assert!(
+        matches!(recovered, Some(Recovered::Memory(_))),
+        "{recovered:?}"
+    );
     assert!(state_line(&workspace, vcx).contains("recovered=yes"));
 }
 
@@ -426,7 +497,10 @@ fn the_edit_menu_and_the_add_commands_reach_the_page(cx: &mut TestAppContext) {
     vcx.run_until_parked();
     let calls = fake.board_calls();
     assert!(calls.contains(&"center".to_string()), "{calls:?}");
-    assert!(calls.iter().any(|call| call == "insertElements 1"), "{calls:?}");
+    assert!(
+        calls.iter().any(|call| call == "insertElements 1"),
+        "{calls:?}"
+    );
     let canvas: Value = serde_json::from_str(&fake.canvas()).unwrap();
     assert_eq!(canvas["elements"][0]["type"], "rectangle");
     for action in [
@@ -440,7 +514,10 @@ fn the_edit_menu_and_the_add_commands_reach_the_page(cx: &mut TestAppContext) {
     let calls = fake.board_calls();
     assert!(calls.contains(&"mermaid".to_string()), "{calls:?}");
     assert!(calls.contains(&"library toggle".to_string()), "{calls:?}");
-    assert!(calls.contains(&"library addSelection".to_string()), "{calls:?}");
+    assert!(
+        calls.contains(&"library addSelection".to_string()),
+        "{calls:?}"
+    );
 }
 
 #[gpui::test]
@@ -461,7 +538,14 @@ fn commands_of_a_text_say_what_a_whiteboard_is(cx: &mut TestAppContext) {
 fn the_whiteboards_own_keys_are_left_to_the_page(cx: &mut TestAppContext) {
     let (fake, _library, _workspace, _board, _, vcx) = open_board(cx);
     vcx.run_until_parked();
-    for key in ["cmd-g", "cmd-alt-c", "cmd-alt-[", "cmd-d", "cmd-shift-,", "cmd-<"] {
+    for key in [
+        "cmd-g",
+        "cmd-alt-c",
+        "cmd-alt-[",
+        "cmd-d",
+        "cmd-shift-,",
+        "cmd-<",
+    ] {
         assert!(!fake.press(key), "{key} is the whiteboard's");
     }
     for key in ["ctrl-enter", "shift-f10", "cmd-shift-p", "cmd-f", "cmd-s"] {
@@ -477,7 +561,10 @@ fn help_from_the_page_opens_the_list_at_on_a_whiteboard(cx: &mut TestAppContext)
     let list = workspace
         .read_with(vcx, |w, cx| w.shortcuts_list(cx))
         .expect("the list is open");
-    assert_eq!(list.read_with(vcx, |list, cx| list.query(cx)), "On a whiteboard");
+    assert_eq!(
+        list.read_with(vcx, |list, cx| list.query(cx)),
+        "On a whiteboard"
+    );
 }
 
 // ----- PDF, print, export -----------------------------------------------------------------
@@ -569,7 +656,8 @@ fn an_empty_whiteboard_has_nothing_to_print(cx: &mut TestAppContext) {
     }
     assert!(jobs.borrow().is_empty());
     assert!(
-        toasts(&workspace, vcx).contains(&"\u{201c}Plan\u{201d} is empty: there is nothing to print.".to_string()),
+        toasts(&workspace, vcx)
+            .contains(&"\u{201c}Plan\u{201d} is empty: there is nothing to print.".to_string()),
         "{:?}",
         toasts(&workspace, vcx)
     );
@@ -580,8 +668,15 @@ fn a_folders_pdf_holds_its_whiteboards_after_its_documents(cx: &mut TestAppConte
     init(cx);
     let fake = cx.update(pages::use_fake);
     let library = library(cx);
-    let folder = library.update(cx, |l, cx| l.create_folder(None, "Part one", cx).unwrap().id);
-    let text = add_document(&library, Some(folder), &simple_document("Chapter", "Words."), cx);
+    let folder = library.update(cx, |l, cx| {
+        l.create_folder(None, "Part one", cx).unwrap().id
+    });
+    let text = add_document(
+        &library,
+        Some(folder),
+        &simple_document("Chapter", "Words."),
+        cx,
+    );
     let (workspace, vcx) = open_workspace(&library, cx);
     workspace.update_in(vcx, |w, window, cx| {
         w.open_document(text, false, window, cx);
@@ -603,12 +698,21 @@ fn a_folders_pdf_holds_its_whiteboards_after_its_documents(cx: &mut TestAppConte
     vcx.run_until_parked();
     for id in [plan] {
         let folder_of = library.read_with(vcx, |l, _| l.document_meta(id).unwrap().folder_id);
-        assert_eq!(folder_of, Some(folder), "made in the folder of the selection");
+        assert_eq!(
+            folder_of,
+            Some(folder),
+            "made in the folder of the selection"
+        );
     }
     let out = tempfile::tempdir().unwrap();
     let chosen = out.path().join("Part one.pdf");
     workspace.update_in(vcx, |w, window, cx| {
-        w.export_pdf(ExportTarget::Folder(folder), ExportScope::Folder, window, cx)
+        w.export_pdf(
+            ExportTarget::Folder(folder),
+            ExportScope::Folder,
+            window,
+            cx,
+        )
     });
     vcx.run_until_parked();
     vcx.simulate_new_path_selection({
@@ -624,12 +728,17 @@ fn a_folders_pdf_holds_its_whiteboards_after_its_documents(cx: &mut TestAppConte
     }
     let bytes = std::fs::read(&chosen).expect("the PDF is written");
     let pdf = innerword_print::PdfFile::open(&bytes).unwrap();
-    assert_eq!(pdf.page_count(), 2, "the chapter's page, then the whiteboard's");
+    assert_eq!(
+        pdf.page_count(),
+        2,
+        "the chapter's page, then the whiteboard's"
+    );
     let last = pdf.page_size(1);
     assert_eq!((last.0.round(), last.1.round()), (164.0, 114.0));
     let said = toasts(&workspace, vcx);
     assert!(
-        said.iter().any(|t| t.contains("\u{201c}Bare\u{201d} is empty and was left out.")),
+        said.iter()
+            .any(|t| t.contains("\u{201c}Bare\u{201d} is empty and was left out.")),
         "{said:?}"
     );
 }
@@ -639,8 +748,15 @@ fn a_folders_markdown_leaves_whiteboards_out_and_says_so(cx: &mut TestAppContext
     init(cx);
     let _fake = cx.update(pages::use_fake);
     let library = library(cx);
-    let folder = library.update(cx, |l, cx| l.create_folder(None, "Part one", cx).unwrap().id);
-    let text = add_document(&library, Some(folder), &simple_document("Chapter", "Words."), cx);
+    let folder = library.update(cx, |l, cx| {
+        l.create_folder(None, "Part one", cx).unwrap().id
+    });
+    let text = add_document(
+        &library,
+        Some(folder),
+        &simple_document("Chapter", "Words."),
+        cx,
+    );
     let (workspace, vcx) = open_workspace(&library, cx);
     workspace.update_in(vcx, |w, window, cx| {
         w.open_document(text, false, window, cx);
@@ -676,7 +792,8 @@ fn the_shape_library_is_stored_and_served_to_the_next_whiteboard(cx: &mut TestAp
     fake.change_library(&items.to_string());
     vcx.run_until_parked();
     let stored: Option<Box<serde_json::value::RawValue>> = library.read_with(vcx, |l, _| {
-        l.setting(innerword_app::boards::SHAPE_LIBRARY_SETTING).unwrap()
+        l.setting(innerword_app::boards::SHAPE_LIBRARY_SETTING)
+            .unwrap()
     });
     let stored = stored.expect("the setting is there");
     let parsed = innerword_board::ShapeLibrary::from_stored(stored.get()).unwrap();
@@ -696,13 +813,16 @@ fn the_shape_library_is_stored_and_served_to_the_next_whiteboard(cx: &mut TestAp
 fn a_shape_library_over_the_limits_is_not_stored(cx: &mut TestAppContext) {
     let (fake, library, workspace, _board, _, vcx) = open_board(cx);
     let many: Vec<Value> = (0..1001)
-        .map(|n| json!({ "id": format!("i{n}"), "status": "unpublished", "created": n,
-            "elements": [rect(&format!("s{n}"), 0.0, 1)] }))
+        .map(|n| {
+            json!({ "id": format!("i{n}"), "status": "unpublished", "created": n,
+            "elements": [rect(&format!("s{n}"), 0.0, 1)] })
+        })
         .collect();
     fake.change_library(&Value::Array(many).to_string());
     vcx.run_until_parked();
     let stored: Option<Box<serde_json::value::RawValue>> = library.read_with(vcx, |l, _| {
-        l.setting(innerword_app::boards::SHAPE_LIBRARY_SETTING).unwrap()
+        l.setting(innerword_app::boards::SHAPE_LIBRARY_SETTING)
+            .unwrap()
     });
     assert!(stored.is_none(), "nothing stored");
     assert!(toasts(&workspace, vcx).contains(&LIBRARY_TOO_LARGE.to_string()));
@@ -723,7 +843,11 @@ fn restoring_a_version_adopts_it_into_the_view(cx: &mut TestAppContext) {
         assert!(w.restore_version(snapshot, window, cx));
     });
     settle(vcx);
-    assert_eq!(fake.adopted().len(), 1, "taken into the view, one step of its undo");
+    assert_eq!(
+        fake.adopted().len(),
+        1,
+        "taken into the view, one step of its undo"
+    );
     let delta: Value = serde_json::from_str(&fake.adopted()[0]).unwrap();
     assert_eq!(delta["undoable"], true);
     assert_eq!(ids(&stored(&library, board, vcx)), ["first"]);
@@ -741,7 +865,9 @@ fn without_an_engine_a_whiteboard_shows_its_listing_and_none_is_made(cx: &mut Te
         None
     );
     vcx.run_until_parked();
-    assert!(!vcx.update(|window, cx| window.is_action_available(&innerword_app::actions::NewBoard, cx)));
+    assert!(
+        !vcx.update(|window, cx| window.is_action_available(&innerword_app::actions::NewBoard, cx))
+    );
 }
 
 // ----- menus, the status bar, the list of shortcuts ---------------------------------------
@@ -762,8 +888,18 @@ fn the_title_menu_and_ctrl_enter_have_the_whiteboards_items(cx: &mut TestAppCont
             .map(|menu| menu.read(cx).labels())
             .unwrap_or_default()
     });
-    for wanted in ["Undo", "Redo", "Select All", "Add Rectangle", "Add Text", "Version History…"] {
-        assert!(labels.iter().any(|label| label == wanted), "{wanted}: {labels:?}");
+    for wanted in [
+        "Undo",
+        "Redo",
+        "Select All",
+        "Add Rectangle",
+        "Add Text",
+        "Version History…",
+    ] {
+        assert!(
+            labels.iter().any(|label| label == wanted),
+            "{wanted}: {labels:?}"
+        );
     }
 }
 
@@ -781,7 +917,8 @@ fn the_status_bar_says_the_save_state_and_the_elements(cx: &mut TestAppContext) 
         Some(14)
     );
     let labels = workspace.update(vcx, |w, cx| {
-        w.menu_items(innerword_app::workspace::MenuKind::Save, cx).len()
+        w.menu_items(innerword_app::workspace::MenuKind::Save, cx)
+            .len()
     });
     assert_eq!(labels, 1, "Save Now");
 }
@@ -829,7 +966,16 @@ fn none_of_the_whiteboards_keys_is_a_key_the_window_keeps(cx: &mut TestAppContex
         }
     }
     // The window's own keys reach GPUI from a whiteboard.
-    for key in ["cmd-shift-p", "cmd-p", "cmd-0", "cmd-1", "cmd-,", "cmd-/", "cmd-s", "cmd-shift-s"] {
+    for key in [
+        "cmd-shift-p",
+        "cmd-p",
+        "cmd-0",
+        "cmd-1",
+        "cmd-,",
+        "cmd-/",
+        "cmd-s",
+        "cmd-shift-s",
+    ] {
         assert!(fake.press(key), "{key}");
         vcx.run_until_parked();
         vcx.update(|window, cx| window.dispatch_action(Box::new(innerword_ui::modal::Dismiss), cx));
@@ -873,7 +1019,10 @@ fn the_last_open_whiteboard_reopens_and_the_shape_library_comes_back(cx: &mut Te
     workspace.update(vcx, |w, cx| w.flush(cx));
     let library2 = library.clone();
     let (workspace2, vcx2) = open_workspace(&library2, cx);
-    assert_eq!(workspace2.read_with(vcx2, |w, _| w.open_board_id()), Some(board));
+    assert_eq!(
+        workspace2.read_with(vcx2, |w, _| w.open_board_id()),
+        Some(board)
+    );
     assert!(fake.library_served().last().unwrap().contains("kept"));
 }
 
@@ -898,4 +1047,64 @@ fn a_version_of_a_whiteboard_is_previewed_as_its_listing(cx: &mut TestAppContext
     let preview = preview.expect("the version history is open");
     assert!(preview.contains("ellipse"), "{preview}");
     assert!(preview.contains("api"), "{preview}");
+}
+
+// ----- pictures from files, Mermaid's pictures ------------------------------------------------
+
+#[gpui::test]
+fn insert_image_on_a_whiteboard_stores_the_file_and_puts_it_on_the_canvas(cx: &mut TestAppContext) {
+    let (fake, library, _workspace, _board, _, vcx) = open_board(cx);
+    let dir = tempfile::tempdir().unwrap();
+    let png = innerword_image::fixtures::png(64, 48, [20, 160, 90]);
+    let path = dir.path().join("harbour.png");
+    std::fs::write(&path, &png).unwrap();
+    let not_a_picture = dir.path().join("notes.txt");
+    std::fs::write(&not_a_picture, b"words").unwrap();
+    vcx.update(|_, cx| {
+        innerword_app::images::choose_files_beforehand(
+            vec![path.clone(), not_a_picture.clone()],
+            cx,
+        )
+    });
+    vcx.update(|window, cx| {
+        window.dispatch_action(Box::new(innerword_editor::actions::InsertImage), cx)
+    });
+    for _ in 0..10 {
+        vcx.executor().advance_clock(Duration::from_millis(10));
+        vcx.run_until_parked();
+    }
+    assert!(
+        fake.board_calls()
+            .iter()
+            .any(|call| call == "insertPictures 1")
+    );
+    let file = innerword_library::store::FileId::of(&png);
+    assert!(
+        library.read_with(vcx, |l, _| l.store().file_info(&file).unwrap().is_some()),
+        "stored before it is on the canvas"
+    );
+}
+
+#[gpui::test]
+fn mermaid_to_drawing_and_its_svg_picture(cx: &mut TestAppContext) {
+    let (fake, library, _workspace, board, _, vcx) = open_board(cx);
+    vcx.update(|window, cx| window.dispatch_action(Box::new(MermaidToDrawing), cx));
+    vcx.run_until_parked();
+    assert!(fake.board_calls().contains(&"mermaid".to_string()));
+    // A pie chart arrives as one SVG picture, posted as a pasted one is.
+    let svg = br#"<?xml version="1.0"?><svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><circle r="4" cx="5" cy="5"/></svg>"#;
+    fake.paste_picture("pie", "image/svg+xml", svg);
+    let mut picture = rect("chart", 0.0, 1);
+    picture["type"] = json!("image");
+    picture["fileId"] = json!("pie");
+    fake.draw(&scene(&[picture]));
+    settle(vcx);
+    let saved = stored(&library, board, vcx);
+    let entry = saved.files().get("pie").expect("the picture's entry");
+    assert_eq!(entry.mime_type, "image/svg+xml");
+    assert_eq!(
+        entry.file.as_ref().map(|f| f.as_str().to_string()),
+        Some(innerword_library::store::FileId::of(svg).to_hex()),
+        "stored as it came"
+    );
 }

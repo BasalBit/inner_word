@@ -2189,9 +2189,9 @@ fn the_menu_bar_shows_the_keys_the_user_chose(cx: &mut TestAppContext) {
             let real: Vec<String> = keymap
                 .bindings_for_action(action.as_ref())
                 .filter(|binding| {
-                !menus::is_menu_key_binding(binding)
-                    && !innerword_app::boards::is_fixed_binding(binding)
-            })
+                    !menus::is_menu_key_binding(binding)
+                        && !innerword_app::boards::is_fixed_binding(binding)
+                })
                 .map(keys_of)
                 .collect();
             assert!(real.contains(&keys_of(native)), "{name}: {real:?}");

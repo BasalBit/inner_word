@@ -657,9 +657,7 @@ impl Workspace {
                 "in" => self.zoom_board(Canvas::In),
                 "out" => self.zoom_board(Canvas::Out),
                 "actual" => self.zoom_board(Canvas::To(1.0)),
-                "fit" | "width" | "fit-width" | "page" | "fit-page" => {
-                    self.zoom_board(Canvas::Fit)
-                }
+                "fit" | "width" | "fit-width" | "page" | "fit-page" => self.zoom_board(Canvas::Fit),
                 "life" | "auto" | "automatic" => {
                     self.say_about_page(super::NO_PAPER_ON_A_BOARD, cx)
                 }

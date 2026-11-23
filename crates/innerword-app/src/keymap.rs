@@ -515,8 +515,7 @@ fn install(cx: &mut App) {
         .try_global::<AppKeymap>()
         .map(|keymap| effective_bindings(keymap, cx))
         .unwrap_or_default();
-    let for_menus =
-        menus::menu_key_bindings(&Keymap::new(effective.clone()), menus::open_item(cx));
+    let for_menus = menus::menu_key_bindings(&Keymap::new(effective.clone()), menus::open_item(cx));
     cx.clear_key_bindings();
     // The whiteboard's own keys last: fixed, after every other binding
     // (`crate::boards::fixed_key_bindings`).
@@ -559,8 +558,7 @@ pub fn measure_install(cx: &mut App) -> Option<InstallCost> {
     let after_effective = Instant::now();
     cx.global_mut::<AppKeymap>().effective = effective;
     let effective = effective_bindings(cx.global::<AppKeymap>(), cx);
-    let for_menus =
-        menus::menu_key_bindings(&Keymap::new(effective.clone()), menus::open_item(cx));
+    let for_menus = menus::menu_key_bindings(&Keymap::new(effective.clone()), menus::open_item(cx));
     let fixed = crate::boards::fixed_key_bindings();
     let bindings = effective.len() + for_menus.len() + fixed.len();
     let after_build = Instant::now();

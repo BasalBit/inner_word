@@ -626,7 +626,9 @@ impl Workspace {
         // A page has an export of its own: a folder that opens offline, or
         // a PDF as printed.
         let page = match target {
-            ExportTarget::Open => self.open_page_id().filter(|_| self.open_board_id().is_none()),
+            ExportTarget::Open => self
+                .open_page_id()
+                .filter(|_| self.open_board_id().is_none()),
             ExportTarget::Document(id) if self.is_page(id, cx) => Some(id),
             _ => None,
         };

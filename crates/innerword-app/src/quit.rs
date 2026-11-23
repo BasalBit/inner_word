@@ -42,5 +42,6 @@ pub fn request(cx: &mut App) {
 
 /// Whether a quit is under way (tests).
 pub fn requested(cx: &App) -> bool {
-    cx.try_global::<Requested>().is_some_and(|requested| requested.0)
+    cx.try_global::<Requested>()
+        .is_some_and(|requested| requested.0)
 }

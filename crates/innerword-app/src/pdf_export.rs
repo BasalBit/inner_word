@@ -65,8 +65,8 @@ use std::{path::PathBuf, time::Instant};
 
 use gpui::{App, AsyncWindowContext, Context, Stateful, WeakEntity, Window, prelude::*};
 use innerword_core::{Block, BlockKind, Document};
-use innerword_library::DocumentId;
 use innerword_editor::PrintPass;
+use innerword_library::DocumentId;
 use innerword_ui::Toast;
 
 use crate::{
@@ -428,9 +428,8 @@ impl Workspace {
             documents: planned.documents.len(),
             boards: boards.len(),
             empty_boards,
-            boards_not_shown: (not_shown > 0).then(|| {
-                (not_shown, crate::boards::not_shown_sentence(cx))
-            }),
+            boards_not_shown: (not_shown > 0)
+                .then(|| (not_shown, crate::boards::not_shown_sentence(cx))),
             pages_left_out: planned.pages_left_out,
             started: Instant::now(),
         };
@@ -624,13 +623,12 @@ pub(crate) async fn write(
                         })
                         .ok();
                 }
-                let what = if destination.documents + destination.boards == 1
-                    || destination.boards > 0
-                {
-                    format!("“{}”", short_title(&destination.title))
-                } else {
-                    format!("{} documents", destination.documents)
-                };
+                let what =
+                    if destination.documents + destination.boards == 1 || destination.boards > 0 {
+                        format!("“{}”", short_title(&destination.title))
+                    } else {
+                        format!("{} documents", destination.documents)
+                    };
                 let mut said = format!("Exported {what} to {}", short_path(&destination.path));
                 // A folder's PDF with whiteboards says how many pages it has and
                 // how many of them are whiteboards.

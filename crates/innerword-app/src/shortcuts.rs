@@ -577,7 +577,10 @@ const KEY_TITLES: [(&str, &str); 5] = [
     ("app::HideOthers", "Hide the other apps"),
     ("app::Minimize", "Minimize the window"),
     ("page::OpenContextMenu", "Show the page's context menu"),
-    ("board::OpenContextMenu", "Show the whiteboard's context menu"),
+    (
+        "board::OpenContextMenu",
+        "Show the whiteboard's context menu",
+    ),
 ];
 
 /// What the row of one of the whiteboard's own keys says about why it stays.

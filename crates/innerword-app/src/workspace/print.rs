@@ -513,7 +513,12 @@ impl Workspace {
     /// the target to be put on the user's paper, turned to the drawing and
     /// scaled down to fit (`Fit::ShrinkOntoPaper`). An empty whiteboard has
     /// nothing to print.
-    fn print_board(&mut self, id: innerword_library::DocumentId, window: &mut Window, cx: &mut Context<Self>) {
+    fn print_board(
+        &mut self,
+        id: innerword_library::DocumentId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(target) = printing::target(cx) else {
             return;
         };
@@ -946,13 +951,11 @@ async fn prepare(
                 )),
             });
         }
-        let added = made
-            .map_err(|why| why.to_string())
-            .and_then(|printed| {
-                writer
-                    .add_pdf_page(&printed.bytes, 1)
-                    .ok_or_else(|| "its PDF could not be read".to_string())
-            });
+        let added = made.map_err(|why| why.to_string()).and_then(|printed| {
+            writer
+                .add_pdf_page(&printed.bytes, 1)
+                .ok_or_else(|| "its PDF could not be read".to_string())
+        });
         match added {
             Ok(size) => {
                 if paper == (0., 0.) {

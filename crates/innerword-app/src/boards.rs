@@ -425,13 +425,15 @@ pub fn is_whiteboard_keys(keys: &str) -> bool {
     let Ok(wanted) = gpui::Keystroke::parse(keys) else {
         return false;
     };
-    innerword_board_web::keys::WHITEBOARD_KEYS.iter().any(|key| {
-        key_spellings(key.keys).iter().any(|spelling| {
-            gpui::Keystroke::parse(spelling).is_ok_and(|known| {
-                known.key == wanted.key && known.modifiers == wanted.modifiers
+    innerword_board_web::keys::WHITEBOARD_KEYS
+        .iter()
+        .any(|key| {
+            key_spellings(key.keys).iter().any(|spelling| {
+                gpui::Keystroke::parse(spelling).is_ok_and(|known| {
+                    known.key == wanted.key && known.modifiers == wanted.modifiers
+                })
             })
         })
-    })
 }
 
 // ----- the fake engine's canvas ---------------------------------------------------------
@@ -539,7 +541,12 @@ impl FakeBoard {
     pub(crate) fn element_count(&self) -> u64 {
         elements_of(&self.canvas)
             .iter()
-            .filter(|element| !element.get("isDeleted").and_then(Value::as_bool).unwrap_or(false))
+            .filter(|element| {
+                !element
+                    .get("isDeleted")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+            })
             .count() as u64
     }
 
@@ -579,7 +586,10 @@ impl FakeBoard {
         let mut scene = self.canvas.clone();
         if let Some(elements) = scene.get_mut("elements").and_then(Value::as_array_mut) {
             elements.retain(|element| {
-                !element.get("isDeleted").and_then(Value::as_bool).unwrap_or(false)
+                !element
+                    .get("isDeleted")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
             });
         }
         scene.to_string()
@@ -708,7 +718,9 @@ impl FakeBoard {
         };
         let files: Vec<Value> = std::mem::take(&mut self.unposted_files)
             .into_iter()
-            .map(|(id, (mime, data_url))| json!({ "id": id, "mimeType": mime, "dataURL": data_url }))
+            .map(
+                |(id, (mime, data_url))| json!({ "id": id, "mimeType": mime, "dataURL": data_url }),
+            )
             .collect();
         let library = (self.lrev > self.library_posted)
             .then(|| json!({ "lrev": self.lrev, "items": self.library.clone() }));
@@ -738,7 +750,11 @@ impl FakeBoard {
         let mut elements: Vec<Value> = elements_of(&self.canvas).to_vec();
         let mut ids = Vec::new();
         for element in incoming {
-            let Some(id) = element.get("id").and_then(Value::as_str).map(str::to_string) else {
+            let Some(id) = element
+                .get("id")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+            else {
                 continue;
             };
             match elements
@@ -751,7 +767,11 @@ impl FakeBoard {
             ids.push(id);
         }
         self.canvas["elements"] = Value::Array(elements);
-        if argument.get("select").and_then(Value::as_bool).unwrap_or(false) {
+        if argument
+            .get("select")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        {
             self.selected = ids.clone();
             self.status.selected = ids.len() as u64;
         }
@@ -768,7 +788,8 @@ fn view_scene(scene: Value) -> Value {
     };
     map.entry("type").or_insert_with(|| json!("excalidraw"));
     map.entry("version").or_insert_with(|| json!(2));
-    map.entry("source").or_insert_with(|| json!(innerword_board::SOURCE));
+    map.entry("source")
+        .or_insert_with(|| json!(innerword_board::SOURCE));
     map.entry("elements").or_insert_with(|| json!([]));
     map.entry("appState").or_insert_with(|| json!({}));
     map.entry("files").or_insert_with(|| json!({}));
@@ -864,8 +885,9 @@ pub fn recovery_dir(library_db: &Path) -> Option<std::path::PathBuf> {
 // ----- the fake engine's levers ---------------------------------------------------------
 
 fn raw(text: String) -> Box<serde_json::value::RawValue> {
-    serde_json::value::RawValue::from_string(text)
-        .unwrap_or_else(|_| serde_json::value::RawValue::from_string("null".to_string()).expect("null is JSON"))
+    serde_json::value::RawValue::from_string(text).unwrap_or_else(|_| {
+        serde_json::value::RawValue::from_string("null".to_string()).expect("null is JSON")
+    })
 }
 
 impl crate::pages::FakePages {
@@ -891,7 +913,11 @@ impl crate::pages::FakePages {
     pub fn board_ready(&self) {
         let (stamp, elements, status) = {
             let board = self.board.borrow();
-            (board.stamp.clone(), board.element_count(), board.status.clone())
+            (
+                board.stamp.clone(),
+                board.element_count(),
+                board.status.clone(),
+            )
         };
         self.post_board(Message::Ready {
             excalidraw: innerword_board_web::EXCALIDRAW_VERSION.to_string(),
@@ -969,7 +995,9 @@ impl crate::pages::FakePages {
             if board.forget_file_messages {
                 return;
             }
-            std::mem::take(&mut board.unposted_files).into_iter().collect()
+            std::mem::take(&mut board.unposted_files)
+                .into_iter()
+                .collect()
         };
         for (id, (mime_type, data_url)) in pictures {
             self.post_board(Message::File {
@@ -1077,7 +1105,10 @@ impl crate::pages::FakePages {
     /// The page cannot start (`board.json` unreadable).
     pub fn fail_start(&self) {
         self.post_board(Message::Error {
-            message: format!("{}: board.json cannot be read", innerword_board_web::bridge::START_FAILED),
+            message: format!(
+                "{}: board.json cannot be read",
+                innerword_board_web::bridge::START_FAILED
+            ),
         });
     }
 }
@@ -1132,7 +1163,12 @@ impl crate::pages::FakeView {
     }
 
     /// Runs the glue's call `body` on the fake canvas.
-    pub fn call(&self, body: &str, argument: &str, done: impl FnOnce(Result<String, String>) + 'static) {
+    pub fn call(
+        &self,
+        body: &str,
+        argument: &str,
+        done: impl FnOnce(Result<String, String>) + 'static,
+    ) {
         let pages = self.pages.clone();
         let name = call_name(body);
         let argument_value: Value = serde_json::from_str(argument).unwrap_or(Value::Null);
@@ -1221,10 +1257,15 @@ impl crate::pages::FakeView {
                 for message in messages {
                     pages.post_board(message);
                 }
-                done(Ok(json!({ "posted": posted, "missing": missing }).to_string()));
+                done(Ok(
+                    json!({ "posted": posted, "missing": missing }).to_string()
+                ));
             }
             "undo" | "redo" => {
-                let steps = argument_value.get("steps").and_then(Value::as_u64).unwrap_or(1);
+                let steps = argument_value
+                    .get("steps")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(1);
                 let rev = {
                     let mut board = pages.board.borrow_mut();
                     board.calls.push(format!("{name} {steps}"));
@@ -1242,7 +1283,10 @@ impl crate::pages::FakeView {
                 } else {
                     format!(
                         "to {}",
-                        argument_value.get("to").and_then(Value::as_f64).unwrap_or(1.0)
+                        argument_value
+                            .get("to")
+                            .and_then(Value::as_f64)
+                            .unwrap_or(1.0)
                     )
                 };
                 let zoom = {
@@ -1261,7 +1305,11 @@ impl crate::pages::FakeView {
                     .and_then(Value::as_str)
                     .unwrap_or_default()
                     .to_string();
-                pages.board.borrow_mut().calls.push(format!("search {query}").trim_end().to_string());
+                pages
+                    .board
+                    .borrow_mut()
+                    .calls
+                    .push(format!("search {query}").trim_end().to_string());
                 done(Ok("{}".to_string()));
             }
             "center" => {
@@ -1270,7 +1318,9 @@ impl crate::pages::FakeView {
                     board.calls.push("center".to_string());
                     board.selected.clone()
                 };
-                done(Ok(json!({ "x": 0.0, "y": 0.0, "selected": selected }).to_string()));
+                done(Ok(
+                    json!({ "x": 0.0, "y": 0.0, "selected": selected }).to_string()
+                ));
             }
             "insertPictures" => {
                 let pictures = argument_value
@@ -1285,15 +1335,27 @@ impl crate::pages::FakeView {
                     .collect();
                 {
                     let mut board = pages.board.borrow_mut();
-                    board.calls.push(format!("insertPictures {}", pictures.len()));
+                    board
+                        .calls
+                        .push(format!("insertPictures {}", pictures.len()));
                     for picture in &pictures {
-                        let file = picture.get("file").and_then(Value::as_str).unwrap_or_default();
+                        let file = picture
+                            .get("file")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default();
                         let mime = picture.get("mimeType").cloned().unwrap_or(Value::Null);
-                        if let Some(files) = board.canvas.get_mut("files").and_then(Value::as_object_mut) {
-                            files.insert(file.to_string(), json!({ "mimeType": mime, "created": 0 }));
+                        if let Some(files) =
+                            board.canvas.get_mut("files").and_then(Value::as_object_mut)
+                        {
+                            files.insert(
+                                file.to_string(),
+                                json!({ "mimeType": mime, "created": 0 }),
+                            );
                         }
-                        if let Some(elements) =
-                            board.canvas.get_mut("elements").and_then(Value::as_array_mut)
+                        if let Some(elements) = board
+                            .canvas
+                            .get_mut("elements")
+                            .and_then(Value::as_array_mut)
                         {
                             elements.push(json!({
                                 "id": format!("picture-{file}"),
@@ -1346,7 +1408,9 @@ impl crate::pages::FakeView {
                     board.calls.push(format!("library {words}"));
                     board.lrev
                 };
-                done(Ok(json!({ "lrev": lrev, "added": null, "refused": null }).to_string()));
+                done(Ok(
+                    json!({ "lrev": lrev, "added": null, "refused": null }).to_string()
+                ));
             }
             other => {
                 pages.board.borrow_mut().calls.push(other.to_string());

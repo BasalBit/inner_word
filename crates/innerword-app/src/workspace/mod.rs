@@ -130,7 +130,7 @@ pub use assistant::{library_attachments, library_tool_server};
 pub(crate) use board::post_board_message;
 pub use board::{
     AddArrow, AddDiamond, AddEllipse, AddFrame, AddRectangle, AddText, AddToShapeLibrary,
-    BOARD_SAVE_DELAY, End, BOARD_STOPPED, InsertFromShapeLibrary, LARGE_BOARD, LIBRARY_TOO_LARGE,
+    BOARD_SAVE_DELAY, BOARD_STOPPED, End, InsertFromShapeLibrary, LARGE_BOARD, LIBRARY_TOO_LARGE,
     MermaidToDrawing, NO_COMMENTS_ON_A_BOARD, NO_PAPER_ON_A_BOARD, NO_SETTINGS_ON_A_BOARD,
     NO_SPELLING_ON_A_BOARD, NO_VIM_ON_A_BOARD, OpenContextMenu as OpenBoardContextMenu, RELOADED,
     Recovered, STILL_LOADING, ShapeLibraryDelegate, TITLE_OF_A_BOARD, ToggleShapeLibrary,
@@ -174,11 +174,11 @@ pub use session::{
 };
 pub(crate) use session::{Session, display_title as session_title};
 pub use shortcuts::{
-    ALSO_FIXED_NOTE, BOARD_NAME, BOARD_TAKES_KEYS_FIRST, NOT_CHANGEABLE_NOTE,
-    VIM_TAKES_KEYS_FIRST, changed_command_count,
-    choose_import_file_beforehand, commands_counted, file_catalogue as shortcuts_file_catalogue,
-    imported_toast, list_catalogue as shortcuts_list_catalogue, listing as shortcuts_listing,
-    own_keys_sentence, reset_all_detail,
+    ALSO_FIXED_NOTE, BOARD_NAME, BOARD_TAKES_KEYS_FIRST, NOT_CHANGEABLE_NOTE, VIM_TAKES_KEYS_FIRST,
+    changed_command_count, choose_import_file_beforehand, commands_counted,
+    file_catalogue as shortcuts_file_catalogue, imported_toast,
+    list_catalogue as shortcuts_list_catalogue, listing as shortcuts_listing, own_keys_sentence,
+    reset_all_detail,
 };
 pub use spelling::CHECK_SPELLING_MENU_ITEM;
 pub use zoom::ZOOM_STORE_DELAY;
@@ -1250,7 +1250,12 @@ impl Workspace {
 
     /// Opens (or closes) the version history of `id`, what is on screen
     /// saved first.
-    fn show_version_history(&mut self, id: DocumentId, window: &mut Window, cx: &mut Context<Self>) {
+    fn show_version_history(
+        &mut self,
+        id: DocumentId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.open_item_id() != Some(id) {
             return;
         }

@@ -200,7 +200,8 @@ pub async fn run(step: BoardStep, window: AnyWindowHandle, cx: &mut AsyncApp) ->
             })?;
         }
         BoardStep::Library => {
-            let line = workspace.update(cx, |workspace, _, _| workspace.describe_shape_library())?;
+            let line =
+                workspace.update(cx, |workspace, _, _| workspace.describe_shape_library())?;
             eprintln!("[automation] board: library {line}");
         }
         BoardStep::Mermaid(definition) => {

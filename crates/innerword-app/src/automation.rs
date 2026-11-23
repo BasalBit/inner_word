@@ -1144,7 +1144,9 @@ async fn execute(
             // save job, so nothing depends on this Mac's printer).
             let started = Instant::now();
             let made = workspace_handle(window, cx)?
-                .update(cx, |workspace, window, cx| workspace.board_pdf_now(window, cx))?
+                .update(cx, |workspace, window, cx| {
+                    workspace.board_pdf_now(window, cx)
+                })?
                 .await
                 .map_err(|why| anyhow!("the whiteboard was not printed: {why}"))?;
             let path = absolute(match &step {

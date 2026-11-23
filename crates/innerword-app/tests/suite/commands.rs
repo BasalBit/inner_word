@@ -494,7 +494,12 @@ fn the_list_of_shortcuts_is_generated_from_the_keymap(cx: &mut TestAppContext) {
     // (On a whiteboard ⌘Z is the whiteboard's own key: a fixed row.)
     assert_eq!(
         undo,
-        [Place::Text, Place::Board, Place::CommentList, Place::TextField]
+        [
+            Place::Text,
+            Place::Board,
+            Place::CommentList,
+            Place::TextField
+        ]
     );
     // The library moves with the arrows wherever the keyboard is in it and
     // with letters while nothing is typed there: two rows, told apart.

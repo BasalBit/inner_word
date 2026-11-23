@@ -1246,35 +1246,39 @@ impl Workspace {
         // A whiteboard: Excalidraw draws its own right-click menu and stops
         // WebKit's; the app's items are in the title menu and `ctrl-enter`.
         let board = page.is_board();
-        let menu = if board { Vec::new() } else { vec![
-            item("Find in Page…", Box::new(tools::Find), true, true),
-            item(
-                "Reload Page",
-                Box::new(crate::actions::ReloadPage),
-                true,
-                false,
-            ),
-            item(
-                "Copy Page Address",
-                Box::new(crate::actions::CopyPageAddress),
-                has_source,
-                false,
-            ),
-            item(
-                "Open Page Address in Browser",
-                Box::new(crate::actions::OpenPageAddress),
-                has_source,
-                false,
-            ),
-            item("Print…", Box::new(crate::actions::Print), true, true),
-            item("Export…", Box::new(crate::actions::Export), true, false),
-            item(
-                "Version History…",
-                Box::new(crate::actions::ShowVersionHistory),
-                true,
-                false,
-            ),
-        ] };
+        let menu = if board {
+            Vec::new()
+        } else {
+            vec![
+                item("Find in Page…", Box::new(tools::Find), true, true),
+                item(
+                    "Reload Page",
+                    Box::new(crate::actions::ReloadPage),
+                    true,
+                    false,
+                ),
+                item(
+                    "Copy Page Address",
+                    Box::new(crate::actions::CopyPageAddress),
+                    has_source,
+                    false,
+                ),
+                item(
+                    "Open Page Address in Browser",
+                    Box::new(crate::actions::OpenPageAddress),
+                    has_source,
+                    false,
+                ),
+                item("Print…", Box::new(crate::actions::Print), true, true),
+                item("Export…", Box::new(crate::actions::Export), true, false),
+                item(
+                    "Version History…",
+                    Box::new(crate::actions::ShowVersionHistory),
+                    true,
+                    false,
+                ),
+            ]
+        };
         let version = cx.key_bindings().borrow().version();
         let mut keys = page.keys.borrow_mut();
         keys.refresh_keys(cx);
@@ -1501,7 +1505,11 @@ impl Workspace {
                     .items_center()
                     .justify_center()
                     .gap(SPACE_3)
-                    .child(div().text_color(colors.muted).child(super::board::BOARD_STOPPED))
+                    .child(
+                        div()
+                            .text_color(colors.muted)
+                            .child(super::board::BOARD_STOPPED),
+                    )
                     .child(
                         Button::new("board-reload", "Reload").on_click(|_, window, cx| {
                             window.dispatch_action(Box::new(crate::actions::ReloadPage), cx);
@@ -1578,9 +1586,11 @@ impl Workspace {
                 .size_full()
                 .flex()
                 .flex_col()
-                .on_action(cx.listener(|this, _: &super::board::OpenContextMenu, window, cx| {
-                    this.open_board_menu(window, cx)
-                }))
+                .on_action(
+                    cx.listener(|this, _: &super::board::OpenContextMenu, window, cx| {
+                        this.open_board_menu(window, cx)
+                    }),
+                )
                 .on_action(cx.listener(|this, _: &tools::Find, _, _| this.search_board(None)))
                 // Files dropped on the whiteboard: the web view takes no drops,
                 // so they reach GPUI's view: pictures go onto the canvas, web

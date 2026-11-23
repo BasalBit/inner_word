@@ -320,7 +320,9 @@ pub(crate) struct ShapeLibraryState {
 impl ShapeLibraryState {
     /// Whether a posted library is not stored yet.
     pub fn dirty(&self) -> bool {
-        self.held.as_ref().is_some_and(|(lrev, _)| *lrev > self.saved)
+        self.held
+            .as_ref()
+            .is_some_and(|(lrev, _)| *lrev > self.saved)
     }
 }
 
@@ -432,7 +434,9 @@ impl Workspace {
 
     /// Whether whiteboard `id` is closing (its view parked).
     pub fn board_closing(&self) -> Option<DocumentId> {
-        self.closing_board.as_ref().map(|closing| closing.session.id)
+        self.closing_board
+            .as_ref()
+            .map(|closing| closing.session.id)
     }
 
     // ----- opening -------------------------------------------------------------------
@@ -672,7 +676,11 @@ impl Workspace {
         // While an adopt is answered a post waits: one from before the merge
         // is dropped when the answer comes, the merge itself is taken.
         if board.adopting {
-            if board.pending_post.as_ref().is_none_or(|held| held.rev < rev) {
+            if board
+                .pending_post
+                .as_ref()
+                .is_none_or(|held| held.rev < rev)
+            {
                 board.pending_post = Some(Held { rev, json });
             }
             return;
@@ -731,14 +739,18 @@ impl Workspace {
                 }
             };
             let stored = cx
-                .update(|cx| images.put_files(vec![(prepared.file.clone(), prepared.bytes.clone())], cx))
+                .update(|cx| {
+                    images.put_files(vec![(prepared.file.clone(), prepared.bytes.clone())], cx)
+                })
                 .ok();
             let result = match stored {
                 Some(task) => task.await.map(|()| prepared),
                 None => return,
             };
-            this.update(cx, |this, cx| this.board_picture_done(id, &file, result, cx))
-                .ok();
+            this.update(cx, |this, cx| {
+                this.board_picture_done(id, &file, result, cx)
+            })
+            .ok();
         })
         .detach();
     }
@@ -830,8 +842,8 @@ impl Workspace {
         let Some(held) = board.held.clone() else {
             return;
         };
-        let large = held.json.len() > innerword_board::limits::LARGE_VIEW_SCENE_BYTES
-            && !board.large_told;
+        let large =
+            held.json.len() > innerword_board::limits::LARGE_VIEW_SCENE_BYTES && !board.large_told;
         if large {
             board.large_told = true;
         }
@@ -1123,7 +1135,9 @@ impl Workspace {
         cx.spawn(async move |this, cx| {
             let answer = match answer {
                 Some(answer) => {
-                    let timer = cx.background_executor().timer(boards::VIEW_COLLECT_PATIENCE);
+                    let timer = cx
+                        .background_executor()
+                        .timer(boards::VIEW_COLLECT_PATIENCE);
                     crate::pages::within(answer, timer).await
                 }
                 None => None,
@@ -1604,7 +1618,9 @@ impl Workspace {
             let started = Instant::now();
             let answer = match answer {
                 Some(answer) => {
-                    let timer = cx.background_executor().timer(boards::VIEW_COLLECT_PATIENCE);
+                    let timer = cx
+                        .background_executor()
+                        .timer(boards::VIEW_COLLECT_PATIENCE);
                     crate::pages::within(answer, timer).await.flatten()
                 }
                 None => None,
@@ -1753,8 +1769,10 @@ impl Workspace {
             let collect = self.collect_board(id, cx);
             let task = cx.spawn_in(window, async move |this, cx| {
                 collect.await;
-                this.update_in(cx, |this, window, cx| this.closing_board_done(id, window, cx))
-                    .ok();
+                this.update_in(cx, |this, window, cx| {
+                    this.closing_board_done(id, window, cx)
+                })
+                .ok();
             });
             if let Some(closing) = self.closing_board.as_mut() {
                 closing._task = Some(task);
@@ -1960,7 +1978,10 @@ impl Workspace {
         // what was selected before): so the app presses `enter` itself once
         // the new text is selected on screen.
         if edit_text
-            && added.elements.iter().any(|element| element.r#type == "text")
+            && added
+                .elements
+                .iter()
+                .any(|element| element.r#type == "text")
             && let Some(view) = self.board_native_view()
             && let Some(answer) = answer
         {
@@ -1997,7 +2018,11 @@ impl Workspace {
     }
 
     /// The shape library's call.
-    pub(crate) fn shape_library_call(&mut self, action: calls::LibraryAction, cx: &mut Context<Self>) {
+    pub(crate) fn shape_library_call(
+        &mut self,
+        action: calls::LibraryAction,
+        cx: &mut Context<Self>,
+    ) {
         let Some(id) = self.open_board_id() else {
             return;
         };
@@ -2164,10 +2189,18 @@ impl Workspace {
             if board.adopting { "yes" } else { "no" },
             if board.status.editing { "yes" } else { "no" },
             if board.status.composing { "yes" } else { "no" },
-            if board.status.pointer_down { "down" } else { "up" },
+            if board.status.pointer_down {
+                "down"
+            } else {
+                "up"
+            },
             (board.status.zoom * 100.0).round() as i64,
             board.pictures.len(),
-            if board.recovered.is_some() { "yes" } else { "no" },
+            if board.recovered.is_some() {
+                "yes"
+            } else {
+                "no"
+            },
             if self.closing_board.is_some() {
                 "yes"
             } else {
@@ -2302,7 +2335,10 @@ fn place_skeleton(
             map.insert("y".into(), json!(y - 12.0));
         }
         _ => {
-            let width = map.get("width").and_then(serde_json::Value::as_f64).unwrap_or(160.0);
+            let width = map
+                .get("width")
+                .and_then(serde_json::Value::as_f64)
+                .unwrap_or(160.0);
             let height = map
                 .get("height")
                 .and_then(serde_json::Value::as_f64)
@@ -2496,8 +2532,9 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let (web_pages, pictures): (Vec<_>, Vec<_>) =
-            paths.into_iter().partition(|path| pages::is_page_input(path));
+        let (web_pages, pictures): (Vec<_>, Vec<_>) = paths
+            .into_iter()
+            .partition(|path| pages::is_page_input(path));
         if !web_pages.is_empty() {
             let folder = self.panel.read(cx).selected_folder();
             self.import_dropped(web_pages, folder, window, cx);
@@ -2524,8 +2561,10 @@ impl Workspace {
             let Some(paths) = chosen.await else {
                 return;
             };
-            this.update(cx, |this, cx| this.insert_board_pictures(paths, None, cx).detach())
-                .ok();
+            this.update(cx, |this, cx| {
+                this.insert_board_pictures(paths, None, cx).detach()
+            })
+            .ok();
         })
         .detach();
     }
@@ -2554,9 +2593,8 @@ impl Workspace {
                                 .file_name()
                                 .map(|name| format!("“{}”", name.to_string_lossy()))
                                 .unwrap_or_else(|| "The file".to_string());
-                            let bytes = std::fs::read(path).map_err(|error| {
-                                format!("{name} could not be read ({error}).")
-                            })?;
+                            let bytes = std::fs::read(path)
+                                .map_err(|error| format!("{name} could not be read ({error})."))?;
                             boards::prepare_picture(&bytes, &name)
                         })
                         .collect()
@@ -2684,9 +2722,7 @@ impl Workspace {
                 }
             }))
             .on_action(cx.listener(|this, _: &tools::Find, _, _| this.search_board(None)))
-            .on_action(cx.listener(|this, _: &MermaidToDrawing, _, _| {
-                this.mermaid_on_board(None)
-            }))
+            .on_action(cx.listener(|this, _: &MermaidToDrawing, _, _| this.mermaid_on_board(None)))
             .on_action(cx.listener(|this, _: &ToggleShapeLibrary, _, cx| {
                 this.shape_library_call(calls::LibraryAction::Toggle, cx)
             }))
@@ -2709,24 +2745,26 @@ impl Workspace {
             }))
             // Duplicate of the open whiteboard while its page holds more than it
             // posted: the copy gets the last gesture.
-            .capture_action(cx.listener(|this, _: &innerword_library::Duplicate, _, cx| {
-                let Some(id) = this.open_board_id() else {
-                    return;
-                };
-                if !this.board_holds_more() {
-                    return;
-                }
-                cx.stop_propagation();
-                let collect = this.collect_board(id, cx);
-                let panel = this.panel.clone();
-                cx.spawn(async move |_, cx| {
-                    collect.await;
-                    panel
-                        .update(cx, |panel, cx| panel.duplicate_selected(cx))
-                        .ok();
-                })
-                .detach();
-            }));
+            .capture_action(
+                cx.listener(|this, _: &innerword_library::Duplicate, _, cx| {
+                    let Some(id) = this.open_board_id() else {
+                        return;
+                    };
+                    if !this.board_holds_more() {
+                        return;
+                    }
+                    cx.stop_propagation();
+                    let collect = this.collect_board(id, cx);
+                    let panel = this.panel.clone();
+                    cx.spawn(async move |_, cx| {
+                        collect.await;
+                        panel
+                            .update(cx, |panel, cx| panel.duplicate_selected(cx))
+                            .ok();
+                    })
+                    .detach();
+                }),
+            );
         root = add::<AddText>(root, cx);
         root = add::<AddRectangle>(root, cx);
         root = add::<AddEllipse>(root, cx);
@@ -2849,7 +2887,11 @@ impl Workspace {
     /// "Insert from shape library…": a picker of the stored library's items
     /// (each by its name, or "Shape 3: rectangle, arrow, text"), newest
     /// first; `enter` puts a copy at the middle of the view.
-    pub(crate) fn show_shape_library_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn show_shape_library_picker(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let items: Vec<(String, String)> = {
             let source: Arc<str> = match &self.shape_library.held {
                 Some((_, items)) => {
@@ -2867,10 +2909,15 @@ impl Workspace {
                         .items()
                         .iter()
                         .enumerate()
-                        .map(|(index, item)| (item.created(), item.title(index), item.id().to_string()))
+                        .map(|(index, item)| {
+                            (item.created(), item.title(index), item.id().to_string())
+                        })
                         .collect();
                     items.sort_by(|a, b| b.0.cmp(&a.0));
-                    items.into_iter().map(|(_, title, id)| (title, id)).collect()
+                    items
+                        .into_iter()
+                        .map(|(_, title, id)| (title, id))
+                        .collect()
                 }
                 Err(_) => Vec::new(),
             }

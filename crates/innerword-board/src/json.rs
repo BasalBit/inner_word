@@ -64,6 +64,103 @@ pub fn well_formed_json(text: &str) -> Cow<'_, str> {
     }
 }
 
+/// How deep a value of a scene or a shape library may nest: a container that opens deeper is
+/// read as `null` ([`parse_lenient`]). Well under `serde_json`'s own limit of 128, which
+/// counts the envelope, the list of elements and the element too.
+pub(crate) const MAX_DEPTH: usize = 100;
+
+/// JSON text read into a value, lone surrogates mended. Text nested deeper than
+/// `serde_json` reads is not refused: each container that opens deeper than [`MAX_DEPTH`]
+/// is read as `null`, and the flag says so. Excalidraw keeps an element's `customData` and
+/// every field it does not know through a paste, so a pasted element can carry any depth,
+/// and one such element must not make the whole drawing unreadable.
+pub(crate) fn parse_lenient(text: &str) -> Result<(Value, bool), serde_json::Error> {
+    let text = well_formed_json(text);
+    match serde_json::from_str::<Value>(&text) {
+        Ok(value) => Ok((value, false)),
+        Err(error) if error.to_string().starts_with("recursion limit exceeded") => {
+            let cut = cut_too_deep(&text, MAX_DEPTH);
+            serde_json::from_str::<Value>(&cut).map(|value| (value, true))
+        }
+        Err(error) => Err(error),
+    }
+}
+
+/// The warning for a value [`parse_lenient`] cut.
+pub(crate) fn cut_warning(what: &str) -> String {
+    format!(
+        "Data of the {what} nested deeper than {MAX_DEPTH} levels was left out (read as null)."
+    )
+}
+
+/// JSON text with every array or object that opens below `max` open containers replaced by
+/// `null` (a text scan: strings and their escapes are skipped whole).
+pub(crate) fn cut_too_deep(text: &str, max: usize) -> String {
+    let bytes = text.as_bytes();
+    let mut out = String::with_capacity(text.len());
+    let mut depth = 0usize;
+    let mut copied = 0usize;
+    let mut i = 0usize;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'"' => {
+                i = past_string(bytes, i);
+                continue;
+            }
+            b'[' | b'{' if depth >= max => {
+                out.push_str(&text[copied..i]);
+                out.push_str("null");
+                i = past_container(bytes, i);
+                copied = i;
+                continue;
+            }
+            b'[' | b'{' => depth += 1,
+            b']' | b'}' => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+        i += 1;
+    }
+    out.push_str(&text[copied.min(text.len())..]);
+    out
+}
+
+/// The index after the string that starts at `at` (its opening quote).
+fn past_string(bytes: &[u8], at: usize) -> usize {
+    let mut i = at + 1;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'\\' => i += 2,
+            b'"' => return i + 1,
+            _ => i += 1,
+        }
+    }
+    bytes.len()
+}
+
+/// The index after the array or object that opens at `at`.
+fn past_container(bytes: &[u8], at: usize) -> usize {
+    let mut depth = 0usize;
+    let mut i = at;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'"' => {
+                i = past_string(bytes, i);
+                continue;
+            }
+            b'[' | b'{' => depth += 1,
+            b']' | b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return i + 1;
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    bytes.len()
+}
+
 fn hex4(bytes: &[u8], at: usize) -> Option<u32> {
     let digits = bytes.get(at..at + 4)?;
     let text = std::str::from_utf8(digits).ok()?;

@@ -384,3 +384,114 @@ fn bounds_and_the_size_of_the_pdf() {
         "{b:?}"
     );
 }
+
+/// A rectangle whose `customData` (or a field Excalidraw does not know) nests `depth`
+/// arrays: what a pasted Excalidraw JSON can carry onto the canvas, which keeps both.
+fn deep(field: &str, depth: usize) -> String {
+    format!(
+        r#"{{"id":"deep","type":"rectangle","x":0,"y":0,"width":10,"height":10,"{field}":{}1{}}}"#,
+        "[".repeat(depth),
+        "]".repeat(depth)
+    )
+}
+
+#[test]
+fn a_value_nested_deeper_than_json_is_read_never_makes_the_drawing_unreadable() {
+    let none = |_: &str| None;
+    for field in ["customData", "somethingNew"] {
+        let scene = format!(
+            r#"{{"elements":[{},{{"id":"plain","type":"ellipse","x":0,"y":0,"width":5,"height":5}}],"files":{{}}}}"#,
+            deep(field, 130)
+        );
+        // serde_json alone refuses it: this is what made every save fail.
+        assert!(serde_json::from_str::<Value>(&scene).is_err());
+        let parsed = Scene::from_view(&scene, &none).unwrap();
+        let ids: Vec<&str> = parsed.scene.elements().iter().map(|e| e.id()).collect();
+        assert_eq!(ids, ["deep", "plain"], "{field}");
+        assert!(
+            parsed.warnings.iter().any(|w| w.contains("nested deeper")),
+            "{:?}",
+            parsed.warnings
+        );
+        // What is kept is read back, and stored and read again as it is.
+        let stored = parsed.scene.to_stored();
+        let again = Scene::from_stored(&stored).unwrap();
+        assert_eq!(again.scene, parsed.scene);
+        assert!(again.warnings.is_empty(), "{:?}", again.warnings);
+        let mut value = &parsed.scene.element("deep").unwrap().json()[field];
+        let mut levels = 0;
+        while let Value::Array(items) = value {
+            levels += 1;
+            value = &items[0];
+        }
+        assert_eq!(*value, Value::Null, "{field}");
+        assert!((90..=100).contains(&levels), "{field}: {levels}");
+    }
+    // A string with brackets in it is no nesting, and a scene within the limit is untouched.
+    let brackets = format!(
+        r#"{{"elements":[{{"id":"s","type":"text","x":0,"y":0,"text":"{}\"{}","customData":{{"a":[[1]]}}}}]}}"#,
+        "[".repeat(300),
+        "{".repeat(300)
+    );
+    let parsed = Scene::from_view(&brackets, &none).unwrap();
+    assert!(parsed.warnings.is_empty(), "{:?}", parsed.warnings);
+    assert_eq!(
+        parsed.scene.element("s").unwrap().json()["customData"],
+        json!({"a": [[1]]})
+    );
+    let fine = format!(r#"{{"elements":[{}]}}"#, deep("customData", 60));
+    let parsed = Scene::from_view(&fine, &none).unwrap();
+    assert!(parsed.warnings.is_empty(), "{:?}", parsed.warnings);
+}
+
+#[test]
+fn a_link_is_kept_only_for_the_web_mail_and_the_drawing_s_own_elements() {
+    let none = |_: &str| None;
+    let links = [
+        ("https://example.com/a", true),
+        ("HTTP://example.com", true),
+        ("mailto:someone@example.com", true),
+        ("innerword-page://board-4-1700000000000/index.html?element=abc", true),
+        ("null/index.html?element=abc", true),
+        ("example.com", true),
+        ("smb://attacker.example/share", false),
+        ("file:///Users/someone/secret.txt", false),
+        ("zoommtg://zoom.us/join?confno=1", false),
+        ("  FiLe:///etc/hosts", false),
+        ("fi\tle:///etc/hosts", false),
+        ("about:blank", false),
+        ("x-apple.systempreferences:com.apple", false),
+    ];
+    let elements: Vec<Value> = links
+        .iter()
+        .enumerate()
+        .map(|(n, (link, _))| {
+            json!({"id": format!("e{n}"), "type": "rectangle", "x": 0, "y": 0, "width": 10, "height": 10, "link": link})
+        })
+        .collect();
+    let scene = json!({ "elements": elements }).to_string();
+    for parsed in [
+        Scene::from_view(&scene, &none).unwrap(),
+        Scene::from_stored(&scene).unwrap(),
+    ] {
+        for (n, (link, kept)) in links.iter().enumerate() {
+            let element = parsed.scene.element(&format!("e{n}")).unwrap();
+            if *kept {
+                assert_eq!(element.link(), Some(*link), "{link}");
+            } else {
+                assert_eq!(element.json()["link"], Value::Null, "{link}");
+            }
+        }
+        let dropped = links.iter().filter(|(_, kept)| !kept).count();
+        assert_eq!(
+            parsed
+                .warnings
+                .iter()
+                .filter(|w| w.contains("The link of the element"))
+                .count(),
+            dropped,
+            "{:?}",
+            parsed.warnings
+        );
+    }
+}

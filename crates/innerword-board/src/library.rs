@@ -4,7 +4,7 @@
 use serde_json::Value;
 
 use crate::limits::{MAX_LIBRARY_BYTES, MAX_LIBRARY_ITEMS};
-use crate::{Element, SOURCE, SceneError, json, well_formed_json};
+use crate::{Element, SOURCE, SceneError, json};
 
 /// The kinds of element no item of the library may hold: a picture (an item never names
 /// stored bytes) and the kinds a whiteboard never keeps.
@@ -116,9 +116,8 @@ impl ShapeLibrary {
     /// item with a picture, an `iframe`, an `embeddable` or a `magicframe` is left out, with
     /// a warning.
     pub fn from_stored(json: &str) -> Result<ParsedLibrary, SceneError> {
-        let text = well_formed_json(json);
-        let value: Value =
-            serde_json::from_str(&text).map_err(|e| SceneError::NotJson(e.to_string()))?;
+        let (value, cut) =
+            json::parse_lenient(json).map_err(|e| SceneError::NotJson(e.to_string()))?;
         let Value::Object(map) = value else {
             return Err(SceneError::NotAScene(
                 "the shape library is not an object".into(),
@@ -133,7 +132,11 @@ impl ShapeLibrary {
             }
             None => return Err(SceneError::NotAScene("it has no libraryItems".into())),
         };
-        Ok(read_items(items))
+        let mut parsed = read_items(items);
+        if cut {
+            parsed.warnings.push(json::cut_warning("shape library"));
+        }
+        Ok(parsed)
     }
 
     /// What the glue posts (Excalidraw's `LibraryItems`, a list); lenient as
@@ -146,9 +149,8 @@ impl ShapeLibrary {
                 limit: MAX_LIBRARY_BYTES,
             });
         }
-        let text = well_formed_json(items_json);
-        let value: Value =
-            serde_json::from_str(&text).map_err(|e| SceneError::NotJson(e.to_string()))?;
+        let (value, cut) =
+            json::parse_lenient(items_json).map_err(|e| SceneError::NotJson(e.to_string()))?;
         let items = match &value {
             Value::Array(items) => items,
             Value::Object(map) => match map.get("libraryItems").or_else(|| map.get("items")) {
@@ -171,12 +173,15 @@ impl ShapeLibrary {
                 limit: MAX_LIBRARY_ITEMS,
             });
         }
-        let parsed = read_items(items);
+        let mut parsed = read_items(items);
         if parsed.library.to_stored().len() > MAX_LIBRARY_BYTES {
             return Err(SceneError::TooLarge {
                 what: "shape library",
                 limit: MAX_LIBRARY_BYTES,
             });
+        }
+        if cut {
+            parsed.warnings.push(json::cut_warning("shape library"));
         }
         Ok(parsed)
     }

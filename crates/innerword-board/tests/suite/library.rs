@@ -104,3 +104,21 @@ fn what_the_view_posts_is_read_leniently_and_within_the_limits() {
         r#"{"libraryItems":[],"source":"inner-word","type":"excalidrawlib","version":2}"#
     );
 }
+
+#[test]
+fn an_item_nested_deeper_than_json_is_read_is_kept_with_the_deep_part_left_out() {
+    let deep = format!("{}1{}", "[".repeat(140), "]".repeat(140));
+    let items = format!(
+        r#"[{{"id":"deep","status":"unpublished","created":1,"elements":[{{"id":"r","type":"rectangle","x":0,"y":0,"width":10,"height":10,"customData":{deep}}}]}}]"#
+    );
+    assert!(serde_json::from_str::<Value>(&items).is_err());
+    let parsed = ShapeLibrary::from_view(&items).unwrap();
+    assert_eq!(parsed.library.items().len(), 1);
+    assert!(
+        parsed.warnings.iter().any(|w| w.contains("nested deeper")),
+        "{:?}",
+        parsed.warnings
+    );
+    let again = ShapeLibrary::from_stored(&parsed.library.to_stored()).unwrap();
+    assert_eq!(again.library, parsed.library);
+}

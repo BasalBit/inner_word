@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde_json::{Map, Value};
 
 use crate::json::{self, as_f64};
-use crate::{FileHex, SOURCE, limits, well_formed_json};
+use crate::{FileHex, SOURCE, limits};
 
 /// The kinds of element that are never kept: web embeds and AI frames (Excalidraw renders
 /// an `iframe` element's `customData` as a frame's `srcdoc`).
@@ -335,6 +335,38 @@ impl Element {
     }
 }
 
+/// The schemes a link of an element may have: the web, mail, and the view's own
+/// (`innerword-page://…?element=<id>`, Excalidraw's link to an element of the drawing).
+const LINK_SCHEMES: [&str; 4] = ["http", "https", "mailto", "innerword-page"];
+
+/// Whether an element's link is kept: one with no scheme (read against the view's own
+/// address) or one of [`LINK_SCHEMES`]. Any other (`file:`, `smb:`, an app's own scheme)
+/// is never kept: the export page's `exportToSvg` makes every link an `<a>`, which WebKit
+/// writes into the PDF, and Excalidraw's `sanitizeUrl` takes out only `javascript:`,
+/// `data:` and `vbscript:`. The scheme is read as a browser reads it: the spaces and
+/// control characters around the text and every tab and line break inside it left out.
+pub(crate) fn link_is_kept(link: &str) -> bool {
+    let cleaned: String = link
+        .trim_matches(|c: char| c <= ' ')
+        .chars()
+        .filter(|c| !matches!(c, '\t' | '\n' | '\r'))
+        .collect();
+    let Some(colon) = cleaned.find(':') else {
+        return true;
+    };
+    let scheme = &cleaned[..colon];
+    let is_scheme = scheme.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
+        && scheme
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'));
+    if !is_scheme {
+        return true;
+    }
+    LINK_SCHEMES
+        .iter()
+        .any(|kept| scheme.eq_ignore_ascii_case(kept))
+}
+
 /// Reads the elements of a scene's JSON: deleted ones and the kinds never kept left out,
 /// anything that is not an element left out with a warning.
 fn read_elements(items: Vec<Value>, warnings: &mut Vec<String>) -> Vec<Element> {
@@ -365,6 +397,13 @@ fn read_elements(items: Vec<Value>, warnings: &mut Vec<String>) -> Vec<Element> 
             warnings.push(format!("A second element with the id {id} was left out."));
             continue;
         }
+        let mut element = element;
+        if element.link().is_some_and(|link| !link_is_kept(link)) {
+            element.set("link", Value::Null);
+            warnings.push(format!(
+                "The link of the element {id} was left out: a link of a whiteboard is an address that starts with http://, https:// or mailto:, or a link to one of its elements."
+            ));
+        }
         elements.push(element);
     }
     elements
@@ -389,12 +428,13 @@ fn read_app_state(value: Option<&Value>) -> Map<String, Value> {
     state
 }
 
-fn parse_object(json: &str) -> Result<Map<String, Value>, SceneError> {
-    let text = well_formed_json(json);
-    let value: Value =
-        serde_json::from_str(&text).map_err(|e| SceneError::NotJson(e.to_string()))?;
+/// A scene's JSON as an object; `true` when a value nested too deep was read as `null`
+/// ([`json::parse_lenient`]).
+fn parse_object(json: &str) -> Result<(Map<String, Value>, bool), SceneError> {
+    let (value, cut) =
+        json::parse_lenient(json).map_err(|e| SceneError::NotJson(e.to_string()))?;
     match value {
-        Value::Object(map) => Ok(map),
+        Value::Object(map) => Ok((map, cut)),
         _ => Err(SceneError::NotAScene("it is not an object".into())),
     }
 }
@@ -421,8 +461,11 @@ impl Scene {
     /// leniently as the view's form; a `files` entry keeps its `file` when it is the id of
     /// stored bytes.
     pub fn from_stored(json: &str) -> Result<Parsed, SceneError> {
-        let mut map = parse_object(json)?;
+        let (mut map, cut) = parse_object(json)?;
         let mut warnings = Vec::new();
+        if cut {
+            warnings.push(json::cut_warning("drawing"));
+        }
         let items = take_elements(&mut map)?;
         let elements = read_elements(items, &mut warnings);
         let app_state = read_app_state(map.get("appState"));
@@ -480,8 +523,11 @@ impl Scene {
                 limit: limits::MAX_VIEW_SCENE_BYTES,
             });
         }
-        let mut map = parse_object(json)?;
+        let (mut map, cut) = parse_object(json)?;
         let mut warnings = Vec::new();
+        if cut {
+            warnings.push(json::cut_warning("drawing"));
+        }
         let items = take_elements(&mut map)?;
         let elements = read_elements(items, &mut warnings);
         let app_state = read_app_state(map.get("appState"));

@@ -49,6 +49,8 @@ const NIL: Id = std::ptr::null_mut();
 mod board;
 #[path = "webkit/bundle.rs"]
 mod bundle;
+#[path = "webkit/crosscheck.rs"]
+mod crosscheck;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
@@ -705,6 +707,10 @@ fn main() -> ExitCode {
     // Excalidraw itself: the bundle of innerword-board-web under the whiteboard's policies.
     if wanted("bundle") {
         bundle::the_bundle(&mut report, &server, &rules);
+    }
+    // The converter of agents' skeletons (innerword-board) against Excalidraw's own.
+    if wanted("crosscheck") {
+        crosscheck::the_converter_against_excalidraw(&mut report, &rules);
     }
 
     report.check(

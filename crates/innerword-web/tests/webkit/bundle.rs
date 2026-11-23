@@ -123,7 +123,7 @@ fn rust_text(id: &str, text: &str, index: &str) -> Value {
 }
 
 /// The export page's own conversion of skeletons into elements.
-fn convert(assets: &Assets, rules: &Path, skeletons: &str) -> Result<Value, String> {
+pub(super) fn convert(assets: &Assets, rules: &Path, skeletons: &str) -> Result<Value, String> {
     let source = BundleSource::new(assets);
     let output = run_script_blocking(ScriptInput {
         source,

@@ -27,6 +27,9 @@ serde_json.workspace = true
 # The whiteboard's bundle (Excalidraw built, `dist/`) and the contract of its page, for the
 # test program's cases of Excalidraw in a whiteboard's view and on its export page.
 innerword-board-web.workspace = true
+# The converter of agents' skeletons in Rust, held against Excalidraw's own on the export
+# page (the converter's cross-check, `tests/webkit/crosscheck.rs`), on its corpus.
+innerword-board.workspace = true
 
 # WebKit wants the main thread of the process (a WKWebView, its run loop, a print
 # operation), which a test of the default harness never has: this target is a program

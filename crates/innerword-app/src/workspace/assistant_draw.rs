@@ -215,7 +215,11 @@ struct Report {
     warnings: Vec<String>,
     placed: &'static str,
     put: Option<&'static str>,
+    /// The main thread's part up to the adopt: the flush, the drawing, the
+    /// version and the save.
     change: Duration,
+    /// The adopt sent: the two scenes read and their delta.
+    window: Duration,
     sent: Instant,
     keyboard_was_in_chat: bool,
 }
@@ -482,7 +486,7 @@ impl Workspace {
         // An agents' run on this whiteboard offers no Undo from here.
         self.writer_changed_the_board(id, cx);
         let gone = drawn.already_gone.len();
-        let report = Report {
+        let mut report = Report {
             title: self.page_title().unwrap_or_default().to_string(),
             added: drawn.added.len(),
             changed: changed_count(drawing, &drawn),
@@ -500,11 +504,13 @@ impl Workspace {
                 }
             }),
             change: started.elapsed(),
+            window: Duration::ZERO,
             sent: Instant::now(),
             keyboard_was_in_chat,
         };
         let zoom_to_fit = view.is_some() && drawn.placement.is_some_and(|p| !p.in_view);
         let seq = self.adopt_stored_scene(id, &prepared.scene, true, cx);
+        report.window = report.sent.elapsed();
         if let Some(board) = self.board_of_mut(id) {
             board.drawing_pending = false;
         }
@@ -563,12 +569,13 @@ impl Workspace {
             }
         }
         let mut line = format!(
-            "{} added, {} changed, {} removed, version kept, {}, change {:.1} ms",
+            "{} added, {} changed, {} removed, version kept, {}, change {:.1} ms, window {:.1} ms",
             report.added,
             report.changed,
             report.removed,
             report.placed,
             report.change.as_secs_f64() * 1000.0,
+            report.window.as_secs_f64() * 1000.0,
         );
         let mut extra = Vec::new();
         extra.extend(gone_sentence(report.gone));

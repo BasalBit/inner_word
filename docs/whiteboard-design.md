@@ -2189,6 +2189,12 @@ open whiteboard) goes through 6.7 like any agent's change.
   (`assistant.conversation.<id>`). The assistant reads other whiteboards with the same
   read-only tools (`read_document` gives the listing).
 - **The quick chat** does not open on a whiteboard (the toast of 6.3).
+- **Built later: the side chat proposes drawings** (`docs/assistant-draws-design.md`): an
+  answer may hold a drawing in the agents' formats, which the writer applies with a button,
+  `cmd-shift-d` or the palette, on the open whiteboard as one step of Excalidraw's undo
+  (the path of 6.5 and 6.7: collect, flush, the drawing on the stored scene, a version, the
+  save compare-and-swap, `adopt`), or as a new whiteboard beside the open document. The
+  assistant still changes nothing itself and keeps the read-only tools.
 
 ### 6.7 An agent's change to the open whiteboard
 

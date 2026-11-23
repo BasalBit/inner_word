@@ -3157,6 +3157,7 @@ version = "0.10.1"
 dependencies = [
  "block",
  "dispatch",
+ "innerword-board-web",
  "objc",
  "serde_json",
 ]

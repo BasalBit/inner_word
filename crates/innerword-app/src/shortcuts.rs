@@ -587,6 +587,17 @@ const KEY_TITLES: [(&str, &str); 5] = [
 pub const BOARD_KEY_NOTE: &str =
     "This is the whiteboard's own key: Excalidraw acts on it there. It cannot be changed.";
 
+/// What the row of one of the whiteboard's own keys says once the user gave
+/// that key to a command that runs on a whiteboard
+/// ([`crate::boards::whiteboard_keys`]): `key` as the list writes keys,
+/// `command` the title of the command, `what` what Excalidraw does with it.
+pub fn board_key_given_note(key: &str, command: &str, what: &str) -> String {
+    format!(
+        "On a whiteboard {key} runs \u{201c}{command}\u{201d}: you gave it that key. \
+         Excalidraw's \u{201c}{what}\u{201d} is reached there from its own menus and toolbar."
+    )
+}
+
 /// What the row of the tool keys says.
 pub const TOOL_KEYS_NOTE: &str = "On a whiteboard the letters and digits choose Excalidraw's \
      tools (V selection, R rectangle, D diamond, O ellipse, A arrow, L line, P pencil, T text, \
@@ -598,29 +609,60 @@ pub const BOARD_KEYS_CATEGORY: &str = "The whiteboard's own keys";
 /// The rows of the whiteboard's own keys (`WHITEBOARD_KEYS`) and of its tool
 /// keys: fixed rows "On a whiteboard", which are no bindings of commands
 /// (the keymap's `NoAction` bindings that keep GPUI off them are fixed) and
-/// no entries of the shortcuts file.
-fn whiteboard_key_rows() -> Vec<Shortcut> {
+/// no entries of the shortcuts file. A key the user gave a command that runs
+/// on a whiteboard (`whiteboard`, as the keymap installed now leaves them)
+/// is not shown on its row; the row says which command has it there,
+/// named as `commands` (the rows of the list) name it.
+fn whiteboard_key_rows(
+    whiteboard: &crate::boards::WhiteboardKeys,
+    commands: &[(Shortcut, bool)],
+) -> Vec<Shortcut> {
     let place = Place::Board;
     let category: SharedString = BOARD_KEYS_CATEGORY.into();
     let heading: SharedString = place.heading(&category).into();
+    let title_of = |target: &Target| -> String {
+        commands
+            .iter()
+            .find(|(row, _)| row.targets.contains(target))
+            .map(|(row, _)| row.title.to_string())
+            .unwrap_or_else(|| title_of_action(&target.command.action))
+    };
     // One row for each thing a key does (two keys clear the canvas).
-    let mut grouped: Vec<(&'static str, Vec<&'static str>)> = Vec::new();
-    for key in innerword_board_web::keys::WHITEBOARD_KEYS {
-        match grouped.iter_mut().find(|(what, _)| *what == key.what) {
-            Some((_, keys)) => keys.push(key.keys),
-            None => grouped.push((key.what, vec![key.keys])),
+    let mut grouped: Vec<(&'static str, Vec<&crate::boards::WhiteboardKey>)> = Vec::new();
+    for key in whiteboard.keys() {
+        match grouped.iter_mut().find(|(what, _)| *what == key.key.what) {
+            Some((_, keys)) => keys.push(key),
+            None => grouped.push((key.key.what, vec![key])),
         }
     }
     let mut rows: Vec<Shortcut> = grouped
         .into_iter()
         .map(|(what, keys)| {
-            let typed = KeySequence::parse(keys[0]).ok();
-            let hint = typed.as_ref().and_then(hint_of);
-            let shown: Vec<String> = keys
+            let held: Vec<KeySequence> = keys
                 .iter()
-                .filter_map(|keys| KeySequence::parse(keys).ok())
-                .map(|keys| key_text(&keys))
+                .filter(|key| key.given_to.is_none())
+                .filter_map(|key| KeySequence::parse(key.key.keys).ok())
                 .collect();
+            let given: Vec<String> = keys
+                .iter()
+                .filter_map(|key| {
+                    let target = key.given_to.as_ref()?;
+                    let keys = KeySequence::parse(key.key.keys).ok()?;
+                    Some(board_key_given_note(
+                        &key_text(&keys),
+                        &title_of(target),
+                        what,
+                    ))
+                })
+                .collect();
+            let typed = held.first().cloned();
+            let hint = typed.as_ref().and_then(hint_of);
+            let shown: Vec<String> = held.iter().map(key_text).collect();
+            let note = if given.is_empty() {
+                BOARD_KEY_NOTE.to_string()
+            } else {
+                given.join(" ")
+            };
             Shortcut {
                 title: what.into(),
                 category: category.clone(),
@@ -632,7 +674,7 @@ fn whiteboard_key_rows() -> Vec<Shortcut> {
                 changed: false,
                 target: None,
                 targets: Vec::new(),
-                fixed: Some(BOARD_KEY_NOTE.into()),
+                fixed: Some(note.into()),
                 typed,
                 described: false,
                 action: Box::new(gpui::NoAction),
@@ -834,7 +876,9 @@ fn collect(cx: &App) -> Vec<(Shortcut, bool)> {
     }
 
     // The whiteboard's own keys: fixed rows "On a whiteboard".
-    shortcuts.extend(whiteboard_key_rows().into_iter().map(|row| (row, false)));
+    let whiteboard = crate::keymap::whiteboard_keys(cx);
+    let board_rows = whiteboard_key_rows(&whiteboard, &shortcuts);
+    shortcuts.extend(board_rows.into_iter().map(|row| (row, false)));
 
     // Without the assistant its chats are not a place: the context menu
     // that opens in an answer is not shown either.

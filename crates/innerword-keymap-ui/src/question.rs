@@ -583,6 +583,7 @@ mod tests {
         vec![SeenFirst {
             name: Some("Vim mode".into()),
             warning: "In the text Vim sees this key before any shortcut does.".into(),
+            gives_up: false,
         }]
     }
 
@@ -844,10 +845,33 @@ mod tests {
         let nameless = [SeenFirst {
             name: None,
             warning: "Something else sees this key first.".into(),
+            gives_up: false,
         }];
         let asked = ask(&bold(), "ctrl-y", &nameless);
         assert_eq!(asked.title, "⌃Y may not run");
         assert_eq!(asked.mark, Tone::Warning);
+        assert_eq!(asked.marked, "Press Another Key");
+    }
+
+    #[test]
+    fn a_key_something_of_the_host_gives_up() {
+        let given = [SeenFirst {
+            name: Some("the whiteboard".into()),
+            warning: "On a whiteboard ⌘K is Excalidraw's link.".into(),
+            gives_up: true,
+        }];
+        let asked = ask(&quick_open(), "cmd-k", &given);
+        // Never "free" above a warning, and confirming does not take it.
+        assert_eq!(asked.title, "⌘K is also the whiteboard's own key");
+        assert_eq!(asked.mark, Tone::Warning);
+        assert!(
+            asked.lines.contains(&(
+                Tone::Warning,
+                "On a whiteboard ⌘K is Excalidraw's link.".to_string()
+            )),
+            "{:?}",
+            asked.lines
+        );
         assert_eq!(asked.marked, "Press Another Key");
     }
 

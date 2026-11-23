@@ -145,6 +145,44 @@ pub struct Listing {
     /// What sees keys before the keymap does right now (Vim mode in the
     /// text), so that the question about a key can say so.
     pub takers: Vec<TakesKeysFirst>,
+    /// What has keys of its own in a place and gives one up to a command
+    /// the user gives it there (a whiteboard: Excalidraw's chords), so that
+    /// the question about such a key can say what is given up.
+    pub givers: Vec<GivesKeysUp>,
+}
+
+/// Something of the host's that has keys of its own in a place and acts on
+/// them itself, unless the user gives one of them to a command that works
+/// there: then the command has the key, and what it did with it is reached
+/// some other way (a whiteboard: Excalidraw's chords, given up to a command
+/// of the user's, the function then reached from Excalidraw's own menus).
+/// The keymap as data knows nothing of it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct GivesKeysUp {
+    /// What it is called, as the heading of the question names it ("the
+    /// whiteboard": "⌘K is also the whiteboard's own key").
+    pub name: SharedString,
+    /// The key contexts it sits in, as the keymap writes them
+    /// (`BoardView`). A command that works anywhere is concerned too.
+    pub contexts: Vec<SharedString>,
+    /// Its keys, each with what it does with it ("Link of the selected
+    /// element").
+    pub keys: Vec<(KeySequence, SharedString)>,
+    /// The sentence under the heading, with `{key}`, `{what}` and
+    /// `{command}` in it (the key as the list writes keys, what it does
+    /// with the key, the title of the command it is given to).
+    pub warning: SharedString,
+}
+
+impl GivesKeysUp {
+    /// The sentence for `key`, which does `what` here, given to the
+    /// command called `command`.
+    pub fn sentence(&self, key: &KeySequence, what: &str, command: &str) -> String {
+        self.warning
+            .replace("{key}", &crate::glyphs(key))
+            .replace("{what}", what)
+            .replace("{command}", command)
+    }
 }
 
 /// Something of the host's that sees the keys of a place before the keymap
@@ -185,6 +223,7 @@ impl Listing {
             catalogue: Catalogue::new(),
             notes: Vec::new(),
             takers: Vec::new(),
+            givers: Vec::new(),
         }
     }
 
@@ -228,6 +267,50 @@ impl Listing {
             warning: warning.into(),
         });
         self
+    }
+
+    /// Says that something has the keys `keys` of `contexts` (each with
+    /// what it does with it) and gives one up to a command the user gives
+    /// it there (see [`GivesKeysUp`]); `warning` is what the question about
+    /// such a key then says, with `{key}`, `{what}` and `{command}` filled
+    /// in, for a command in one of those contexts or one that works
+    /// anywhere. Its heading: "⌘K is also the whiteboard's own key", for
+    /// `name` "the whiteboard".
+    pub fn gives_keys_up<C: Into<SharedString>>(
+        mut self,
+        name: impl Into<SharedString>,
+        contexts: impl IntoIterator<Item = C>,
+        keys: Vec<(KeySequence, SharedString)>,
+        warning: impl Into<SharedString>,
+    ) -> Self {
+        self.givers.push(GivesKeysUp {
+            name: name.into(),
+            contexts: contexts.into_iter().map(Into::into).collect(),
+            keys,
+            warning: warning.into(),
+        });
+        self
+    }
+
+    /// What has `key` as a key of its own and gives it up to a command at
+    /// `target` ([`Listing::gives_keys_up`]): in one of its key contexts,
+    /// or anywhere. Each with what it does with the key.
+    pub fn giving_up(&self, target: &Target, key: &KeySequence) -> Vec<(&GivesKeysUp, &str)> {
+        let context = target.context.text();
+        self.givers
+            .iter()
+            .filter(|giver| match context {
+                None => true,
+                Some(context) => giver.contexts.iter().any(|name| name.as_ref() == context),
+            })
+            .filter_map(|giver| {
+                giver
+                    .keys
+                    .iter()
+                    .find(|(keys, _)| keys == key)
+                    .map(|(_, what)| (giver, what.as_ref()))
+            })
+            .collect()
     }
 
     /// What may take `key` before the keymap sees it, for a command at

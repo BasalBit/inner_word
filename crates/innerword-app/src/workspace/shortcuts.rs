@@ -63,21 +63,29 @@ pub const NOT_CHANGEABLE_NOTE: &str = "Not here, because they are not shortcuts:
 /// menu's own completion key, and what the pointer does with a key held.
 pub const ALSO_FIXED_NOTE: &str = "Also fixed: the keys inside a right-click menu, ⇥ in the insert menu, clicks with ⌘, ⇧ or ⌃, and a whiteboard's own keys (listed On a whiteboard)";
 
-/// What the heading of that question calls what sees a key first on a
-/// whiteboard ("⌘D: the whiteboard sees it first"; after a colon, so in
-/// lower case).
+/// What the heading of the question about one of a whiteboard's own keys
+/// calls the whiteboard ("⌘K is also the whiteboard's own key").
 pub const BOARD_NAME: &str = "the whiteboard";
 
-/// What the question about a key says for a key that is one of the
-/// whiteboard's own keys and would work on a whiteboard.
-pub const BOARD_TAKES_KEYS_FIRST: &str =
-    "On a whiteboard the whiteboard uses this key itself, so there the shortcut does not run.";
+/// What the question about a key says for one of the whiteboard's own keys
+/// (`WHITEBOARD_KEYS`) given to a command that would work on a whiteboard:
+/// the key is given up to the command there ([`crate::boards::whiteboard_keys`]),
+/// with `{key}`, `{what}` and `{command}` filled in by the list.
+pub const BOARD_GIVES_KEY_UP: &str = "On a whiteboard {key} is Excalidraw's \u{201c}{what}\u{201d}. Given to \
+     \u{201c}{command}\u{201d}, it runs that command there, and Excalidraw's \u{201c}{what}\u{201d} \
+     is reached from its own menus and toolbar.";
 
-/// Whether the whiteboard leaves `key` to the keymap: every key that is not
-/// one of its own (`WHITEBOARD_KEYS`; the tool letters cannot be bound
-/// where text is typed anyway).
-fn board_leaves(key: &innerword_keymap::KeySequence) -> bool {
-    !crate::boards::is_whiteboard_keys(&key.to_string())
+/// The whiteboard's own keys, each with what Excalidraw does with it, for
+/// the question about a key.
+fn board_keys() -> Vec<(innerword_keymap::KeySequence, gpui::SharedString)> {
+    innerword_board_web::keys::WHITEBOARD_KEYS
+        .iter()
+        .filter_map(|key| {
+            innerword_keymap::KeySequence::parse(key.keys)
+                .ok()
+                .map(|keys| (keys, key.what.into()))
+        })
+        .collect()
 }
 
 /// What the heading of that question calls what sees the key first:
@@ -558,15 +566,17 @@ impl Workspace {
     }
 
     /// [`listing`] as this window's list shows it: with what it says about
-    /// a key on a whiteboard ([`BOARD_TAKES_KEYS_FIRST`]) and while Vim mode
-    /// is on ([`VIM_TAKES_KEYS_FIRST`]).
+    /// one of a whiteboard's own keys ([`BOARD_GIVES_KEY_UP`]) and while Vim
+    /// mode is on ([`VIM_TAKES_KEYS_FIRST`]).
     fn shortcuts_listing(&self, cx: &App) -> Option<Listing> {
-        // The whiteboard sees its own keys first, always.
-        let listing = listing(cx)?.sees_keys_first(
+        // A whiteboard's own key given to a command that runs there is that
+        // command's on a whiteboard (`boards::whiteboard_keys`): the list
+        // says what Excalidraw gives up.
+        let listing = listing(cx)?.gives_keys_up(
             BOARD_NAME,
-            [crate::boards::BOARD_VIEW],
-            board_leaves,
-            BOARD_TAKES_KEYS_FIRST,
+            [super::KEY_CONTEXT, crate::boards::BOARD_VIEW],
+            board_keys(),
+            BOARD_GIVES_KEY_UP,
         );
         Some(if self.vim.read(cx).is_attached() {
             listing.sees_keys_first(

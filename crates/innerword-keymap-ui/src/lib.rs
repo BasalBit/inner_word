@@ -182,7 +182,7 @@ mod words;
 use gpui::{App, KeyBinding, actions};
 
 pub use keys::{from_pressed, glyph_list, glyphs};
-pub use listing::{CommandRow, Listing, Locked, TakesKeysFirst};
+pub use listing::{CommandRow, GivesKeysUp, Listing, Locked, TakesKeysFirst};
 pub use question::Choice;
 pub use request::Request;
 pub use view::{KeymapView, ModeKind};

@@ -134,7 +134,7 @@ fn the_keymap_put_back_from_its_parts_resolves_every_key_as_before(cx: &mut Test
         let parts = take_apart(cx);
         // And after them, the fixed bindings that keep GPUI off the
         // whiteboard's own keys.
-        let fixed = innerword_app::boards::fixed_key_bindings();
+        let fixed = innerword_app::keymap::whiteboard_keys(cx).fixed_bindings();
         assert_eq!(before.len(), menu_only.len() + parts.len() + fixed.len());
         cx.clear_key_bindings();
         assert_eq!(cx.key_bindings().borrow().bindings().len(), 0);
@@ -4194,5 +4194,115 @@ fn the_librarys_new_whiteboard_is_a_row_in_the_library_and_takes_a_key(cx: &mut 
             .count(),
         1,
         "{titles:?}"
+    );
+}
+
+/// Who has `keys`, one of a whiteboard's own keys, on a whiteboard right
+/// now: `None` while it is held for Excalidraw, else the command it was
+/// given to.
+fn whiteboard_key_given_to(keys: &str, cx: &mut VisualTestContext) -> Option<String> {
+    cx.update(|_, cx| {
+        innerword_app::keymap::whiteboard_keys(cx)
+            .find(keys)
+            .expect("one of the whiteboard's own keys")
+            .given_to
+            .as_ref()
+            .map(|target| target.command.action.clone())
+    })
+}
+
+/// A key a whiteboard's Excalidraw acts on, given to a command that would
+/// work on a whiteboard, is warned about in the question: the heading
+/// names the whiteboard (never "free"), the sentence what Excalidraw gives
+/// up and which command has the key there, and confirming does not take
+/// it. Given, the key is the command's on a whiteboard; reset, it is held
+/// again; an import that gives it follows the same rule.
+#[gpui::test]
+fn a_whiteboard_key_given_to_a_command_is_said_and_given_up(cx: &mut TestAppContext) {
+    let (_library, workspace, vcx) = workspace_in_the_text(cx);
+    let palette = Target::new("workspace::ToggleCommandPalette", None);
+    let ask = |target: &Target, keys: &str, cx: &mut VisualTestContext| {
+        let view = open_list_at(&workspace, target, cx);
+        press(cx, "enter");
+        press(cx, keys);
+        let (title, says, choices) = question(&view, cx);
+        let marked = view.read_with(cx, |view, _| view.marked_choice());
+        (view, title, says, choices, marked)
+    };
+    assert_eq!(whiteboard_key_given_to("cmd-k", vcx), None);
+
+    // A key nothing else has: the heading is the whiteboard's.
+    let (view, title, says, _, marked) = ask(&palette, "cmd-d", vcx);
+    assert_eq!(title, "⌘D is also the whiteboard's own key", "{says}");
+    // The whiteboard's sentence first (the library's Duplicate follows).
+    assert!(
+        says.starts_with(
+            "On a whiteboard ⌘D is Excalidraw's \u{201c}Duplicate\u{201d}. Given to \
+             \u{201c}Command palette\u{201d}, it runs that command there, and Excalidraw's \
+             \u{201c}Duplicate\u{201d} is reached from its own menus and toolbar."
+        ),
+        "{says}"
+    );
+    assert_eq!(
+        view.read_with(vcx, |view, _| view.question_mark()),
+        Some(innerword_keymap_ui::Tone::Warning)
+    );
+    assert_eq!(marked, Some(Choice::PressAnotherKey));
+    choose(&view, Choice::Cancel, vcx);
+    press(vcx, "escape");
+    // ⌘K is also the text's "Add or edit link": that comes first, and the
+    // whiteboard's sentence follows.
+    let (view, title, says, choices, marked) = ask(&palette, "cmd-k", vcx);
+    assert_eq!(title, "⌘K is taken", "{says}");
+    assert!(
+        says.contains(
+            "On a whiteboard ⌘K is Excalidraw's \u{201c}Link of the selected element\u{201d}. \
+             Given to \u{201c}Command palette\u{201d}, it runs that command there"
+        ),
+        "{says}"
+    );
+    assert!(!title.contains("free"), "{title}");
+    assert!(
+        choices.iter().any(|choice| choice.starts_with("Take")),
+        "{choices:?}"
+    );
+    assert_eq!(marked, Some(Choice::PressAnotherKey));
+    choose(&view, Choice::Cancel, vcx);
+    press(vcx, "escape");
+    // A command of the text is not on a whiteboard: nothing about it.
+    let (view, _, says, _, _) = ask(&bold(), "cmd-d", vcx);
+    assert!(!says.contains("Excalidraw"), "{says}");
+    choose(&view, Choice::Cancel, vcx);
+    press(vcx, "escape");
+
+    // Given: the key is the palette's on a whiteboard.
+    let (view, _, _, _, _) = ask(&palette, "cmd-k", vcx);
+    choose(&view, Choice::TakeKey, vcx);
+    press(vcx, "escape");
+    assert_eq!(
+        whiteboard_key_given_to("cmd-k", vcx).as_deref(),
+        Some("workspace::ToggleCommandPalette")
+    );
+    // Every other key of the whiteboard's stays held.
+    assert_eq!(whiteboard_key_given_to("cmd-d", vcx), None);
+
+    // Through the shortcuts file: exported, reset, imported again.
+    let out = tempfile::tempdir().expect("a temporary directory");
+    let file = out.path().join("Inner Word Shortcuts.json");
+    export_to(&file, vcx);
+    workspace.update_in(vcx, |workspace, window, cx| {
+        workspace.reset_all_shortcuts_now(window, cx)
+    });
+    vcx.run_until_parked();
+    assert_eq!(whiteboard_key_given_to("cmd-k", vcx), None, "held again");
+    import_from(&file, vcx);
+    let view = list(&workspace, vcx);
+    let marked = view
+        .read_with(vcx, |view, _| view.marked_choice())
+        .expect("the preview offers the import");
+    choose(&view, marked, vcx);
+    assert_eq!(
+        whiteboard_key_given_to("cmd-k", vcx).as_deref(),
+        Some("workspace::ToggleCommandPalette")
     );
 }

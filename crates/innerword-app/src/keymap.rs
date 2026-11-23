@@ -68,6 +68,10 @@ pub struct AppKeymap {
     model: innerword_keymap::Keymap,
     /// What is installed: the bindings and the state of every command.
     effective: Effective,
+    /// The whiteboard's own keys as what is installed leaves them: held for
+    /// Excalidraw, or given to a command of the user's
+    /// ([`crate::boards::whiteboard_keys`], worked out at every install).
+    whiteboard: crate::boards::WhiteboardKeys,
 }
 
 impl Global for AppKeymap {}
@@ -321,6 +325,7 @@ pub fn take_defaults(cx: &mut App) {
         handed,
         model,
         effective,
+        whiteboard: crate::boards::WhiteboardKeys::all_held(),
     });
     refresh_listed(cx);
     install(cx);
@@ -373,6 +378,16 @@ pub fn model(cx: &App) -> Option<&innerword_keymap::Keymap> {
 /// place with the keys it has now and by default.
 pub fn effective(cx: &App) -> Option<&Effective> {
     cx.try_global::<AppKeymap>().map(|keymap| &keymap.effective)
+}
+
+/// The whiteboard's own keys as the keymap installed now leaves them: which
+/// are held for Excalidraw and which the user gave a command that runs on a
+/// whiteboard ([`crate::boards::whiteboard_keys`]). Every key held before
+/// [`take_defaults`].
+pub fn whiteboard_keys(cx: &App) -> crate::boards::WhiteboardKeys {
+    cx.try_global::<AppKeymap>()
+        .map(|keymap| keymap.whiteboard.clone())
+        .unwrap_or_else(crate::boards::WhiteboardKeys::all_held)
 }
 
 /// The user's changes, as they are installed.
@@ -512,23 +527,39 @@ fn effective_bindings(keymap: &AppKeymap, cx: &App) -> Vec<KeyBinding> {
 }
 
 /// Clears GPUI's keymap and binds it again: the menu bar's own bindings
-/// first, then the bindings that run. Binding keys refreshes every
-/// window.
+/// first, then the bindings that run, then the fixed bindings of the
+/// whiteboard's keys that are held. Binding keys refreshes every window.
 fn install(cx: &mut App) {
-    let effective = cx
-        .try_global::<AppKeymap>()
-        .map(|keymap| effective_bindings(keymap, cx))
-        .unwrap_or_default();
-    let for_menus = menus::menu_key_bindings(&Keymap::new(effective.clone()), menus::open_item(cx));
+    let (for_menus, effective, fixed) = assemble(cx);
     cx.clear_key_bindings();
-    // The whiteboard's own keys last: fixed, after every other binding
-    // (`crate::boards::fixed_key_bindings`).
-    cx.bind_keys(
-        for_menus
-            .into_iter()
-            .chain(effective)
-            .chain(crate::boards::fixed_key_bindings()),
+    cx.bind_keys(for_menus.into_iter().chain(effective).chain(fixed));
+}
+
+/// What [`install`] binds, in its three parts: the bindings of the menu bar,
+/// the bindings that run, the fixed bindings of the whiteboard's keys that
+/// are held. The whiteboard's keys are worked out on the way and kept in
+/// [`AppKeymap`]: one decision for the fixed bindings, the menu bar, the
+/// rows of the list and its question.
+fn assemble(cx: &mut App) -> (Vec<KeyBinding>, Vec<KeyBinding>, Vec<KeyBinding>) {
+    let (effective, whiteboard) = match cx.try_global::<AppKeymap>() {
+        Some(keymap) => {
+            let effective = effective_bindings(keymap, cx);
+            let whiteboard = crate::boards::whiteboard_keys(&effective, &keymap.effective);
+            (effective, whiteboard)
+        }
+        None => (Vec::new(), crate::boards::WhiteboardKeys::all_held()),
+    };
+    if cx.has_global::<AppKeymap>() {
+        cx.global_mut::<AppKeymap>().whiteboard = whiteboard.clone();
+    }
+    let for_menus = menus::menu_key_bindings(
+        &Keymap::new(effective.clone()),
+        menus::open_item(cx),
+        &whiteboard,
     );
+    // The whiteboard's own keys last: fixed, after every other binding.
+    let fixed = whiteboard.fixed_bindings();
+    (for_menus, effective, fixed)
 }
 
 /// Installs the keymap as it is once more (the menu bar's bindings follow
@@ -561,9 +592,7 @@ pub fn measure_install(cx: &mut App) -> Option<InstallCost> {
     let effective = cx.try_global::<AppKeymap>()?.model.effective();
     let after_effective = Instant::now();
     cx.global_mut::<AppKeymap>().effective = effective;
-    let effective = effective_bindings(cx.global::<AppKeymap>(), cx);
-    let for_menus = menus::menu_key_bindings(&Keymap::new(effective.clone()), menus::open_item(cx));
-    let fixed = crate::boards::fixed_key_bindings();
+    let (for_menus, effective, fixed) = assemble(cx);
     let bindings = effective.len() + for_menus.len() + fixed.len();
     let after_build = Instant::now();
     cx.clear_key_bindings();

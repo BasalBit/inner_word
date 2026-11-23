@@ -1094,7 +1094,8 @@ rectangle", "Add ellipse", "Add diamond", "Add arrow", "Add frame", "Mermaid to 
 "Show or hide the shape library", "Add selection to shape library" and "Insert from shape
 library…", all without a key; `ctrl-enter` / `shift-f10` open the whiteboard's menu and
 `cmd-f` Excalidraw's search; every `cmd` chord Excalidraw acts on is the whiteboard's there
-(fixed bindings, not changeable). In the settings `up` / `down` move, `left` /
+(fixed bindings), until the user gives one of them to a command that works there ("Changing
+keys", "A whiteboard's own key given to a command"). In the settings `up` / `down` move, `left` /
 `right` change, `space` switches; the "Writing" section has the switch for the format bar
 and the two spelling rows, the "Status bar" section chooses the character limit and which
 counts are shown.
@@ -1234,9 +1235,11 @@ Keymap facts that bite (details in `docs/gpui-notes.md`):
   The same rule keeps GPUI off a whiteboard's own chords: a binding of `gpui::NoAction` in
   `BoardView`, added after every other binding, wins on that key there and disables every
   binding under it, so GPUI leaves the chord to the web view; elsewhere the window's key
-  works as before (`boards::fixed_key_bindings`, appended by `keymap::install` and
-  `measure_install` after the defaults were taken, never a default or a row of a command;
-  the `keyscost` step's binding count includes them).
+  works as before (`boards::WhiteboardKeys::fixed_bindings` for the keys
+  `boards::whiteboard_keys` holds, appended by `keymap::install` and `measure_install`
+  after the defaults were taken, never a default or a row of a command; the `keyscost`
+  step's binding count includes them). A key the user gave a command that works on a
+  whiteboard gets none ("Changing keys").
 - **Who takes a key in the text**: an open insert menu, then Vim mode (it lets every `cmd`
   chord through), then the bindings from the editor outwards, then text input. Popups with
   a field (format menu, link, font, find bar) and modals have the keyboard themselves.
@@ -1277,8 +1280,9 @@ Keymap facts that bite (details in `docs/gpui-notes.md`):
   The key beside an item is live: AppKit runs an enabled item on its key where GPUI has no
   binding for it, so the menu bar is built again after every change of a key, and when a
   whiteboard becomes or stops being the open item: while one is open the menu bar carries
-  no key equivalent that is one of its own keys (`menus::menu_key_bindings(.., open)`,
-  `OpenItemKind::Board`), or AppKit would run the comments' `cmd-alt-c` from the menu bar
+  no key equivalent that is one of its own keys it holds (`menus::menu_key_bindings(..,
+  open, whiteboard)`, `OpenItemKind::Board`; a key the user gave a command that works there
+  stays beside that command alone), or AppKit would run the comments' `cmd-alt-c` from the menu bar
   over Excalidraw's; the Edit menu's Undo, Redo, Cut, Copy, Paste and Select All keep
   theirs (`menus::keeps_its_key_on_a_board`), which is how `cmd-c` and `cmd-v` reach
   Excalidraw, and a whiteboard that is not drawn keeps every key.
@@ -1438,6 +1442,31 @@ document"). Three crates: `innerword-keymap` knows what a change is,
   way round nothing is eaten: a bare character is refused as a shortcut where text is
   typed, and the one key that is let through to the editor although Vim has a command on
   it is the key of the text's context menu.
+- **A whiteboard's own key given to a command.** Excalidraw's chords
+  (`innerword_board_web::keys::WHITEBOARD_KEYS`) are held for it on a whiteboard by fixed
+  `NoAction` bindings, but **a key the user gives a command that works where a whiteboard
+  has the keyboard is that command's there**: `boards::whiteboard_keys` (the keymap that
+  runs and `Effective`'s origins) gives a key up when the binding GPUI would run for it in
+  `[Workspace, BoardView]` is one the user made (`Origin::is_users`), in every spelling
+  that matches there; a key whose winner there is a default (the comments' `cmd-alt-c`,
+  `cmd-alt-[`, `cmd-alt-]`, Vim's `cmd-alt-v`) stays held, as before. Excalidraw's function
+  of a key given up is reached from its own menus and toolbar. The decision is made once
+  per install and kept (`keymap::whiteboard_keys`), and four places ask it: the fixed
+  bindings (none for a key given up), the menu bar while a whiteboard is open (the key
+  stays beside the user's command and beside no other item), the fixed row "On a
+  whiteboard" (it no longer shows the key and says "On a whiteboard ⌘K runs “Command
+  palette”: you gave it that key. Excalidraw's “Link of the selected element” is reached
+  there from its own menus and toolbar.", `shortcuts::board_key_given_note`), and the
+  question about a key: for one of those keys given to a command that works anywhere or
+  in `BoardView` it says so (`Listing::gives_keys_up`, `workspace::BOARD_GIVES_KEY_UP`;
+  heading "⌘D is also the whiteboard's own key" where nothing more important is said,
+  marked "Press Another Key"). An import and "reset all" go through the same install, so
+  they follow the rule (`tests/suite/boards.rs`,
+  `a_whiteboard_key_the_user_gave_a_command_runs_it_there`,
+  `a_whiteboard_key_a_default_wins_stays_held`; `keybindings.rs`,
+  `a_whiteboard_key_given_to_a_command_is_said_and_given_up`). Excalidraw's own tooltips
+  still name the key it no longer has there (the bundle cuts only the keys of a fixed
+  list, `keys.js`).
 - **What the user is told counts commands.** A command is a row of the list, never a
   single key: Italic with two keys of the user's is one, Underline left without a key is
   one, and a command bound in several key contexts of one place is one
@@ -1473,7 +1502,8 @@ document"). Three crates: `innerword-keymap` knows what a change is,
 - **What the list says about a key** (`innerword-keymap-ui/src/words.rs`, `verdict_words`):
   the question has a heading that says the most important thing about the key, with a mark
   for how it is to be read (`mark=` in the state line), in this order: it cannot be used;
-  it is taken; macOS uses it; Vim mode sees it first; it would not work everywhere
+  it is taken; macOS uses it; Vim mode sees it first, or it is also a whiteboard's own key
+  (given up to this command there); it would not work everywhere
   (another command keeps it where both apply); it is used for typing; it types a special
   character; it is also the key of another command; it is free. A heading never says
   "free" above a sentence that warns, and under a warning the marked choice is "Press
@@ -2326,14 +2356,20 @@ the shape library, closing and quitting), `workspace/board_pdf.rs` (its PDF),
   list of shortcuts, `cmd-f`, close, quit) and every other chord Excalidraw acts on is the
   whiteboard's (`innerword_board_web::keys::WHITEBOARD_KEYS`: undo, copy, duplicate,
   group, layers, align, …): **fixed bindings** to `gpui::NoAction` in `BoardView`, appended
-  after the defaults by `keymap::install` (45 bindings: 43 keys and the second spellings of
-  `cmd-shift-,` and `cmd-shift-.`; not defaults, not rows of commands, not in the shortcuts
-  file, never changed), and **the menu bar is built without their key equivalents while a
-  whiteboard is open** (`menus::menu_key_bindings(.., OpenItemKind::Board)`), so `cmd-alt-c`
-  is Excalidraw's copy styles there and the comments' key elsewhere; a click on Show or
-  Hide Comments, Next and Previous Comment or Vim Mode answers with a toast. The list of
-  shortcuts has them as fixed rows "On a whiteboard", and a key the user gives a window
-  command that is one of them gets "the whiteboard sees it first". The Edit menu's Undo,
+  after the defaults by `keymap::install` (45 bindings with no change of the user's: 43
+  keys and the second spellings of `cmd-shift-,` and `cmd-shift-.`; not defaults, not rows
+  of commands, not in the shortcuts file), and **the menu bar is built without their key
+  equivalents while a whiteboard is open** (`menus::menu_key_bindings(..,
+  OpenItemKind::Board, ..)`), so `cmd-alt-c` is Excalidraw's copy styles there and the
+  comments' key elsewhere; a click on Show or Hide Comments, Next and Previous Comment or
+  Vim Mode answers with a toast. The list of shortcuts has them as fixed rows "On a
+  whiteboard". **A key the user gives a command that works on a whiteboard is that
+  command's there** (`boards::whiteboard_keys`, one decision per install for the fixed
+  bindings, the menu bar, the fixed rows and the question: "Changing keys", "A whiteboard's
+  own key given to a command"): the palette given `cmd-k` opens on a whiteboard, the menu
+  bar keeps `cmd-k` beside Command Palette…, the row of Excalidraw's Link says who has it,
+  and Excalidraw's link is reached from its own menus and toolbar; a key whose winner there
+  is a default stays held. The Edit menu's Undo,
   Redo and Select All go to the glue, Copy, Cut and Paste to the view, and those six keep
   their key equivalents on a whiteboard (`menus::keeps_its_key_on_a_board`: Excalidraw 0.18.1
   takes copy and paste only as the `copy:` and `paste:` the items send); a whiteboard that

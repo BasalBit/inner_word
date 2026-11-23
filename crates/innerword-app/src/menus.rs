@@ -468,22 +468,29 @@ pub fn menu_actions(menus: &[Menu]) -> Vec<(String, Box<dyn Action>)> {
 /// none.
 ///
 /// While a whiteboard is the open item (`open`), no item shows a key that
-/// is the whiteboard's own (`innerword_board_web::keys::WHITEBOARD_KEYS`):
-/// such an item gets the two-key placeholder, so AppKit offers none of those
-/// chords to the menu bar and the whiteboard has them (section 4.7). The
+/// the whiteboard holds for Excalidraw (`whiteboard`, what
+/// [`crate::boards::whiteboard_keys`] decided for the keymap being
+/// installed): such an item gets the two-key placeholder, so AppKit offers
+/// none of those chords to the menu bar and the whiteboard has them
+/// (section 4.7). A key of the whiteboard's that the user gave a command
+/// which runs there stays beside that command, and beside it alone. The
 /// Edit menu's Undo, Redo, Cut, Copy, Paste and Select All keep theirs
 /// ([`keeps_its_key_on_a_board`]): the page is asked first and Excalidraw
 /// handles undo, redo and select all on the canvas, while copy and paste
 /// reach it only as the `copy:` and `paste:` the menu items send (it has no
 /// key handler for them), and a text field of the page needs `selectAll:`.
-pub fn menu_key_bindings(keymap: &Keymap, open: OpenItemKind) -> Vec<KeyBinding> {
+pub fn menu_key_bindings(
+    keymap: &Keymap,
+    open: OpenItemKind,
+    whiteboard: &crate::boards::WhiteboardKeys,
+) -> Vec<KeyBinding> {
     let context: Rc<gpui::KeyBindingContextPredicate> = Rc::new(
         gpui::KeyBindingContextPredicate::parse(MENU_KEY_CONTEXT).expect("a valid key context"),
     );
     let the_boards = |binding: &KeyBinding| {
         open == OpenItemKind::Board
             && !keeps_its_key_on_a_board(binding.action())
-            && crate::boards::is_whiteboard_keys(&crate::keymap::keys_of(binding))
+            && whiteboard.holds_from(&crate::keymap::keys_of(binding), binding.action())
     };
     let mut bindings = Vec::new();
     let mut seen: Vec<Box<dyn Action>> = Vec::new();

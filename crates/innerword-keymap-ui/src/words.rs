@@ -166,10 +166,14 @@ pub(crate) fn count(n: usize, one: &str, many: &str) -> String {
 }
 
 /// Something of the host's that sees a key before the keymap does: what it
-/// is called, when the host said, and its sentence.
+/// is called, when the host said, and its sentence. Or, with `gives_up`,
+/// something that has the key as its own and gives it up to this command
+/// (`crate::GivesKeysUp`): the key runs the command there, and what it did
+/// with the key is reached another way.
 pub(crate) struct SeenFirst {
     pub name: Option<String>,
     pub warning: String,
+    pub gives_up: bool,
 }
 
 /// What the view says about a key that was pressed for a command: a
@@ -213,7 +217,8 @@ fn other_commands<'a>(holders: impl IntoIterator<Item = &'a Holder>, names: &Nam
 /// 1. the key cannot be given (the reason alone);
 /// 2. it is taken: another command has it in the same place;
 /// 3. it may not run: macOS uses it, or something of the host's
-///    (`seen_first`) sees it before any shortcut does;
+///    (`seen_first`) sees it before any shortcut does; or something of the
+///    host's has it as its own and gives it up to this command;
 /// 4. it would not work everywhere: another command keeps it where both
 ///    apply;
 /// 5. it costs something in a text: a key text is edited with, a
@@ -325,9 +330,11 @@ pub(crate) fn verdict_words(
         (format!("macOS uses {key}"), Tone::Warning)
     } else if let Some(seen) = seen_first.first() {
         (
-            match &seen.name {
-                Some(name) => format!("{key}: {name} sees it first"),
-                None => format!("{key} may not run"),
+            match (&seen.name, seen.gives_up) {
+                (Some(name), true) => format!("{key} is also {name}'s own key"),
+                (None, true) => format!("{key} is also used where this command applies"),
+                (Some(name), false) => format!("{key}: {name} sees it first"),
+                (None, false) => format!("{key} may not run"),
             },
             Tone::Warning,
         )

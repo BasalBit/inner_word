@@ -3,7 +3,8 @@
 //! of Excalidraw, `board.json`, `library.json` and the pictures), the host of
 //! its origin ([`board_host`]), what a picture the page posts is made into
 //! before it is stored ([`prepare_picture`]), the keys GPUI is kept off on a
-//! whiteboard ([`fixed_key_bindings`]), and the fake engine's canvas for the
+//! whiteboard unless the user gave one of them to a command
+//! ([`whiteboard_keys`]), and the fake engine's canvas for the
 //! app's tests ([`FakeBoard`], driven through [`crate::pages::FakePages`]).
 //!
 //! The session of an open whiteboard, its autosave, its calls and its
@@ -498,27 +499,173 @@ pub fn drawn_size(pixels: Option<(u32, u32)>, density: u32) -> (f64, f64) {
 
 // ----- the whiteboard's own keys --------------------------------------------------------
 
-/// The fixed bindings that keep GPUI off the whiteboard's own keys
-/// (`innerword_board_web::keys::WHITEBOARD_KEYS`): each key, in every
-/// spelling the keymap gives it, bound to `gpui::NoAction` in `BoardView`.
-/// Not defaults, not rows of the list's commands, not entries of the
-/// shortcuts file, never changed: `crate::keymap` appends them after every
-/// other binding each time it installs the keymap, so that among the
-/// bindings at the board's depth they come last and win (a `NoAction` that
-/// wins disables every binding under it). GPUI then leaves such a chord to
-/// the web view, which hands it to Excalidraw.
-pub fn fixed_key_bindings() -> Vec<KeyBinding> {
-    let mut bindings = Vec::new();
-    for key in innerword_board_web::keys::WHITEBOARD_KEYS {
-        for spelling in key_spellings(key.keys) {
-            if let Ok(binding) = std::panic::catch_unwind(|| {
-                KeyBinding::new(&spelling, gpui::NoAction, Some(BOARD_VIEW))
-            }) {
-                bindings.push(binding);
-            }
+/// The whiteboard's own keys as the installed keymap leaves them: each one
+/// **held** for Excalidraw, or **given up** to a command the user gave that
+/// key where a whiteboard has the keyboard. [`whiteboard_keys`] is the one
+/// place that decides it; the keymap keeps what it decided at every install
+/// (`crate::keymap::whiteboard_keys`), and the four places that need it ask
+/// that: the fixed bindings ([`WhiteboardKeys::fixed_bindings`]), the menu
+/// bar while a whiteboard is open (`menus::menu_key_bindings`), the fixed
+/// rows "On a whiteboard" (`shortcuts`) and, through the same keys, the
+/// question about a key (`workspace/shortcuts.rs`).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct WhiteboardKeys {
+    keys: Vec<WhiteboardKey>,
+}
+
+/// One of the whiteboard's own keys, and who has it on a whiteboard.
+#[derive(Clone, Debug, PartialEq)]
+pub struct WhiteboardKey {
+    /// The key and what Excalidraw does with it.
+    pub key: innerword_board_web::keys::BoardKey,
+    /// `None`: held, Excalidraw's on a whiteboard. Otherwise the command
+    /// the user gave this key, which runs on a whiteboard in its place.
+    pub given_to: Option<innerword_keymap::Target>,
+}
+
+impl WhiteboardKeys {
+    /// Every key held: what a keymap without the user's changes gives.
+    pub fn all_held() -> Self {
+        Self {
+            keys: innerword_board_web::keys::WHITEBOARD_KEYS
+                .iter()
+                .map(|key| WhiteboardKey {
+                    key: *key,
+                    given_to: None,
+                })
+                .collect(),
         }
     }
-    bindings
+
+    /// Every key with who has it, in the order of `WHITEBOARD_KEYS`.
+    pub fn keys(&self) -> &[WhiteboardKey] {
+        &self.keys
+    }
+
+    /// The fixed bindings that keep GPUI off the keys that are held: each,
+    /// in every spelling the keymap gives it, bound to `gpui::NoAction` in
+    /// `BoardView`. Not defaults, not rows of the list's commands, not
+    /// entries of the shortcuts file: `crate::keymap` appends them after
+    /// every other binding each time it installs the keymap, so that among
+    /// the bindings at the board's depth they come last and win (a
+    /// `NoAction` that wins disables every binding under it). GPUI then
+    /// leaves such a chord to the web view, which hands it to Excalidraw. A
+    /// key given up has none, so the user's command runs on it there.
+    pub fn fixed_bindings(&self) -> Vec<KeyBinding> {
+        let mut bindings = Vec::new();
+        for key in self.keys.iter().filter(|key| key.given_to.is_none()) {
+            for spelling in key_spellings(key.key.keys) {
+                if let Ok(binding) = std::panic::catch_unwind(|| {
+                    KeyBinding::new(&spelling, gpui::NoAction, Some(BOARD_VIEW))
+                }) {
+                    bindings.push(binding);
+                }
+            }
+        }
+        bindings
+    }
+
+    /// The entry of `keys` (one keystroke in any spelling or order of its
+    /// modifiers), when it is one of the whiteboard's own keys.
+    pub fn find(&self, keys: &str) -> Option<&WhiteboardKey> {
+        let wanted = gpui::Keystroke::parse(keys).ok()?;
+        self.keys.iter().find(|key| {
+            key_spellings(key.key.keys).iter().any(|spelling| {
+                gpui::Keystroke::parse(spelling).is_ok_and(|known| {
+                    known.key == wanted.key && known.modifiers == wanted.modifiers
+                })
+            })
+        })
+    }
+
+    /// Whether `keys` is a key the whiteboard holds for Excalidraw from the
+    /// menu item of `action`: one of its own keys, not given to `action`.
+    /// (A key given to another command is not that item's on a whiteboard
+    /// either: only the command that has it there shows it.)
+    pub fn holds_from(&self, keys: &str, action: &dyn gpui::Action) -> bool {
+        self.find(keys).is_some_and(|key| match &key.given_to {
+            None => true,
+            Some(target) => target.command.action != action.name(),
+        })
+    }
+
+    /// Whether `keys` is held for Excalidraw (one of its own keys, given to
+    /// no command).
+    pub fn holds(&self, keys: &str) -> bool {
+        self.find(keys).is_some_and(|key| key.given_to.is_none())
+    }
+}
+
+/// Which of the whiteboard's own keys are held, given the keymap that runs
+/// (`installed`: the bindings in order, the fixed ones among them or not,
+/// they are left out here) and what the keymap says the user made
+/// (`effective`).
+///
+/// **The rule.** A key of `WHITEBOARD_KEYS` is given up when the binding
+/// GPUI would run for it where a whiteboard has the keyboard (the key
+/// contexts `[Workspace, BoardView]`, by GPUI's own ranking,
+/// `Keymap::bindings_for_input`) is a key the user made (a changed or an
+/// added key, `Origin::is_users`), in every spelling that matches anything
+/// there. So a command the user gave the key that works anywhere, or one
+/// bound in `BoardView`, has it on a whiteboard; Excalidraw's function of
+/// that key is then reached from its own menus and toolbar. A key whose
+/// winner is a default (the window's comment keys and Vim mode, today) and
+/// a key nothing binds there stay held, as they always were.
+pub fn whiteboard_keys(
+    installed: &[KeyBinding],
+    effective: &innerword_keymap::Effective,
+) -> WhiteboardKeys {
+    use innerword_keymap::KeySequence;
+    let users: Vec<(innerword_keymap::Target, KeySequence)> = effective
+        .bindings()
+        .iter()
+        .filter(|binding| binding.origin.is_users())
+        .map(|binding| (binding.target.clone(), binding.keys.clone()))
+        .collect();
+    if users.is_empty() {
+        return WhiteboardKeys::all_held();
+    }
+    let keymap = gpui::Keymap::new(
+        installed
+            .iter()
+            .filter(|binding| !is_fixed_binding(binding))
+            .cloned()
+            .collect(),
+    );
+    let contexts = crate::pages::board_contexts();
+    let users_key = |binding: &KeyBinding| -> Option<innerword_keymap::Target> {
+        let target = crate::keymap::target_of(binding);
+        let keys = KeySequence::parse(&crate::keymap::keys_of(binding)).ok()?;
+        users
+            .iter()
+            .any(|(their_target, their_keys)| *their_target == target && *their_keys == keys)
+            .then_some(target)
+    };
+    let mut held = WhiteboardKeys::all_held();
+    for key in &mut held.keys {
+        let mut given: Option<innerword_keymap::Target> = None;
+        let mut all_users = true;
+        for spelling in key_spellings(key.key.keys) {
+            let Ok(keystroke) = gpui::Keystroke::parse(&spelling) else {
+                continue;
+            };
+            let (bindings, _) =
+                keymap.bindings_for_input(std::slice::from_ref(&keystroke), &contexts);
+            let Some(winner) = bindings.first() else {
+                continue;
+            };
+            match users_key(winner) {
+                Some(target) => {
+                    given.get_or_insert(target);
+                }
+                None => all_users = false,
+            }
+        }
+        if all_users {
+            key.given_to = given;
+        }
+    }
+    held
 }
 
 /// Every spelling of a key in the keymap's normal form (`cmd-shift-,` and
@@ -1638,7 +1785,10 @@ impl crate::pages::FakeView {
                         // starts to wait for its post.
                         board.status.library_waiting = true;
                     }
-                    (board.lrev, (words == "addSelection").then(|| board.status.clone()))
+                    (
+                        board.lrev,
+                        (words == "addSelection").then(|| board.status.clone()),
+                    )
                 };
                 let (lrev, waiting) = lrev;
                 if let Some(status) = waiting {
@@ -1674,7 +1824,7 @@ impl crate::pages::FakePages {
 }
 
 /// Whether `binding` is one of the fixed bindings that keep GPUI off the
-/// whiteboard's own keys ([`fixed_key_bindings`]): no default, no row of a
+/// whiteboard's own keys ([`WhiteboardKeys::fixed_bindings`]): no default, no row of a
 /// command, no entry of the shortcuts file.
 pub fn is_fixed_binding(binding: &KeyBinding) -> bool {
     binding.action().name() == gpui::Action::name(&gpui::NoAction)

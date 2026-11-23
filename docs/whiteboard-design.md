@@ -1456,9 +1456,11 @@ flowchart navigation) added, and `cmd-enter` also editing a line's points; `Boar
 - **How GPUI is kept off them**: after every binding of the app, the app binds each of them,
   **in every spelling `innerword_keymap::Keystroke::spellings` gives** (`cmd-shift-,` and
   `cmd-shift-.` also as `cmd-<` and `cmd->`, the only two with a second spelling, which a
-  test holds: 45 bindings for 43 keys; `boards::fixed_key_bindings`, `key_spellings`,
-  `is_fixed_binding`), to `gpui::NoAction` in `BoardView` (**fixed bindings**: not defaults, not rows of the
-  list's commands, not in the shortcuts file, never changed). They are appended **after**
+  test holds: 45 bindings for 43 keys; `boards::WhiteboardKeys::fixed_bindings`,
+  `key_spellings`, `is_fixed_binding`), to `gpui::NoAction` in `BoardView` (**fixed
+  bindings**: not defaults, not rows of the list's commands, not in the shortcuts file),
+  **each key unless the user gave it to a command that works on a whiteboard** (below,
+  "A key the user gives a command"). They are appended **after**
   `keymap::take_defaults` (`lib.rs`), at the end of both `keymap::install` and
   `keymap::measure_install`, so they never become defaults or rows, and the test that
   puts the keymap back from its parts (`keybindings.rs`,
@@ -1468,16 +1470,41 @@ flowchart navigation) added, and `cmd-enter` also editing a line's points; `Boar
   one depth the one added later wins; a `NoAction` that wins disables every binding under
   it (`Keymap::bindings_for_input`, read). So on a whiteboard, `cmd-alt-c` matches nothing:
   GPUI leaves the chord to the web view, and `takes_key` answers false for it. Elsewhere in
-  the window `cmd-alt-c` still shows the comments. A key the user gives a window-wide
-  command that is one of these does not run on a whiteboard, and the list of shortcuts says
-  so (6.8).
+  the window `cmd-alt-c` still shows the comments.
+- **A key the user gives a command** (built after a user's report: the palette changed to
+  `cmd-k` opened Excalidraw's link editor on a whiteboard, because the fixed binding of
+  `cmd-k`, Link of the selected element, came last and won over the user's own change).
+  The rule: **a key the user gave a command that applies where a whiteboard has the
+  keyboard is no longer held for Excalidraw**. One function decides it,
+  `boards::whiteboard_keys(installed, effective)`: for each key of `WHITEBOARD_KEYS`, in
+  every spelling, the binding GPUI would run in `[Workspace, BoardView]`
+  (`Keymap::bindings_for_input` over the bindings that run, without the fixed ones); when
+  that winner is a key the user made (`Origin::is_users` of `innerword-keymap`'s
+  `Effective`: a changed or an added key, never a default) in every spelling that matches
+  there, the key is given up to that command. So a command that works anywhere, and one
+  bound in `BoardView`, have it on a whiteboard; a command of the text does not apply
+  there and changes nothing. A key whose winner there is a default stays held as before:
+  the window's defaults are kept off Excalidraw's chords except the comments' and Vim
+  mode's, which have always been held, and a default that ever collides keeps the hold.
+  The keymap works it out at every install (`keymap::install` and `measure_install`, one
+  `assemble`), keeps it (`keymap::whiteboard_keys`), and four places ask it, so they cannot
+  disagree: the fixed bindings (none for a key given up, so GPUI runs the user's command
+  and AppKit never reaches the web view); the menu bar while a whiteboard is open
+  (`menus::menu_key_bindings(.., whiteboard)`, `WhiteboardKeys::holds_from`: the key stays
+  beside the user's command and beside no other item, so `Link…` shows none there); the
+  fixed row of the list (6.8); and the question about a key (6.8). An import of a
+  shortcuts file and "reset all" go through the same install. Excalidraw's function of a
+  key given up is reached from its own menus and toolbar. Not done: Excalidraw's tooltips
+  still name the key (the glue cuts the keys of a fixed list of controls, `keys.js`; a key
+  given up would need that list from the app at load).
 - **How the menu bar is kept off them** (reviewer's point, taken: an item is enabled
   whenever its action has a handler anywhere, and four of these have app-wide listeners:
   `ToggleComments`, `NextComment`, `PreviousComment` in `innerword-comments`, `ToggleVimMode`
   in `innerword-vim-mode`; so their items stay enabled on a whiteboard, and when AppKit
   offers a chord to the menu bar first, `cmd-alt-c` would show the comments): **while a
   whiteboard is the open item, the menu bar is built without any key equivalent that is in
-  `WHITEBOARD_KEYS`**, except the six of the Edit menu that AppKit sends to the web view
+  `WHITEBOARD_KEYS` and held** (a key given up to a command of the user's stays beside that
+  command), except the six of the Edit menu that AppKit sends to the web view
   (Undo, Redo, Cut, Copy, Paste, Select All; `menus::keeps_its_key_on_a_board`): the web
   view asks the page first, and Excalidraw takes undo, redo and select all on the canvas,
   while copy and paste reach it only as the `copy:` and `paste:` those items send (0.18.1
@@ -1502,8 +1529,8 @@ flowchart navigation) added, and `cmd-enter` also editing a line's points; `Boar
   it names must be one that does it here (product rule 3). Its help dialog is not rendered
   (our main menu's Help and its `?` key post `help`, and the app opens its own list of
   shortcuts at "On a whiteboard", 4.4). Its tooltips keep the keys that are Excalidraw's on
-  a whiteboard (the tool letters and digits, and the chords of `WHITEBOARD_KEYS`: fixed, so
-  they stay true), and lose the key of every control whose key the window takes and the
+  a whiteboard (the tool letters and digits, and the chords of `WHITEBOARD_KEYS`: held
+  unless the user gives one to a command, so they stay true until then), and lose the key of every control whose key the window takes and the
   user can change (zoom in, zoom out, reset zoom, the command palette, the help, the
   library's search, save and export): `keys.js` holds that list, a `MutationObserver` cuts
   the key out of those controls' `title` and `aria-keyshortcuts`, and a WebKit case reads
@@ -2231,6 +2258,12 @@ to its drawing (its `view_state`'s stamp is not the scene's).
   and digits)" for the tool keys. **Built:** the fixed rows are grouped by what a key does,
   so the 43 keys make 42 rows (Clear canvas has two keys) and the tools row 43; a fixed
   row says `BOARD_KEY_NOTE`, the tools row `TOOL_KEYS_NOTE` (`shortcuts::Place::Board`).
+  **A key given up** to a command of the user's (4.7, `keymap::whiteboard_keys`) is not
+  shown on its row any more, and the row says who has it,
+  `shortcuts::board_key_given_note`: "On a whiteboard ⌘K runs “Command palette”: you gave
+  it that key. Excalidraw's “Link of the selected element” is reached there from its own
+  menus and toolbar." (the command named as its row names it). Reset, the row is as
+  before.
   They are rows of the list only: the fixed `NoAction`
   bindings are not commands, not entries of the shortcuts file, and the code that collects
   entries skips `gpui::NoAction` (the test
@@ -2249,19 +2282,34 @@ to its drawing (its `view_state`'s stamp is not the scene's).
   commands, Mermaid to drawing, the three shape library commands, 42 fixed rows and the
   tools row) and 14 entries (the 14 commands of those rows). B8 had first counted 411 and
   423, before the library's New whiteboard became a row (6.2).
-- The question about a key: `Listing::sees_keys_first("the whiteboard", [BOARD_VIEW],
-  board_leaves, BOARD_TAKES_KEYS_FIRST)` is always on (Vim's is on only with Vim mode), where
-  `board_leaves(key)` is true for every key not in `WHITEBOARD_KEYS`. So a key the user gives
-  a command that works anywhere, and that is one of those keys, gets the heading
-  "⌘D: the whiteboard sees it first" and the sentence `BOARD_TAKES_KEYS_FIRST`: "On a
-  whiteboard the whiteboard uses this key itself, so there the shortcut does not run."
-  (The name is passed in lower case: the heading puts it after a colon.)
+- The question about a key. **As first built**: `Listing::sees_keys_first("the whiteboard",
+  [BOARD_VIEW], board_leaves, BOARD_TAKES_KEYS_FIRST)`, the heading "⌘D: the whiteboard
+  sees it first" and "On a whiteboard the whiteboard uses this key itself, so there the
+  shortcut does not run." **Since a key given to a command is that command's there (4.7)**
+  that was no longer true, and the list says what is given up instead:
+  `Listing::gives_keys_up(BOARD_NAME, [Workspace, BoardView], <every key of
+  WHITEBOARD_KEYS with its what>, BOARD_GIVES_KEY_UP)` (`innerword-keymap-ui`:
+  `GivesKeysUp`, `Listing::giving_up`; the view fills `{key}`, `{what}` and `{command}`). A
+  key of `WHITEBOARD_KEYS` given to a command that works anywhere or in `BoardView` gets the
+  sentence "On a whiteboard ⌘K is Excalidraw's “Link of the selected element”. Given to
+  “Command palette”, it runs that command there, and Excalidraw's “Link of the selected
+  element” is reached from its own menus and toolbar.", a warning, so the marked choice is
+  "Press Another Key"; its heading, where nothing more important is said (taken, macOS),
+  is "⌘D is also the whiteboard's own key" (`words.rs`: in the slot of "sees it first";
+  never "free" above it). For ⌘K the heading is "⌘K is taken" (the text's "Add or edit
+  link" around the text has it) with the whiteboard's sentence under it.
 - `ALSO_FIXED_NOTE` becomes "Also fixed: the keys inside a right-click menu, ⇥ in the insert
   menu, clicks with ⌘, ⇧ or ⌃, and a whiteboard's own keys (listed On a whiteboard)".
-- **That none of `WHITEBOARD_KEYS` is a key the window keeps** is tested in the app
-  (`keybindings.rs`, against the installed keymap and with a user's change that gives a
-  window-wide command one of those keys), not in `innerword-board-web`, which cannot see the
-  keymap (reviewer's point, taken).
+- **That none of `WHITEBOARD_KEYS` is a key the window keeps by default** is tested in the
+  app (`boards.rs`, `none_of_the_whiteboards_keys_is_a_key_the_window_keeps`, against the
+  installed keymap), not in `innerword-board-web`, which cannot see the keymap (reviewer's
+  point, taken). A user's change that gives a command one of those keys:
+  `boards.rs`, `a_whiteboard_key_the_user_gave_a_command_runs_it_there` (⌘K and the two
+  spellings of ⇧⌘. run the palette on a whiteboard, from GPUI's view and handed on by the
+  web view; the menu bar; the row; reset brings the hold back) and
+  `a_whiteboard_key_a_default_wins_stays_held`; `keybindings.rs`,
+  `a_whiteboard_key_given_to_a_command_is_said_and_given_up` (the question, the change, an
+  import of the file).
 
 ### 6.9 Scripted runs
 

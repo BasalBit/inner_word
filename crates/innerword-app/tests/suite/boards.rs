@@ -1191,14 +1191,216 @@ fn a_key_given_to_a_window_command_that_the_whiteboard_uses_is_said(cx: &mut Tes
     });
     let target = innerword_keymap::Target::new("workspace::ToggleSidebar", None);
     let key = innerword_keymap::KeySequence::parse("cmd-d").unwrap();
-    let seeing = listing.seeing_first(&target, &key);
-    assert!(
-        seeing.iter().any(|taker| taker.warning.as_ref()
-            == innerword_app::workspace::BOARD_TAKES_KEYS_FIRST),
-        "the whiteboard sees ⌘D first"
+    let giving = listing.giving_up(&target, &key);
+    assert_eq!(giving.len(), 1, "the whiteboard has ⌘D");
+    let (giver, what) = giving[0];
+    assert_eq!(what, "Duplicate");
+    assert_eq!(
+        giver.warning.as_ref(),
+        innerword_app::workspace::BOARD_GIVES_KEY_UP
     );
+    // A command of the whiteboard's own place is concerned too, one of the
+    // text is not.
+    let add = innerword_keymap::Target::new("board::AddText", Some("BoardView"));
+    assert_eq!(listing.giving_up(&add, &key).len(), 1);
+    let bold = innerword_keymap::Target::new("editor::ToggleBold", Some("Editor"));
+    assert!(listing.giving_up(&bold, &key).is_empty());
     let free = innerword_keymap::KeySequence::parse("cmd-alt-y").unwrap();
-    assert!(listing.seeing_first(&target, &free).is_empty());
+    assert!(listing.giving_up(&target, &free).is_empty());
+    // Nothing sees a whiteboard's key first any more: it is given up.
+    assert!(listing.seeing_first(&target, &key).is_empty());
+}
+
+/// Gives the command palette `keys` as the list does (`None`: its default
+/// back).
+fn give_the_palette(
+    workspace: &Entity<Workspace>,
+    keys: Option<&[&str]>,
+    vcx: &mut VisualTestContext,
+) {
+    let keys: Option<Vec<innerword_keymap::KeySequence>> = keys.map(|keys| {
+        keys.iter()
+            .map(|keys| innerword_keymap::KeySequence::parse(keys).unwrap())
+            .collect()
+    });
+    workspace
+        .update_in(vcx, |w, window, cx| {
+            w.set_keys_of_command(
+                "workspace::ToggleCommandPalette",
+                None,
+                keys.as_deref(),
+                window,
+                cx,
+            )
+        })
+        .expect("the palette is a row");
+    vcx.run_until_parked();
+}
+
+fn palette_open(workspace: &Entity<Workspace>, vcx: &mut VisualTestContext) -> bool {
+    workspace.read_with(vcx, |w, cx| {
+        w.modal_layer()
+            .read(cx)
+            .active::<innerword_app::palette::CommandPalette>()
+            .is_some()
+    })
+}
+
+/// Presses `keys` with the keyboard on the whiteboard, as GPUI's view gets
+/// a `cmd` chord before the web view, and says whether the palette opened
+/// (and closes it again).
+fn palette_opens_on_the_board(
+    workspace: &Entity<Workspace>,
+    keys: &str,
+    vcx: &mut VisualTestContext,
+) -> bool {
+    let focus = workspace.read_with(vcx, |w, _| w.page_focus_handle().unwrap());
+    vcx.update(|window, _| window.focus(&focus));
+    vcx.run_until_parked();
+    vcx.simulate_keystrokes(keys);
+    vcx.run_until_parked();
+    let open = palette_open(workspace, vcx);
+    if open {
+        vcx.update(|window, cx| window.dispatch_action(Box::new(innerword_ui::modal::Dismiss), cx));
+        vcx.run_until_parked();
+    }
+    assert!(!palette_open(workspace, vcx));
+    open
+}
+
+/// The key a menu bar item shows now, by its name.
+fn menu_key(name: &str, vcx: &mut VisualTestContext) -> Option<String> {
+    vcx.update(|_, cx| {
+        let keymap = cx.key_bindings();
+        let keymap = keymap.borrow();
+        let (_, action) = innerword_app::menus::menu_actions(&innerword_app::menus::app_menus())
+            .into_iter()
+            .find(|(item, _)| item == name)
+            .unwrap_or_else(|| panic!("the menu bar has {name}"));
+        innerword_app::menus::native_menu_binding(&keymap, action.as_ref())
+            .filter(|binding| binding.keystrokes().len() == 1)
+            .map(innerword_app::keymap::keys_of)
+    })
+}
+
+/// The fixed row "On a whiteboard" titled `title`: its keys and its note.
+fn board_row(title: &str, vcx: &mut VisualTestContext) -> (String, String) {
+    vcx.update(|_, cx| {
+        innerword_app::shortcuts::collect_shortcuts(cx)
+            .into_iter()
+            .find(|row| row.place == innerword_app::shortcuts::Place::Board && row.title == title)
+            .map(|row| (row.keys, row.fixed.unwrap_or_default().to_string()))
+            .unwrap_or_else(|| panic!("a row {title:?} on a whiteboard"))
+    })
+}
+
+/// The user gave the command palette ⌘K, one of Excalidraw's keys (Link of
+/// the selected element): on a whiteboard ⌘K opens the palette, the menu
+/// bar keeps it beside Command Palette…, and the fixed row of Excalidraw's
+/// Link says who has it. Without the change, and once it is reset, ⌘K is
+/// Excalidraw's again (GPUI's `NoAction`) and the palette does not open.
+#[gpui::test]
+fn a_whiteboard_key_the_user_gave_a_command_runs_it_there(cx: &mut TestAppContext) {
+    let (fake, _library, workspace, _board, _, vcx) = open_board(cx);
+    let link = "Link of the selected element";
+    // Without the change: Excalidraw's.
+    assert!(!fake.press("cmd-k"), "GPUI leaves ⌘K to the page");
+    assert!(!palette_opens_on_the_board(&workspace, "cmd-k", vcx));
+    assert_eq!(
+        menu_key("Command Palette…", vcx).as_deref(),
+        Some("cmd-shift-p")
+    );
+    assert_eq!(menu_key("Link…", vcx), None);
+    assert_eq!(
+        board_row(link, vcx),
+        (
+            "⌘K".to_string(),
+            innerword_app::shortcuts::BOARD_KEY_NOTE.to_string()
+        )
+    );
+
+    give_the_palette(&workspace, Some(&["cmd-k"]), vcx);
+    // GPUI takes ⌘K on the whiteboard and runs the palette: from GPUI's
+    // view, and when the web view hands the key on.
+    assert!(palette_opens_on_the_board(&workspace, "cmd-k", vcx));
+    assert!(fake.press("cmd-k"), "GPUI takes ⌘K on a whiteboard");
+    vcx.run_until_parked();
+    assert!(palette_open(&workspace, vcx), "the key handed on opens it");
+    vcx.update(|window, cx| window.dispatch_action(Box::new(innerword_ui::modal::Dismiss), cx));
+    vcx.run_until_parked();
+    // The rest of Excalidraw's keys are still its own.
+    assert!(!fake.press("cmd-d"));
+    assert!(!fake.press("cmd-alt-c"));
+    // The menu bar keeps the user's key beside the palette, and only there.
+    assert_eq!(menu_key("Command Palette…", vcx).as_deref(), Some("cmd-k"));
+    assert_eq!(menu_key("Link…", vcx), None);
+    // The fixed row of Excalidraw's Link says what changed.
+    let (keys, note) = board_row(link, vcx);
+    assert_eq!(keys, "", "⌘K does not do Excalidraw's link there any more");
+    assert_eq!(
+        note,
+        innerword_app::shortcuts::board_key_given_note("⌘K", "Command palette", link)
+    );
+    assert_eq!(board_row("Duplicate", vcx).0, "⌘D");
+
+    // A key with a second spelling: shift with a punctuation key reaches
+    // GPUI as the shifted character.
+    give_the_palette(&workspace, Some(&["cmd-shift-."]), vcx);
+    assert!(palette_opens_on_the_board(&workspace, "cmd->", vcx));
+    assert!(palette_opens_on_the_board(&workspace, "cmd-shift-.", vcx));
+    assert!(
+        !palette_opens_on_the_board(&workspace, "cmd-k", vcx),
+        "⌘K is held again"
+    );
+    assert!(fake.press("cmd->"));
+    vcx.run_until_parked();
+    vcx.update(|window, cx| window.dispatch_action(Box::new(innerword_ui::modal::Dismiss), cx));
+    vcx.run_until_parked();
+    assert!(board_row("Larger font", vcx).1.contains("Command palette"));
+
+    // Reset: the hold is back.
+    give_the_palette(&workspace, None, vcx);
+    assert!(!fake.press("cmd-k"));
+    assert!(!fake.press("cmd->"));
+    assert!(!palette_opens_on_the_board(&workspace, "cmd-k", vcx));
+    assert!(!palette_opens_on_the_board(&workspace, "cmd->", vcx));
+    assert!(palette_opens_on_the_board(&workspace, "cmd-shift-p", vcx));
+    assert_eq!(
+        menu_key("Command Palette…", vcx).as_deref(),
+        Some("cmd-shift-p")
+    );
+    assert_eq!(
+        board_row(link, vcx),
+        (
+            "⌘K".to_string(),
+            innerword_app::shortcuts::BOARD_KEY_NOTE.to_string()
+        )
+    );
+}
+
+/// A key the user gave a command where a default still wins on a whiteboard
+/// stays held: ⌥⌘C is the window's "Show or hide comments" by default (bound
+/// after the palette's, so it wins where both apply) and Excalidraw's copy
+/// styles. Given to the palette as a second key beside the comments', it is
+/// held for Excalidraw as before, and the menu bar shows it nowhere there.
+#[gpui::test]
+fn a_whiteboard_key_a_default_wins_stays_held(cx: &mut TestAppContext) {
+    let (fake, _library, workspace, _board, _, vcx) = open_board(cx);
+    give_the_palette(&workspace, Some(&["cmd-shift-p", "cmd-alt-c"]), vcx);
+    let given = |vcx: &mut VisualTestContext| {
+        vcx.update(|_, cx| {
+            innerword_app::keymap::whiteboard_keys(cx)
+                .keys()
+                .iter()
+                .filter(|key| key.given_to.is_some())
+                .map(|key| key.key.keys)
+                .collect::<Vec<_>>()
+        })
+    };
+    assert!(given(vcx).is_empty(), "{:?}", given(vcx));
+    assert!(!fake.press("cmd-alt-c"));
+    assert!(!palette_opens_on_the_board(&workspace, "cmd-alt-c", vcx));
+    assert_eq!(menu_key("Show or Hide Comments", vcx), None);
 }
 
 // ----- a relaunch, the version history ------------------------------------------------------
@@ -1469,9 +1671,7 @@ fn a_shape_library_change_waiting_its_post_is_kept_by_a_switch_at_once(cx: &mut 
 }
 
 #[gpui::test]
-fn a_shape_library_change_a_call_answered_is_collected_without_the_status(
-    cx: &mut TestAppContext,
-) {
+fn a_shape_library_change_a_call_answered_is_collected_without_the_status(cx: &mut TestAppContext) {
     // An older glue's status has no `libraryWaiting`: the call's answer
     // alone says the page holds a change.
     let (fake, library, workspace, _board, text, vcx) = open_board(cx);

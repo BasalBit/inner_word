@@ -1193,18 +1193,29 @@ impl KeymapView {
         let verdict = self.listing.keymap.check(&target, &key, replacing.as_ref());
         // What the keymap cannot know: something of the host's may take
         // the key before any binding sees it.
-        let seen_first: Vec<SeenFirst> = if verdict.refusal.is_none() {
-            self.listing
-                .seeing_first(&target, &key)
-                .into_iter()
-                .map(|taker| SeenFirst {
-                    name: taker.name.as_ref().map(|name| name.to_string()),
-                    warning: taker.warning.to_string(),
-                })
-                .collect()
-        } else {
-            Vec::new()
-        };
+        // Or has it as its own, and gives it up to this command.
+        let seen_first: Vec<SeenFirst> =
+            if verdict.refusal.is_none() {
+                let command = self.names().title(&target);
+                self.listing
+                    .seeing_first(&target, &key)
+                    .into_iter()
+                    .map(|taker| SeenFirst {
+                        name: taker.name.as_ref().map(|name| name.to_string()),
+                        warning: taker.warning.to_string(),
+                        gives_up: false,
+                    })
+                    .chain(self.listing.giving_up(&target, &key).into_iter().map(
+                        |(giver, what)| SeenFirst {
+                            name: Some(giver.name.to_string()),
+                            warning: giver.sentence(&key, what, &command),
+                            gives_up: true,
+                        },
+                    ))
+                    .collect()
+            } else {
+                Vec::new()
+            };
         let question = Question::about_key(target, replacing, verdict, &seen_first, &self.names());
         self.ask(question, window, cx);
     }

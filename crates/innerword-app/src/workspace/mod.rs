@@ -174,7 +174,7 @@ pub use session::{
 };
 pub(crate) use session::{Session, display_title as session_title};
 pub use shortcuts::{
-    ALSO_FIXED_NOTE, BOARD_NAME, BOARD_TAKES_KEYS_FIRST, NOT_CHANGEABLE_NOTE, VIM_TAKES_KEYS_FIRST,
+    ALSO_FIXED_NOTE, BOARD_GIVES_KEY_UP, BOARD_NAME, NOT_CHANGEABLE_NOTE, VIM_TAKES_KEYS_FIRST,
     changed_command_count, choose_import_file_beforehand, commands_counted,
     file_catalogue as shortcuts_file_catalogue, imported_toast,
     list_catalogue as shortcuts_list_catalogue, listing as shortcuts_listing, own_keys_sentence,

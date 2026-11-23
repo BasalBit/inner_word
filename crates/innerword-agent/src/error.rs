@@ -60,6 +60,10 @@ pub struct Candidate {
     /// Whether it is in the trash.
     #[serde(default)]
     pub trashed: bool,
+    /// How it is named to be chosen: `doc:12`, `page:12`, `board:12` by the item's kind,
+    /// `folder:3`; `None` for a heading, chosen by its number.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reference: Option<String>,
 }
 
 /// One place where a piece of text was found, in an [`Error::NotUnique`] and in
@@ -914,12 +918,14 @@ mod tests {
                     id: 3,
                     path: "Book/Chapter 1".into(),
                     trashed: false,
+                    reference: Some("doc:3".into()),
                 },
                 Candidate {
                     kind: ItemKind::Document,
                     id: 9,
                     path: "Drafts/Chapter 1".into(),
                     trashed: false,
+                    reference: Some("doc:9".into()),
                 },
             ],
         };

@@ -1762,7 +1762,8 @@ pub struct PageListed {
 #[serde(default)]
 pub struct CreateBoardRequest {
     /// Its name. A whiteboard's title is the name it was given and never follows what is
-    /// drawn on it. Without one: "Untitled".
+    /// drawn on it. Without one it is stored without a title (`""`), as the app's New
+    /// Whiteboard stores it, and shown "Untitled".
     pub title: String,
     /// The folder to make it in. Without it: the top of the library.
     pub folder: Option<Target>,
@@ -2010,6 +2011,12 @@ pub struct BoardListed {
     pub pictures: u64,
     /// Whether it is in the trash.
     pub trashed: bool,
+    /// Why its stored scene cannot be read, for a whiteboard that is damaged (or was
+    /// written by a newer version): it is listed all the same, with no elements and no
+    /// pictures counted, and `innerword get <board> --format json` still prints what is
+    /// stored. `None` for a whiteboard that reads.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unreadable: Option<String>,
 }
 
 // ----- names, places, the trash ----------------------------------------------------------

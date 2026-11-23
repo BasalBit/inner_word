@@ -10,12 +10,12 @@ use std::time::Duration;
 use innerword_agent::live::{self, Answer, Operation, Request};
 use innerword_agent::{
     AddCommentRequest, AddImageRequest, AddToBoardRequest, BOARD_IS_PDF_ONLY, BoardChanged,
-    BoardPicture, BoardsRequest, CreateBoardRequest, DocumentId, DocumentKind,
-    DuplicateDocumentRequest, EditRequest, Error, ErrorKind, ExportFormat, ExportRequest,
-    FindRequest, InfoRequest, InsertRequest, Library, ListCommentsRequest, ListVersionsRequest,
-    ReadRequest, ReadVersionRequest, Refusal, RemoveFromBoardRequest, RenameDocumentRequest,
-    ReplaceDocumentRequest, RestoreDocumentRequest, RestoreVersionRequest, SearchRequest, Target,
-    TextFormat, TrashDocumentRequest, UpdateBoardRequest, WriteOptions,
+    BoardPicture, BoardsRequest, CreateBoardRequest, DeleteDocumentRequest, DocumentId,
+    DocumentKind, DuplicateDocumentRequest, EditRequest, Error, ErrorKind, ExportFormat,
+    ExportRequest, FindRequest, InfoRequest, InsertRequest, Library, ListCommentsRequest,
+    ListVersionsRequest, ReadRequest, ReadVersionRequest, Refusal, RemoveFromBoardRequest,
+    RenameDocumentRequest, ReplaceDocumentRequest, RestoreDocumentRequest, RestoreVersionRequest,
+    SearchRequest, Target, TextFormat, TrashDocumentRequest, UpdateBoardRequest, WriteOptions,
 };
 use innerword_board::Scene;
 use innerword_store::{FileId, Store};
@@ -441,6 +441,182 @@ fn a_whiteboard_is_made_drawn_on_changed_and_cut_down() {
 }
 
 #[test]
+fn a_damaged_whiteboard_is_listed_and_printed_as_it_is_stored() {
+    let fx = fixture();
+    let good = board(&fx, None, "Good", PLAN).board.id;
+    let bad = board(&fx, Some("Sketches"), "Bad", PLAN).board.id;
+    let kept = add(&fx, bad, r#"[{"type":"text","x":0,"y":300,"text":"More"}]"#)
+        .unwrap()
+        .version
+        .expect("a version was kept first");
+    // What a damaged file, or a newer version, could leave: a scene the parser refuses,
+    // in the whiteboard and in its version.
+    const DAMAGED: &str = r#"{"type":"excalidraw","version":2,"elements":"not a list"#;
+    let conn = rusqlite::Connection::open(fx.library.database_path()).unwrap();
+    conn.execute(
+        "UPDATE documents SET content = ?1 WHERE id = ?2",
+        rusqlite::params![DAMAGED, bad.0],
+    )
+    .unwrap();
+    conn.execute(
+        "UPDATE snapshots SET content = ?1 WHERE id = ?2",
+        rusqlite::params![DAMAGED, kept.id.0],
+    )
+    .unwrap();
+    drop(conn);
+
+    // The list goes on past it, and says what can be said of it.
+    let listed = fx.library.boards(&BoardsRequest::default()).unwrap();
+    assert_eq!(listed.boards.len(), 2, "{listed:?}");
+    let damaged = listed.boards.iter().find(|b| b.board.id == bad).unwrap();
+    assert_eq!(damaged.board.title, "Bad");
+    assert_eq!(damaged.board.path, "Sketches/Bad");
+    assert_eq!((damaged.elements, damaged.pictures), (0, 0));
+    assert!(damaged.unreadable.is_some(), "{damaged:?}");
+    let fine = listed.boards.iter().find(|b| b.board.id == good).unwrap();
+    assert_eq!(fine.unreadable, None);
+    assert_eq!(fine.elements, 3);
+    // And as data: the field is there only for the damaged one.
+    let json = serde_json::to_value(&listed).unwrap();
+    let rows = json["boards"].as_array().unwrap();
+    assert_eq!(
+        rows.iter()
+            .filter(|row| row.get("unreadable").is_some())
+            .count(),
+        1
+    );
+
+    // The listing cannot be made, and says why.
+    let listing = fx.library.read(&ReadRequest {
+        document: bad.into(),
+        format: TextFormat::Markdown,
+        ..Default::default()
+    });
+    assert_eq!(listing.unwrap_err().kind(), ErrorKind::Unreadable);
+    // As JSON it is printed as it is stored: the one way left to see what it holds.
+    let raw = fx
+        .library
+        .read(&ReadRequest {
+            document: bad.into(),
+            format: TextFormat::Json,
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(raw.content, DAMAGED);
+    assert_eq!(raw.board, None, "nothing of it could be read");
+    let version = fx
+        .library
+        .read_version(&ReadVersionRequest {
+            version: kept.id.0,
+            format: TextFormat::Json,
+        })
+        .unwrap();
+    assert_eq!(version.content, DAMAGED);
+    assert_eq!(
+        fx.library
+            .read_version(&ReadVersionRequest {
+                version: kept.id.0,
+                format: TextFormat::Markdown,
+            })
+            .unwrap_err()
+            .kind(),
+        ErrorKind::Unreadable
+    );
+    // A whiteboard that reads still reads as JSON with what it is.
+    let good_json = fx
+        .library
+        .read(&ReadRequest {
+            document: good.into(),
+            format: TextFormat::Json,
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(
+        good_json.content,
+        fx.store().document(good).unwrap().content
+    );
+    assert!(good_json.board.is_some());
+}
+
+#[test]
+fn a_hint_writes_each_item_with_its_own_prefix() {
+    let fx = fixture();
+    let plan = board(&fx, Some("Sketches"), "Floor plan", PLAN).board.id;
+    let chapter = fx.create(Some("Book"), "# Floor notes\n\nText.\n").id;
+    // A path that names nothing: the close ones, each as it is named.
+    let missing = fx
+        .library
+        .read(&ReadRequest {
+            document: Target::path("Floor"),
+            ..Default::default()
+        })
+        .unwrap_err();
+    let message = missing.to_string();
+    assert!(
+        message.contains(&format!("board:{} Sketches/Floor plan", plan.0)),
+        "{message}"
+    );
+    assert!(
+        message.contains(&format!("doc:{} Book/Floor notes", chapter.0)),
+        "{message}"
+    );
+    // In the trash.
+    fx.library
+        .trash_document(&TrashDocumentRequest {
+            document: plan.into(),
+            write: claude(),
+        })
+        .unwrap();
+    let trashed = fx
+        .library
+        .read(&ReadRequest {
+            document: Target::path("Sketches/Floor plan"),
+            ..Default::default()
+        })
+        .unwrap_err()
+        .to_string();
+    assert!(
+        trashed.contains(&format!("board:{} (in the trash)", plan.0)),
+        "{trashed}"
+    );
+    // Where a folder is needed.
+    let not_a_folder = fx
+        .library
+        .create_board(&CreateBoardRequest {
+            title: "Inside".into(),
+            folder: Some(Target::parse(&format!("board:{}", plan.0))),
+            write: claude(),
+            ..Default::default()
+        })
+        .unwrap_err()
+        .to_string();
+    assert!(
+        not_a_folder.starts_with(&format!(
+            "board:{} names a whiteboard; a folder is needed here",
+            plan.0
+        )),
+        "{not_a_folder}"
+    );
+    // A permanent deletion asks, naming it as what it is.
+    let asked = fx
+        .library
+        .delete_document(&DeleteDocumentRequest {
+            document: plan.into(),
+            write: claude(),
+            ..Default::default()
+        })
+        .unwrap_err()
+        .to_string();
+    assert!(
+        asked.contains(&format!(
+            "The whiteboard \u{201c}Floor plan\u{201d} (board:{})",
+            plan.0
+        )),
+        "{asked}"
+    );
+}
+
+#[test]
 fn a_whiteboard_is_named_as_board_or_whiteboard() {
     for written in ["board:12", "Board:12", "whiteboard:12", "page:12", "doc:12"] {
         assert_eq!(Target::parse(written), Target::DocumentId(12), "{written}");
@@ -781,9 +957,31 @@ fn a_dry_run_writes_nothing_and_names_the_ids_the_real_run_gives() {
     assert_eq!(planned.board.id, DocumentId(0));
     assert_eq!(planned.board.path, "New/Folder/Not yet");
     assert_eq!(planned.board.kind, DocumentKind::Board);
-    // Without a title it is "Untitled".
+    // Without a title it is stored without one, as the app's New Whiteboard stores it,
+    // and shown "Untitled" (docs/whiteboard-design.md, section 2); a dry run says the same.
+    let planned_untitled = fx
+        .library
+        .create_board(&CreateBoardRequest {
+            title: "   ".into(),
+            write: dry(),
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(planned_untitled.board.title, "");
+    assert_eq!(planned_untitled.board.path, "Untitled");
     let untitled = board(&fx, None, "", "[]");
-    assert_eq!(untitled.board.title, "Untitled");
+    assert_eq!(untitled.board.title, "");
+    assert_eq!(untitled.board.path, "Untitled");
+    assert_eq!(
+        fx.store().document_meta(untitled.board.id).unwrap().title,
+        "",
+        "stored as the app stores it"
+    );
+    assert!(
+        listing(&fx, untitled.board.id).contains("\u{201c}Untitled\u{201d}"),
+        "{}",
+        listing(&fx, untitled.board.id)
+    );
 }
 
 // ----- export --------------------------------------------------------------------------------
@@ -1034,20 +1232,74 @@ fn a_picture_from_a_file_is_read_where_asked_and_stored_before_the_scene_names_i
         "image/svg+xml"
     );
 
-    // One file named by two skeletons is read once and stored once.
+    // One file named by two skeletons is read once and stored once: a file nothing has
+    // stored yet, so that one more file is all the library gains.
+    let fresh_path = fx.picture("pictures/fresh.png", (24, 18), [210, 120, 40]);
+    let fresh = FileId::of(&std::fs::read(&fresh_path).unwrap());
+    assert_eq!(fx.store().file_bytes(&fresh).unwrap(), None);
     let files_before = fx.store().file_count().unwrap();
     let twice = add(
         &fx,
         plan,
         &format!(
             r#"[{0}, {1}]"#,
-            image_at(&png_path, "").trim_matches(['[', ']']),
-            image_at(&png_path, r#","x":900"#).trim_matches(['[', ']'])
+            image_at(&fresh_path, r#","id":"one""#).trim_matches(['[', ']']),
+            image_at(&fresh_path, r#","id":"two","x":900"#).trim_matches(['[', ']'])
         ),
     )
     .unwrap();
+    assert_eq!(fx.store().file_count().unwrap(), files_before + 1);
+    assert!(fx.store().file_bytes(&fresh).unwrap().is_some());
+    // Two elements, one picture behind both: one source, one file id, one entry of the
+    // scene's files.
     assert_eq!(twice.pictures.len(), 2);
-    assert_eq!(fx.store().file_count().unwrap(), files_before);
+    assert!(
+        twice
+            .pictures
+            .iter()
+            .all(|picture| picture.source == fresh_path.to_string_lossy()),
+        "{:?}",
+        twice.pictures
+    );
+    let drawn = scene(&fx, plan);
+    for id in ["one", "two"] {
+        assert_eq!(
+            drawn.element(id).unwrap().file_id(),
+            Some(fresh.to_hex().as_str()),
+            "{id}"
+        );
+    }
+    assert_eq!(
+        drawn
+            .files()
+            .values()
+            .filter(|entry| entry.file.as_ref().map(|file| file.as_str())
+                == Some(fresh.to_hex().as_str()))
+            .count(),
+        1
+    );
+    // The request that travels carries the picture once (what the tool read once, and
+    // what the app's listener stores once): the request is seen as it reaches the app.
+    if let Some(app) = &fx.app {
+        let carried: Vec<String> = app
+            .taken()
+            .into_iter()
+            .rev()
+            .find_map(|served| match served.request.operation {
+                Operation::AddToBoard(request) => Some(request),
+                _ => None,
+            })
+            .expect("the request reached the app")
+            .pictures
+            .into_iter()
+            .map(|picture| picture.file)
+            .collect();
+        assert_eq!(
+            carried,
+            vec![fresh.to_hex()],
+            "one picture for two skeletons"
+        );
+    }
 
     // A relative path is taken from the folder the request names.
     let relative = fx

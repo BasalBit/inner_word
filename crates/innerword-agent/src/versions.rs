@@ -6,7 +6,7 @@ use crate::content::{self, Form, Reason, version_info};
 use crate::error::{Error, ItemKind, Result, quoted_excerpt};
 use crate::library::{Library, Session, author_phrase};
 use crate::live::Change;
-use crate::resolve::{Index, title_of};
+use crate::resolve::{Index, reference_of, title_of};
 use crate::types::{
     ListVersionsRequest, ReadVersionRequest, RestoreVersionRequest, VersionList, VersionRestored,
     VersionText,
@@ -157,10 +157,4 @@ pub(crate) fn restore_version(
         written: session.written(changed),
     };
     Ok(result)
-}
-
-/// `doc:12`, `page:12` for a page, `board:12` for a whiteboard: how a document is
-/// referred to in a sentence.
-fn reference_of(meta: &innerword_store::DocumentMeta) -> String {
-    format!("{}:{}", meta.kind.reference_prefix(), meta.id)
 }

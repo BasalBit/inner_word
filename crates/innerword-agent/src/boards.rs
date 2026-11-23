@@ -192,7 +192,8 @@ fn subtree(node: &innerword_store::FolderNode, ids: &mut HashSet<FolderId>) {
 impl Library {
     /// The whiteboards of the library, live and in the trash (marked), the one updated
     /// last first, each with how many elements and pictures it has. With a folder: the
-    /// whiteboards in it, at any depth.
+    /// whiteboards in it, at any depth. A whiteboard whose stored scene cannot be read is
+    /// listed too, with no counts and why ([`BoardListed::unreadable`]).
     pub fn boards(&self, request: &BoardsRequest) -> Result<BoardsList> {
         let session = self.reader()?;
         let store = &session.store;
@@ -214,13 +215,19 @@ impl Library {
             {
                 continue;
             }
-            let (scene, _, _) = stored_scene(store, &meta)?;
-            let (elements, pictures) = counted(&scene);
+            // One whiteboard that cannot be read is listed with what can be said of it,
+            // and never keeps the others from being listed.
+            let ((elements, pictures), unreadable) = match stored_scene(store, &meta) {
+                Ok((scene, _, _)) => (counted(&scene), None),
+                Err(Error::Unreadable { reason, .. }) => ((0, 0), Some(reason)),
+                Err(error) => return Err(error),
+            };
             boards.push(BoardListed {
                 board: index.document_summary(store, &meta),
                 elements,
                 pictures,
                 trashed: meta.trashed_at.is_some(),
+                unreadable,
             });
         }
         Ok(BoardsList { boards })
@@ -228,7 +235,8 @@ impl Library {
 }
 
 /// [`Library::read`] of a whiteboard: the listing of its elements (the same in Markdown
-/// and as plain text), or as JSON its stored scene as it is.
+/// and as plain text), or as JSON its stored scene as it is, unparsed (with no
+/// [`BoardInfo`] when it cannot be read).
 pub(crate) fn read(
     store: &Store,
     index: &Index,
@@ -243,12 +251,20 @@ pub(crate) fn read(
             quoted_excerpt(heading)
         )));
     }
-    let (scene, raw, _) = stored_scene(store, meta)?;
     let summary = index.document_summary(store, meta);
     let has = has_picture(store);
-    let content = match request.format {
-        TextFormat::Json => raw,
-        TextFormat::Markdown | TextFormat::PlainText => listing(&scene, &summary, &has),
+    let (content, scene) = match request.format {
+        // The stored scene as it is, also one the parser refuses: printing it is the one
+        // way left to see, and to save, what a damaged whiteboard holds.
+        TextFormat::Json => {
+            let raw = store.document(meta.id)?.content;
+            let scene = scene_of(meta, &raw).ok().map(|(scene, _)| scene);
+            (raw, scene)
+        }
+        TextFormat::Markdown | TextFormat::PlainText => {
+            let (scene, _, _) = stored_scene(store, meta)?;
+            (listing(&scene, &summary, &has), Some(scene))
+        }
     };
     Ok(DocumentText {
         document: summary,
@@ -258,7 +274,7 @@ pub(crate) fn read(
         comments: request.comments.then(Vec::new),
         images: Vec::new(),
         page: None,
-        board: Some(BoardInfo {
+        board: scene.map(|scene| BoardInfo {
             summary: scene.summary(),
             elements: Some(scene.listed_with(&has)),
         }),
@@ -410,11 +426,8 @@ pub(crate) fn read_version(
 ) -> Result<VersionText> {
     let summary = index.document_summary(store, meta);
     let content = match format {
-        TextFormat::Json => {
-            // Read all the same: a version that cannot be read says so.
-            scene_of(meta, &snapshot.content)?;
-            snapshot.content.clone()
-        }
+        // As it was stored, unparsed: also a version the parser refuses.
+        TextFormat::Json => snapshot.content.clone(),
         TextFormat::Markdown | TextFormat::PlainText => {
             let (scene, _) = scene_of(meta, &snapshot.content)?;
             let then = DocumentSummary {
@@ -1261,11 +1274,15 @@ pub(crate) fn create_board(
             Err(error) => return Err(error),
         },
     };
-    let title = match one_line(&request.title) {
-        title if title.is_empty() => UNTITLED.to_string(),
-        title => title,
+    // Stored as it was given, "" included, as the app's New Whiteboard stores it: a
+    // whiteboard without a name shows "Untitled" (docs/whiteboard-design.md, section 2).
+    let title = one_line(&request.title);
+    let shown = if title.is_empty() {
+        UNTITLED
+    } else {
+        title.as_str()
     };
-    let name = quoted_excerpt(&title);
+    let name = quoted_excerpt(shown);
 
     let pictures = pictures_of(&request.pictures, session.dry_run)?;
     let mut scene = Scene::empty();
@@ -1320,7 +1337,7 @@ pub(crate) fn create_board(
             })?;
         }
         let mut path = folder_path.clone();
-        path.push(title.clone());
+        path.push(shown.to_string());
         let board = DocumentSummary {
             id: DocumentId(0),
             title: title.clone(),
@@ -1575,6 +1592,28 @@ mod tests {
             canonical_json(&a),
             r#"{"a":{"c":2,"d":[{"y":2,"z":1}]},"b":1}"#
         );
+    }
+
+    #[test]
+    fn one_file_named_by_two_skeletons_is_read_once_and_travels_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let png = innerword_image::fixtures::png(6, 4, [5, 6, 7]);
+        std::fs::write(dir.path().join("one.png"), &png).unwrap();
+        let elements: Vec<innerword_board::Skeleton> = serde_json::from_str(
+            r#"[{"type":"image","x":0,"y":0,"path":"one.png"},
+                {"type":"rectangle","x":0,"y":0},
+                {"type":"image","x":90,"y":0,"path":"one.png"}]"#,
+        )
+        .unwrap();
+        let pictures = prepare_pictures(&elements, Some(dir.path()), false).unwrap();
+        assert_eq!(pictures.len(), 1, "{pictures:?}");
+        assert_eq!(pictures[0].source, "one.png");
+        assert_eq!(pictures[0].file, FileId::of(&png).to_hex());
+        assert_eq!(pictures[0].data, png);
+        // A dry run reads it to say what it is, and carries no bytes.
+        let dry = prepare_pictures(&elements, Some(dir.path()), true).unwrap();
+        assert_eq!(dry.len(), 1);
+        assert!(dry[0].data.is_empty());
     }
 
     #[test]

@@ -183,6 +183,7 @@ pub(crate) fn find_heading(
                     id: index as i64 + 1,
                     path: heading_path(&all, heading),
                     trashed: false,
+                    reference: None,
                 })
                 .collect(),
         }),

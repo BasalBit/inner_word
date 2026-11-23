@@ -501,9 +501,10 @@ pub(crate) fn delete_document(
     let summary = index.document_summary(store, &meta);
     if !request.permanently {
         return Err(confirmation(format!(
-            "The document {} (doc:{})",
+            "The {} {} ({})",
+            meta.kind.noun(),
             quoted_excerpt(title_of(&meta)),
-            meta.id
+            summary.reference()
         )));
     }
     if !session.dry_run {

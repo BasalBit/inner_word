@@ -5,8 +5,8 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 
 use innerword_store::{
-    DocumentId, DocumentMeta, Folder, FolderId, FolderNode, LibraryTree, Store, StoreError,
-    TrashEntry,
+    DocumentId, DocumentKind, DocumentMeta, Folder, FolderId, FolderNode, LibraryTree, Store,
+    StoreError, TrashEntry,
 };
 
 use crate::error::{Candidate, Error, ItemKind, Result, quoted_excerpt};
@@ -202,6 +202,7 @@ impl Index {
                                 id: meta.id.0,
                                 path: join_path(segments),
                                 trashed: false,
+                                reference: Some(reference_of(meta)),
                             })
                             .collect(),
                     }),
@@ -252,7 +253,7 @@ impl Index {
                 title.contains(&wanted) || (!title.is_empty() && wanted.contains(&title))
             })
             .take(SUGGESTIONS)
-            .map(|(meta, path)| format!("doc:{} {}", meta.id, join_path(path)))
+            .map(|(meta, path)| format!("{} {}", reference_of(meta), join_path(path)))
             .collect();
         if close.is_empty() {
             // Perhaps it is a folder, or in the trash.
@@ -264,7 +265,7 @@ impl Index {
                     .iter()
                     .filter_map(|entry| match entry {
                         TrashEntry::Document(meta) if title_of(meta).to_lowercase() == wanted => {
-                            Some(format!("doc:{} (in the trash)", meta.id))
+                            Some(format!("{} (in the trash)", reference_of(meta)))
                         }
                         _ => None,
                     })
@@ -289,9 +290,7 @@ impl Index {
     pub(crate) fn folder_or_root(&self, store: &Store, target: &Target) -> Result<Option<Folder>> {
         match target {
             Target::Id(id) | Target::FolderId(id) => folder_by_id(store, *id).map(Some),
-            Target::DocumentId(id) => Err(Error::invalid(format!(
-                "doc:{id} names a document; a folder is needed here"
-            ))),
+            Target::DocumentId(id) => Err(not_a_folder(store, *id)),
             Target::Path(path) => {
                 if target.is_root() {
                     return Ok(None);
@@ -321,6 +320,7 @@ impl Index {
                                 id: folder.id.0,
                                 path: join_path(segments),
                                 trashed: false,
+                                reference: Some(folder_reference(folder)),
                             })
                             .collect(),
                     }),
@@ -472,6 +472,7 @@ impl Index {
                                     id: folder.id.0,
                                     path: join_path(p),
                                     trashed: false,
+                                    reference: Some(folder_reference(folder)),
                                 })
                                 .collect();
                             candidates.extend(documents.iter().map(|(meta, p)| Candidate {
@@ -479,6 +480,7 @@ impl Index {
                                 id: meta.id.0,
                                 path: join_path(p),
                                 trashed: false,
+                                reference: Some(reference_of(meta)),
                             }));
                             return Err(Error::Ambiguous {
                                 kind: if documents.is_empty() {
@@ -510,6 +512,7 @@ impl Index {
             id: meta.id.0,
             path: self.document_summary(store, meta).path,
             trashed: meta.trashed_at.is_some(),
+            reference: Some(reference_of(meta)),
         }
     }
 
@@ -519,6 +522,7 @@ impl Index {
             id: folder.id.0,
             path: self.folder_summary(store, folder).path,
             trashed: folder.trashed_at.is_some(),
+            reference: Some(folder_reference(folder)),
         }
     }
 
@@ -536,9 +540,7 @@ impl Index {
         let kind = want.unwrap_or(ItemKind::Document);
         let wants = |kind: ItemKind| want.is_none_or(|wanted| wanted == kind);
         match (target, want) {
-            (Target::DocumentId(id), Some(ItemKind::Folder)) => Err(Error::invalid(format!(
-                "doc:{id} names a document; a folder is needed here"
-            ))),
+            (Target::DocumentId(id), Some(ItemKind::Folder)) => Err(not_a_folder(store, *id)),
             (Target::FolderId(id), Some(ItemKind::Document)) => Err(Error::invalid(format!(
                 "folder:{id} names a folder; a document is needed here"
             ))),
@@ -631,6 +633,7 @@ impl Index {
                                         id: item.id(),
                                         path: join_path(was),
                                         trashed: true,
+                                        reference: Some(item.reference()),
                                     })
                                     .collect(),
                             });
@@ -744,6 +747,36 @@ impl Found {
             Found::Folder(folder) => folder.id.0,
         }
     }
+
+    fn reference(&self) -> String {
+        match self {
+            Found::Document(meta) => reference_of(meta),
+            Found::Folder(folder) => folder_reference(folder),
+        }
+    }
+}
+
+/// How a folder is written in a sentence: `folder:3`.
+fn folder_reference(folder: &Folder) -> String {
+    format!("folder:{}", folder.id.0)
+}
+
+/// How an item is written in a sentence: `doc:12`, `page:12` or `board:12`, by its kind.
+pub(crate) fn reference_of(meta: &DocumentMeta) -> String {
+    format!("{}:{}", meta.kind.reference_prefix(), meta.id)
+}
+
+/// The error of an item's id where a folder is needed: "board:12 names a whiteboard; a
+/// folder is needed here", by the kind of the item the id names (a document's words for an
+/// id nothing has).
+fn not_a_folder(store: &Store, id: i64) -> Error {
+    let (reference, noun) = match store.document_meta(DocumentId(id)) {
+        Ok(meta) => (reference_of(&meta), meta.kind.noun()),
+        Err(_) => (format!("doc:{id}"), DocumentKind::Text.noun()),
+    };
+    Error::invalid(format!(
+        "{reference} names a {noun}; a folder is needed here"
+    ))
 }
 
 /// The title of a document as paths and messages show it.

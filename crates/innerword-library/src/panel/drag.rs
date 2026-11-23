@@ -37,6 +37,9 @@ pub(super) fn row_icon(item: LibraryItem, kind: DocumentKind, open: bool) -> Ico
 /// and under a drag: a text has the document, a page the globe, a whiteboard its own
 /// ([`IconName::Whiteboard`]). For whatever else shows an item beside its name (quick open,
 /// the library search), so that every place draws the same one.
+///
+/// No kind of document is drawn open or closed: only a folder is, and a folder is no
+/// kind, so its row keeps its own icons.
 pub fn item_icon(kind: DocumentKind) -> IconName {
     match kind {
         DocumentKind::Text => IconName::Document,

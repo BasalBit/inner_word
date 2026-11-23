@@ -103,7 +103,8 @@ pub use panel::{
     MoveUp, NewBoard, NewDocument, NewFolder, OpenSelected, ROOT_ROW_HEIGHT, ROW_DETAIL_SETTING,
     ROW_HEIGHT, Rename, RestoreSelected, RowDetail, SELECTED_ITEM_SETTING, SelectFirst, SelectLast,
     SelectNext, SelectPageDown, SelectPageUp, SelectPrevious, ShowTrash, TRASH_ROW_HEIGHT,
-    ToggleRowDetail, UndoTrash, commands, forward_actions, item_icon, key_bindings,
+    TREE_KEY_CONTEXT, ToggleRowDetail, UndoTrash, commands, forward_actions, item_icon,
+    key_bindings, new_board_command,
 };
 
 /// Text helpers of the panel, public only so that the crate's one integration-test binary

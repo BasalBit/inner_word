@@ -622,3 +622,184 @@ fn new_whiteboard_names_in_place_and_opens_on_the_canvas(cx: &mut TestAppContext
         4
     );
 }
+
+#[gpui::test]
+fn new_whiteboard_shows_a_hidden_sidebar_and_names_in_place(cx: &mut TestAppContext) {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use std::time::Duration;
+
+    use gpui::AppContext as _;
+    use innerword_library::LibraryPanel;
+
+    use super::HidingShell;
+    use crate::library_from;
+
+    cx.update(|cx| {
+        innerword_ui::theme::init(innerword_ui::ThemeMode::Light, cx);
+        innerword_ui::init(cx);
+        innerword_library::init(cx);
+    });
+    let (library, _) = library_from(Library::in_memory().unwrap(), cx);
+    let folder = library.update(cx, |l, cx| l.create_folder(None, "Book", cx).unwrap().id);
+    let events: Rc<RefCell<Vec<LibraryPanelEvent>>> = Rc::default();
+    let (shell, cx) = cx.add_window_view({
+        let library = library.clone();
+        let events = events.clone();
+        move |window, cx| {
+            let panel = cx.new(|cx| LibraryPanel::new(library, cx));
+            panel.update(cx, |p, _| p.set_new_board_content(EMPTY_SCENE));
+            let editor = cx.focus_handle();
+            cx.subscribe_in(&panel, window, {
+                let editor = editor.clone();
+                move |_, _, event: &LibraryPanelEvent, window, _| {
+                    events.borrow_mut().push(event.clone());
+                    if *event == LibraryPanelEvent::Dismissed {
+                        window.focus(&editor);
+                    }
+                }
+            })
+            .detach();
+            window.focus(&editor);
+            HidingShell {
+                panel,
+                editor,
+                sidebar: false,
+            }
+        }
+    });
+    let panel = shell.read_with(cx, |shell, _| shell.panel.clone());
+    let editor = shell.read_with(cx, |shell, _| shell.editor.clone());
+    cx.run_until_parked();
+    let on_screen = |cx: &mut VisualTestContext| {
+        let panel = panel.clone();
+        cx.update(|window, cx| panel.read(cx).is_on_screen(window))
+    };
+    let wait = |cx: &mut VisualTestContext| {
+        cx.executor().advance_clock(Duration::from_millis(700));
+        cx.run_until_parked();
+    };
+    let take_events = || events.borrow_mut().drain(..).collect::<Vec<_>>();
+    let renaming = |cx: &mut VisualTestContext| panel.read_with(cx, |p, _| p.renaming());
+    let title = |id: DocumentId, cx: &mut VisualTestContext| {
+        library.read_with(cx, |l, _| l.document_meta(id).unwrap().title)
+    };
+    assert!(!on_screen(cx));
+    panel.update(cx, |p, cx| p.select(Some(Folder(folder)), cx));
+
+    // A host that does not show the sidebar on request: the whiteboard is made, the naming
+    // ends once the panel is found not drawn (the name field kept nothing typed: it stays
+    // "Untitled"), it opens without taking the keyboard, and the keyboard comes back.
+    cx.dispatch_action(NewBoard);
+    let Some(Document(unseen)) = renaming(cx) else {
+        panic!("no whiteboard is being named");
+    };
+    wait(cx);
+    assert_eq!(renaming(cx), None);
+    assert_eq!(title(unseen, cx), "");
+    assert_eq!(
+        take_events(),
+        vec![
+            LibraryPanelEvent::OpenDocument {
+                id: unseen,
+                focus_editor: false
+            },
+            LibraryPanelEvent::Dismissed
+        ]
+    );
+    assert!(cx.update(|window, _| editor.is_focused(window)));
+
+    // A host that shows the sidebar when asked, as the app's does: New Whiteboard shows
+    // it, and the whiteboard is named in place in its folder, the field keeping the
+    // keyboard however long the name takes.
+    panel.update(cx, |p, _| {
+        let shell = shell.downgrade();
+        p.set_reveal_handler(move |_, cx| {
+            shell
+                .update(cx, |shell, cx| {
+                    shell.sidebar = true;
+                    cx.notify();
+                })
+                .ok();
+        });
+    });
+    panel.update(cx, |p, cx| p.select(Some(Folder(folder)), cx));
+    cx.dispatch_action(NewBoard);
+    cx.run_until_parked();
+    assert!(shell.read_with(cx, |shell, _| shell.sidebar));
+    assert!(on_screen(cx));
+    let Some(Document(named)) = renaming(cx) else {
+        panic!("no whiteboard is being named");
+    };
+    assert_ne!(named, unseen);
+    assert_eq!(
+        library.read_with(cx, |l, _| l.document_meta(named).unwrap().kind),
+        DocumentKind::Board
+    );
+    wait(cx);
+    assert_eq!(renaming(cx), Some(Document(named)));
+    assert!(take_events().is_empty());
+    cx.simulate_input("Shown");
+    cx.simulate_keystrokes("enter");
+    assert_eq!(title(named, cx), "Shown");
+    assert_eq!(
+        library.read_with(cx, |l, _| l.document_meta(named).unwrap().folder_id),
+        Some(folder)
+    );
+    assert_eq!(
+        take_events(),
+        vec![LibraryPanelEvent::OpenDocument {
+            id: named,
+            focus_editor: true
+        }]
+    );
+}
+
+#[gpui::test]
+fn a_whiteboard_trashed_while_it_is_named_ends_the_naming_and_does_not_open(
+    cx: &mut TestAppContext,
+) {
+    let (f, cx) = fixture(cx);
+    f.panel
+        .update(cx, |p, _| p.set_new_board_content(EMPTY_SCENE));
+    let made = f
+        .panel
+        .update_in(cx, |p, window, cx| p.new_board(window, cx))
+        .expect("a whiteboard is made");
+    assert_eq!(f.renaming(cx), Some(Document(made)));
+    f.library
+        .update(cx, |l, cx| l.trash_document(made, cx).unwrap());
+    cx.run_until_parked();
+    // Its row is gone, and with it the naming: nothing is left to name or to open.
+    assert_eq!(f.renaming(cx), None);
+    assert!(f.events().is_empty());
+}
+
+#[gpui::test]
+fn the_library_s_new_whiteboard_is_a_command_for_the_list_without_a_key(cx: &mut TestAppContext) {
+    let (_f, cx) = fixture(cx);
+    cx.update(|_, cx| {
+        let command = innerword_library::new_board_command();
+        assert_eq!(command.title.as_ref(), "New whiteboard");
+        assert_eq!(command.category.as_ref(), "Library");
+        assert_eq!(command.action_name(), gpui::Action::name(&NewBoard));
+        // Not among the panel's commands, every one of which has a key there.
+        assert!(
+            innerword_library::commands()
+                .iter()
+                .all(|c| c.action_name() != command.action_name())
+        );
+        let keymap = cx.key_bindings();
+        let keymap = keymap.borrow();
+        assert!(keymap.bindings_for_action(&NewBoard).next().is_none());
+        // The place a key of its would go is where New document has its key.
+        let tree = gpui::KeyBindingContextPredicate::parse(innerword_library::TREE_KEY_CONTEXT)
+            .unwrap()
+            .to_string();
+        let new_document: Vec<String> = keymap
+            .bindings_for_action(&innerword_library::NewDocument)
+            .filter_map(|binding| binding.predicate().map(|p| p.to_string()))
+            .collect();
+        assert_eq!(new_document, vec![tree]);
+    });
+}

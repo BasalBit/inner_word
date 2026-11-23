@@ -118,6 +118,13 @@ actions!(
 /// also carries `mode`, which is `tree` or `trash`.
 pub const KEY_CONTEXT: &str = "LibraryPanel";
 
+/// The key context of the panel's commands for the tree while nothing is typed (new
+/// document, new folder, rename, ...): the panel shows the tree and the keyboard is on a
+/// row, not in the filter or a name being typed. A key the user gives
+/// [`NewBoard`](crate::NewBoard), which has none by default, belongs here, as the keys of
+/// New document and New folder do.
+pub const TREE_KEY_CONTEXT: &str = "LibraryPanel && mode == tree && !TextField";
+
 /// The settings key under which the panel stores the ids of the expanded folders
 /// (a JSON array of folder ids).
 pub const EXPANDED_FOLDERS_SETTING: &str = "library.expanded_folders";
@@ -162,7 +169,7 @@ pub fn key_bindings() -> Vec<KeyBinding> {
     let panel = Some(KEY_CONTEXT);
     // Not while typing in the filter or renaming.
     let list = Some("LibraryPanel && !TextField");
-    let tree = Some("LibraryPanel && mode == tree && !TextField");
+    let tree = Some(TREE_KEY_CONTEXT);
     let trash = Some("LibraryPanel && mode == trash && !TextField");
     vec![
         KeyBinding::new("ctrl-n", SelectNext, panel),
@@ -284,6 +291,19 @@ pub fn commands() -> Vec<CommandDescriptor> {
         CommandDescriptor::new("Select first item", CATEGORY, SelectFirst).keywords(["top"]),
         CommandDescriptor::new("Select last item", CATEGORY, SelectLast).keywords(["bottom"]),
     ]
+}
+
+/// The library's "New whiteboard" ([`NewBoard`]), for the list of keyboard shortcuts: a
+/// row "In the library", where the user can give it a key ([`TREE_KEY_CONTEXT`]).
+///
+/// Not among [`commands`]: it has no key by default (every command there has one in the
+/// panel), and the palette has the window's own "New whiteboard", which works anywhere.
+/// The app lists it as a row and leaves it out of the palette, and only while it gave the
+/// panel the scene of a new whiteboard ([`LibraryPanel::set_new_board_content`]); without
+/// that the panel passes the action on and makes nothing.
+pub fn new_board_command() -> CommandDescriptor {
+    CommandDescriptor::new("New whiteboard", "Library", NewBoard)
+        .keywords(["create", "add", "board", "canvas", "drawing"])
 }
 
 /// Makes the panel's commands work when focus is somewhere else in the window (the editor,

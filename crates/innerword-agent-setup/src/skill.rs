@@ -43,7 +43,7 @@ pub const DEFAULT_BINARY_PATH: &str = "/Applications/Inner Word.app/Contents/Mac
 
 /// The `description` of the skill: what an agent reads to decide whether to load it. It
 /// names the app and the words people use for what is in it, and says when to use it.
-pub const DESCRIPTION: &str = "Work with the user's writing in Inner Word, the macOS writing app, and with the documents, drafts, chapters, books, blog posts, notes and folders in its library. Use it whenever the user mentions Inner Word or their library, or asks to find, read, list, search, create, edit, rename, move, organise, comment on, review, export or restore a document, a draft, a chapter or a folder that lives in that app. It provides the innerword command line tool, which reads and changes the library whether the app is open or closed.";
+pub const DESCRIPTION: &str = "Work with the user's writing in Inner Word, the macOS writing app, and with the documents, drafts, chapters, books, blog posts, notes, whiteboards and folders in its library. Use it whenever the user mentions Inner Word or their library, or asks to find, read, list, search, create, edit, rename, move, organise, comment on, review, draw on, export or restore a document, a draft, a chapter, a whiteboard or a folder that lives in that app. It provides the innerword command line tool, which reads and changes the library whether the app is open or closed.";
 
 /// The text below the front matter. In its code blocks a line that starts with `innerword `
 /// is an example; the installed text has the quoted path of the binary in place of that
@@ -459,6 +459,11 @@ mod tests {
             vec!["export"],
             vec!["image", "add"],
             vec!["image", "list"],
+            vec!["board", "new"],
+            vec!["board", "add"],
+            vec!["board", "update"],
+            vec!["board", "remove"],
+            vec!["board", "list"],
         ] {
             let expected: Vec<String> = expected.into_iter().map(str::to_string).collect();
             assert!(commands.contains(&expected), "{expected:?} is not shown");
@@ -484,6 +489,38 @@ mod tests {
         ] {
             assert!(text.contains(needed), "the skill does not say: {needed}");
         }
+    }
+
+    /// What the text says about whiteboards, as the design has it (section 7.8).
+    #[test]
+    fn the_text_says_what_a_whiteboard_is_and_how_one_is_drawn_on() {
+        let text = spec().render();
+        for needed in [
+            "Whiteboards. A whiteboard is a drawing in the library, drawn in the app with \
+             Excalidraw: shapes, arrows, text, frames and pictures on a canvas.",
+            "`innerword board new \"Architecture\" --in Sketches` makes one (with `--file \
+             shapes.json` it starts with elements).",
+            "`innerword get board:12` lists its elements, one per line with id, type, position, \
+             size and text; `--format json` gives the scene as Excalidraw stores it.",
+            "Add elements as Excalidraw's element skeletons:",
+            "Give shapes room for their labels and leave out the width and height of text.",
+            "A picture from a file of this Mac is an element too, \
+             `{\"type\":\"image\",\"id\":\"photo\",\"x\":640,\"y\":80,\"path\":\"/Users/ada/Pictures/harbour.jpg\"}`",
+            "the tool reads the file and the library keeps a copy, as it does for `innerword \
+             image add`.",
+            "moves, resizes, restyles or rewrites by id;",
+            "`innerword board remove board:12 db` removes elements with their labels.",
+            "Every change keeps the drawing as it was as a version first.",
+            "A whiteboard is exported as a PDF only: `innerword export board:12 \
+             ~/Desktop/architecture.pdf`.",
+            "Its text is not edited with `edit` or `append` (exit code 15).",
+            "- 15: a page or a whiteboard where a document is needed, or the reverse. A page \
+             cannot be edited;",
+            "A whiteboard is changed with `board add`, `board update` and `board remove`",
+        ] {
+            assert!(text.contains(needed), "the skill does not say: {needed}");
+        }
+        assert!(DESCRIPTION.contains("whiteboard"));
     }
 
     /// What the text says about pages, as the design has it: the paragraph and the recipe

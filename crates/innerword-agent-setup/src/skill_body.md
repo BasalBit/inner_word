@@ -97,6 +97,19 @@ To copy the user's claude.ai artifacts into Inner Word (Claude Code), use the Ar
 
 Add the folder the read names ("Files saved under …"). When the read's header or the files listing names the `assets` capability, list its assets too (`action: "list"`, `scope: "assets"`, its `url`), read each by its id (`action: "read"`, its `url`, `path` the asset id) and note the asset's url and the file it was saved to; without that capability it has no assets (listing them fails with `capability_disabled`: go on). Write a list `[{"path": "<folder>", "source_url": "<url as the list gave it>", "title": "<title>", "externals": {"<asset url>": "<saved file>"}}, …]` and run `innerword page add --list <file> --folder "Claude Pages" --create-folders --author Claude`. Report what was added, updated, unchanged, trashed and not added, with the reasons and the warnings. A page that uses claude.ai's own storage (`window.claude`, the `db` capability) is added, and its saved data stays on claude.ai: read its rows with the ArtifactData tool and keep them as a document beside the page, titled "<page title> (saved data)", with `innerword create`.
 
+Whiteboards. A whiteboard is a drawing in the library, drawn in the app with Excalidraw: shapes, arrows, text, frames and pictures on a canvas. `innerword board new "Architecture" --in Sketches` makes one (with `--file shapes.json` it starts with elements). `innerword get board:12` lists its elements, one per line with id, type, position, size and text; `--format json` gives the scene as Excalidraw stores it. `innerword boards` lists the whiteboards. Add elements as Excalidraw's element skeletons: `innerword board add board:12 --content '[{"type":"rectangle","id":"api","x":100,"y":80,"width":200,"height":90,"label":{"text":"API"}},{"type":"ellipse","id":"db","x":420,"y":80,"label":{"text":"Postgres"}},{"type":"arrow","x":300,"y":125,"start":{"id":"api"},"end":{"id":"db"}}]'`. Give shapes room for their labels and leave out the width and height of text. A picture from a file of this Mac is an element too, `{"type":"image","id":"photo","x":640,"y":80,"path":"/Users/ada/Pictures/harbour.jpg"}` (a whole path, or one relative to the folder of `--file`; it is drawn at its own size unless you give `width` or `height`); the tool reads the file and the library keeps a copy, as it does for `innerword image add`. `innerword board update board:12 --content '[{"id":"api","dx":40,"backgroundColor":"#ffc9c9"}]'` moves, resizes, restyles or rewrites by id; `innerword board remove board:12 db` removes elements with their labels. Every change keeps the drawing as it was as a version first. A whiteboard is exported as a PDF only: `innerword export board:12 ~/Desktop/architecture.pdf`. Its text is not edited with `edit` or `append` (exit code 15). `innerword board add --help` lists every field an element may have.
+
+```
+innerword board new "Architecture" --in Sketches --create-folders
+innerword board add board:12 --content '[{"type":"rectangle","id":"api","x":100,"y":80,"width":200,"height":90,"label":{"text":"API"}},{"type":"ellipse","id":"db","x":420,"y":80,"label":{"text":"Postgres"}},{"type":"arrow","x":300,"y":125,"start":{"id":"api"},"end":{"id":"db"}}]' --author Claude
+innerword board add board:12 --content '[{"type":"image","id":"photo","x":640,"y":80,"path":"/Users/ada/Pictures/harbour.jpg"}]' --author Claude
+innerword board update board:12 --content '[{"id":"api","dx":40,"backgroundColor":"#ffc9c9"}]' --author Claude
+innerword board remove board:12 db --author Claude
+innerword get board:12
+innerword board list --json
+innerword export board:12 ~/Desktop/architecture.pdf
+```
+
 Organise:
 
 ```
@@ -152,18 +165,18 @@ innerword export "The Salt Road" --to ~/Desktop/salt-road.docx
 - 0: done.
 - 1: failed. The message says why.
 - 2: the command line is wrong, or what it asks for cannot be done as asked (a file that is no image, a text to replace that runs across an image). The message says which; the command's `--help` has the rest.
-- 3: not found (a document, a folder, a heading, a comment thread, a version). The message says what there is; check the id or the path with `list` or `search`.
+- 3: not found (a document, a folder, a heading, a comment thread, a version, an element of a whiteboard). The message says what there is; check the id or the path with `list` or `search`, an element's id with `get`.
 - 4: a name fits several items. The message lists them with their ids: use the id. For a heading that occurs several times, pass `--occurrence <n>`.
 - 5: Inner Word is open and did not make the change. The message says why, whether anything was changed, and what to do; see "While Inner Word is open".
 - 6: the text to replace or to comment on is not in the document. `get` it again and copy the text exactly.
 - 7: the text occurs more than once. Quote more of the words around it, or pass `--occurrence <n>`, or `--all` to `edit`.
 - 8: erasing for good needs `--permanently`. Only when the user asked for exactly that.
-- 9: the item is in the trash (`restore` it first), or it is not and the command needs one that is.
+- 9: the item is in the trash (`restore` it first), or it is not and the command needs one that is. A whiteboard with nothing drawn on it has no PDF either.
 - 10: there is no library at that place. Inner Word creates it on its first run.
 - 11: another tool is writing to the library at this moment. Run the command again.
 - 12: the file an export would write exists. Choose another path, or pass `--overwrite`.
 - 13: the stored document cannot be read as a document. Leave it alone and tell the user.
 - 14: the page could not be kept whole: it needs something that cannot be stored (data from a service, an embedded site, a piece that could not be fetched). Nothing was saved. Tell the user the reasons the message gives; do not try to rewrite the page.
-- 15: a page where a document is needed, or the reverse. A page cannot be edited; to bring a newer copy, add it again with `page add` and its source address.
+- 15: a page or a whiteboard where a document is needed, or the reverse. A page cannot be edited; to bring a newer copy, add it again with `page add` and its source address. A whiteboard is changed with `board add`, `board update` and `board remove`, and exported as a PDF only.
 
 Installed by Inner Word {{VERSION}}. The app's Agents panel updates or removes this skill.

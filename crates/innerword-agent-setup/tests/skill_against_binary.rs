@@ -243,7 +243,7 @@ fn the_exit_codes_of_the_skill_are_the_ones_of_the_tool() {
         (12, "exists"),
         (13, "cannot be read"),
         (14, "kept whole"),
-        (15, "a page where a document is needed"),
+        (15, "a page or a whiteboard where a document is needed"),
     ] {
         let tool = &of_the_tool[code as usize].1;
         let skill = of_the_skill[code as usize].1;
@@ -341,6 +341,134 @@ fn the_examples_of_pages_run_against_the_built_tool() {
     );
     assert!(all.contains("How tides work"), "{all}");
     assert!(home.join("Desktop/page.pdf").is_file());
+}
+
+/// The bytes of a PNG file: `width` x `height` pixels in one colour, 8 bits a channel, its
+/// pixel data stored without compression (a real picture file, as the tool reads one with
+/// ImageIO, without a picture in the repository).
+fn png(width: u32, height: u32, rgb: [u8; 3]) -> Vec<u8> {
+    fn crc32(bytes: &[u8]) -> u32 {
+        let mut crc = u32::MAX;
+        for byte in bytes {
+            crc ^= u32::from(*byte);
+            for _ in 0..8 {
+                crc = if crc & 1 == 1 {
+                    (crc >> 1) ^ 0xEDB8_8320
+                } else {
+                    crc >> 1
+                };
+            }
+        }
+        !crc
+    }
+    fn chunk(kind: &[u8; 4], data: &[u8], out: &mut Vec<u8>) {
+        out.extend((data.len() as u32).to_be_bytes());
+        let mut body = kind.to_vec();
+        body.extend(data);
+        out.extend(&body);
+        out.extend(crc32(&body).to_be_bytes());
+    }
+    let mut row = vec![0u8];
+    for _ in 0..width {
+        row.extend(rgb);
+    }
+    let rows = row.repeat(height as usize);
+    // A zlib stream of one stored block (the picture is small), and its checksum.
+    assert!(rows.len() < 65_535);
+    let mut packed = vec![0x78, 0x01, 1];
+    packed.extend((rows.len() as u16).to_le_bytes());
+    packed.extend((!(rows.len() as u16)).to_le_bytes());
+    packed.extend(&rows);
+    let (mut a, mut b) = (1u32, 0u32);
+    for byte in &rows {
+        a = (a + u32::from(*byte)) % 65_521;
+        b = (b + a) % 65_521;
+    }
+    packed.extend(((b << 16) | a).to_be_bytes());
+    let mut out = b"\x89PNG\r\n\x1a\n".to_vec();
+    let mut header = Vec::new();
+    header.extend(width.to_be_bytes());
+    header.extend(height.to_be_bytes());
+    header.extend([8, 2, 0, 0, 0]);
+    chunk(b"IHDR", &header, &mut out);
+    chunk(b"IDAT", &packed, &mut out);
+    chunk(b"IEND", &[], &mut out);
+    out
+}
+
+/// The examples of whiteboards run against the built tool, as an agent runs them: through
+/// the shell, with the fake printer of a whiteboard's PDF (`INNER_WORD_PAGE_CHECK=fake`,
+/// which a debug build reads), and a library, a home and a temporary directory that exist
+/// only for this test; the picture an example names is a PNG made here. Each one has to
+/// succeed.
+#[test]
+fn the_examples_of_whiteboards_run_against_the_built_tool() {
+    let root = tempfile::tempdir().expect("a temporary directory");
+    let root = root.path().canonicalize().unwrap();
+    let (home, library, work, tmp) = (
+        root.join("home"),
+        root.join("library"),
+        root.join("work"),
+        root.join("tmp"),
+    );
+    for dir in [&home, &library, &work, &tmp, &home.join("Desktop")] {
+        std::fs::create_dir_all(dir).unwrap();
+    }
+    let picture = work.join("harbour.png");
+    std::fs::write(&picture, png(96, 64, [30, 90, 160])).unwrap();
+    let run = |line: &str| {
+        let output = Command::new("/bin/sh")
+            .arg("-c")
+            .arg(line)
+            .env_clear()
+            .env("PATH", "/usr/bin:/bin")
+            .env("HOME", &home)
+            .env("TMPDIR", &tmp)
+            .env("INNER_WORD_DATA_DIR", &library)
+            .env("INNER_WORD_PAGE_CHECK", "fake")
+            .current_dir(&work)
+            .output()
+            .expect("run the shell");
+        assert!(
+            output.status.success(),
+            "{line}: {}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).expect("output is text")
+    };
+    let tool = format!("'{}'", writer().display());
+    // The examples name board:12: eleven documents come first.
+    for n in 1..=11 {
+        run(&format!("{tool} create \"Note {n}\" --content \"Note.\""));
+    }
+    let examples: Vec<&str> = example_lines()
+        .into_iter()
+        .filter(|line| line.contains("board:12") || line.starts_with("innerword board"))
+        .collect();
+    assert!(examples.len() >= 7, "{examples:?}");
+    let mut said = Vec::new();
+    for line in examples {
+        let line = line
+            .replacen("innerword", &tool, 1)
+            .replace("/Users/ada/Pictures/harbour.jpg", picture.to_str().unwrap());
+        said.push(run(&line));
+    }
+    let all = said.concat();
+    assert!(
+        all.contains("made board:12 \u{201c}Architecture\u{201d} in Sketches (empty)"),
+        "{all}"
+    );
+    assert!(
+        all.contains("added to board:12 \u{201c}Architecture\u{201d}: rectangle api (label)"),
+        "{all}"
+    );
+    assert!(all.contains("image photo (harbour.png"), "{all}");
+    assert!(all.contains("Before a drawing by Claude"), "{all}");
+    assert!(all.contains("changed on board:12"), "{all}");
+    assert!(all.contains("removed from board:12"), "{all}");
+    assert!(all.contains("rectangle  api"), "the listing: {all}");
+    assert!(home.join("Desktop/architecture.pdf").is_file());
 }
 
 #[test]

@@ -502,6 +502,14 @@ impl Workspace {
             )
             .child(div().h(SPACE_2))
             .child(hint("New document", KeyHint::for_action(&NewDocument, cx)))
+            // Only where whiteboards can be shown; its key only when one is
+            // given.
+            .when(crate::pages::engine(cx).is_some(), |el| {
+                el.child(hint(
+                    "New whiteboard",
+                    KeyHint::for_action(&crate::actions::NewBoard, cx),
+                ))
+            })
             .child(hint("Open document", KeyHint::for_action(&QuickOpen, cx)))
             .child(hint(
                 "Go to library",
@@ -573,7 +581,12 @@ impl Workspace {
         // out then, or the gap before the next text would be doubled. With
         // no document open there is no mode to show either.
         let vim_on = self.vim.read(cx).is_attached() && self.session.is_some();
-        let save = (!status.save.is_empty()).then(|| {
+        // A whiteboard's save state: what the app holds of it.
+        let (save_text, save_failed) = match self.board_save_label() {
+            Some((text, failed)) => (text, failed),
+            None => (status.save.clone(), status.save_failed),
+        };
+        let save = (!save_text.is_empty()).then(|| {
             self.status_item(
                 MenuKind::Save,
                 "status-save",
@@ -581,8 +594,8 @@ impl Workspace {
                 cx,
             )
             .debug_selector(|| MenuKind::Save.selector().into())
-            .when(status.save_failed, |el| el.text_color(colors.danger))
-            .child(status.save.clone())
+            .when(save_failed, |el| el.text_color(colors.danger))
+            .child(save_text)
             .on_click(opens_menu(MenuKind::Save))
         });
         let left = div()
@@ -643,6 +656,10 @@ impl Workspace {
             && self.settings.status_words
         {
             counts.push(words);
+        }
+        // A whiteboard: its elements.
+        if let Some(elements) = self.board_elements_label() {
+            counts.push(elements);
         }
         let zoom = self.render_zoom_item(tips, cx);
         let statistics = (!counts.is_empty()).then(|| {
@@ -988,6 +1005,10 @@ impl Render for Workspace {
         // "Export as PDF…" while there is a document (or a page shown),
         // "Cancel PDF export" while its pages are being prepared.
         root = self.pdf_export_actions(root, cx);
+        // "New whiteboard" only where whiteboards can be shown.
+        if crate::pages::engine(cx).is_some() {
+            root = root.on_action(cx.listener(Self::on_new_board));
+        }
         root.key_context(KEY_CONTEXT)
             .track_focus(&self.focus_handle(cx))
             .on_action(cx.listener(Self::on_toggle_palette))

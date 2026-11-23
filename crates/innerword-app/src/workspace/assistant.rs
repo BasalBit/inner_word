@@ -105,6 +105,8 @@ struct OpenRef {
 struct OpenPage {
     source_url: Option<String>,
     text: Rc<str>,
+    /// A whiteboard: `text` is the listing of its elements.
+    board: bool,
 }
 
 /// The assistant as one workspace holds it.
@@ -241,6 +243,7 @@ fn open_document(open: &OpenRef, editor: &Editor, library: &Library) -> OpenDocu
     let mut path = library.folder_path(folder);
     path.push(open.title.clone());
     let (markdown, kind) = match &open.page {
+        Some(page) if page.board => (page.text.to_string(), OpenKind::Board),
         Some(page) => (
             page.text.to_string(),
             OpenKind::Page {
@@ -488,9 +491,19 @@ impl Workspace {
             (None, Some(page)) => Some(OpenRef {
                 id: page.id,
                 title: self.display_title(),
-                page: Some(OpenPage {
-                    source_url: page.source_url.clone(),
-                    text: Rc::from(page.manifest.text.as_str()),
+                page: Some(match page.page_item() {
+                    Some(item) => OpenPage {
+                        source_url: item.source_url.clone(),
+                        text: Rc::from(item.manifest.text.as_str()),
+                        board: false,
+                    },
+                    // A whiteboard: the listing of its elements as the app
+                    // holds them.
+                    None => OpenPage {
+                        source_url: None,
+                        text: Rc::from(self.board_listing_text(cx).as_str()),
+                        board: true,
+                    },
                 }),
             }),
             (None, None) => None,

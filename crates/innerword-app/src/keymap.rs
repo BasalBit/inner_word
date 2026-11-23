@@ -146,7 +146,9 @@ pub fn places() -> Places {
     let mut places = Places::new()
         .typing(EDITOR)
         .typing(FIELD)
-        .typing(crate::pages::PAGE_VIEW);
+        .typing(crate::pages::PAGE_VIEW)
+        // A whiteboard: Excalidraw's tool letters and typing into a text.
+        .typing(crate::boards::BOARD_VIEW);
     // The find strip of a page is the find bar, inside the page.
     places = places.inside(tools::FIND_BAR_CONTEXT, crate::pages::PAGE_VIEW);
     // The tools are only around the text: "Find" and "Add or edit link"
@@ -510,9 +512,23 @@ fn install(cx: &mut App) {
         .try_global::<AppKeymap>()
         .map(|keymap| effective_bindings(keymap, cx))
         .unwrap_or_default();
-    let for_menus = menus::menu_key_bindings(&Keymap::new(effective.clone()));
+    let for_menus =
+        menus::menu_key_bindings(&Keymap::new(effective.clone()), menus::open_item(cx));
     cx.clear_key_bindings();
-    cx.bind_keys(for_menus.into_iter().chain(effective));
+    // The whiteboard's own keys last: fixed, after every other binding
+    // (`crate::boards::fixed_key_bindings`).
+    cx.bind_keys(
+        for_menus
+            .into_iter()
+            .chain(effective)
+            .chain(crate::boards::fixed_key_bindings()),
+    );
+}
+
+/// Installs the keymap as it is once more (the menu bar's bindings follow
+/// what is open: a whiteboard keeps its own keys out of the menu bar).
+pub fn reinstall(cx: &mut App) {
+    install(cx);
 }
 
 /// What installing the keymap costs, part by part ([`measure_install`]).
@@ -540,11 +556,13 @@ pub fn measure_install(cx: &mut App) -> Option<InstallCost> {
     let after_effective = Instant::now();
     cx.global_mut::<AppKeymap>().effective = effective;
     let effective = effective_bindings(cx.global::<AppKeymap>(), cx);
-    let for_menus = menus::menu_key_bindings(&Keymap::new(effective.clone()));
-    let bindings = effective.len() + for_menus.len();
+    let for_menus =
+        menus::menu_key_bindings(&Keymap::new(effective.clone()), menus::open_item(cx));
+    let fixed = crate::boards::fixed_key_bindings();
+    let bindings = effective.len() + for_menus.len() + fixed.len();
     let after_build = Instant::now();
     cx.clear_key_bindings();
-    cx.bind_keys(for_menus.into_iter().chain(effective));
+    cx.bind_keys(for_menus.into_iter().chain(effective).chain(fixed));
     let after_bind = Instant::now();
     menus::install(cx);
     let after_menus = Instant::now();

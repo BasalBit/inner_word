@@ -162,13 +162,13 @@ pub(crate) enum PageViewHandle {
 }
 
 impl PageViewHandle {
-    fn set_frame(&self, bounds: Bounds<Pixels>) {
+    pub(crate) fn set_frame(&self, bounds: Bounds<Pixels>) {
         if let PageViewHandle::WebKit(view) = self {
             view.set_frame(rect_of(bounds));
         }
     }
 
-    fn set_hidden(&self, hidden: bool) {
+    pub(crate) fn set_hidden(&self, hidden: bool) {
         match self {
             PageViewHandle::WebKit(view) => view.set_hidden(hidden),
             PageViewHandle::Fake(view) => view.set_hidden(hidden),
@@ -252,14 +252,14 @@ impl PageViewHandle {
         }
     }
 
-    fn edit(&self, command: WebEdit) {
+    pub(crate) fn edit(&self, command: WebEdit) {
         match self {
             PageViewHandle::WebKit(view) => view.edit(command),
             PageViewHandle::Fake(view) => view.edit(command),
         }
     }
 
-    fn reload(&self) {
+    pub(crate) fn reload(&self) {
         match self {
             PageViewHandle::WebKit(view) => view.reload(),
             PageViewHandle::Fake(view) => view.reload(),
@@ -282,6 +282,21 @@ impl PageViewHandle {
         }
     }
 
+    /// Runs the glue's call `body` with `argument` (a whiteboard's view);
+    /// `done` is called later (from inside AppKit for WebKit: it may only
+    /// post).
+    pub(crate) fn call(
+        &self,
+        body: &str,
+        argument: &str,
+        done: impl FnOnce(Result<String, String>) + 'static,
+    ) {
+        match self {
+            PageViewHandle::WebKit(view) => view.call_async(body, argument, done),
+            PageViewHandle::Fake(view) => view.call(body, argument, done),
+        }
+    }
+
     pub(crate) fn as_webkit(&self) -> Option<&innerword_web::WebPage> {
         match self {
             PageViewHandle::WebKit(view) => Some(view),
@@ -291,8 +306,12 @@ impl PageViewHandle {
 }
 
 /// What makes the view of the open page at its first frame.
-enum ViewSeed {
-    WebKit(innerword_web::ViewConfig, Rc<dyn innerword_web::PageEvents>),
+pub(crate) enum ViewSeed {
+    WebKit(
+        innerword_web::ViewConfig,
+        innerword_web::ViewExtras,
+        Rc<dyn innerword_web::PageEvents>,
+    ),
     Fake(FakeView),
 }
 
@@ -310,14 +329,28 @@ pub(crate) struct FindStrip {
     _subscription: Subscription,
 }
 
-/// An open page.
-pub(crate) struct PageSession {
-    pub id: DocumentId,
-    pub title: String,
+/// What an open web item is: a page, or a whiteboard.
+pub(crate) enum WebItem {
+    Page(PageItem),
+    Board(Box<super::board::BoardState>),
+}
+
+/// The page half of an open web item.
+pub(crate) struct PageItem {
     pub source_url: Option<String>,
     /// Read once when the page opens.
     pub manifest: Manifest,
     pub words: u64,
+    /// Files of the manifest the library does not have.
+    pub missing: usize,
+}
+
+/// An open web item: a page or a whiteboard, shown by the view pages have.
+pub(crate) struct PageSession {
+    pub id: DocumentId,
+    pub title: String,
+    /// What it is.
+    pub item: WebItem,
     /// Made at the first prepaint.
     pub view: SharedView,
     seed: Rc<RefCell<Option<ViewSeed>>>,
@@ -336,8 +369,6 @@ pub(crate) struct PageSession {
     to_drop: Rc<RefCell<Vec<Arc<RenderImage>>>>,
     /// The appearance the view was given last.
     appearance: Option<(Appearance, (f64, f64, f64))>,
-    /// Files of the manifest the library does not have.
-    pub missing: usize,
     /// Who waits for the page to have loaded (`page:wait`).
     loaded_waiters: Vec<pages::AnswerTx<()>>,
     /// The bounds of the element in the last frame.
@@ -364,6 +395,19 @@ impl Drop for PageSession {
 }
 
 impl PageSession {
+    /// The page half, when it is a page.
+    pub(crate) fn page_item(&self) -> Option<&PageItem> {
+        match &self.item {
+            WebItem::Page(page) => Some(page),
+            WebItem::Board(_) => None,
+        }
+    }
+
+    /// Whether it is a whiteboard.
+    pub(crate) fn is_board(&self) -> bool {
+        matches!(self.item, WebItem::Board(_))
+    }
+
     /// Hands every picture of the page that GPUI may hold in its atlas to
     /// `Window::drop_image`: the snapshot drawn while an overlay is over the
     /// page and the ones waiting for the next prepaint. Called before the
@@ -372,7 +416,7 @@ impl PageSession {
     /// library search, a row's menu or the version history, over the
     /// snapshot), and each left behind is a texture the size of the page
     /// for the life of the window.
-    fn release_pictures(&mut self, window: &mut Window) {
+    pub(crate) fn release_pictures(&mut self, window: &mut Window) {
         let mut pictures: Vec<Arc<RenderImage>> = self.to_drop.borrow_mut().drain(..).collect();
         if let Overlay::Snapshot(image) = std::mem::take(&mut self.overlay) {
             pictures.push(image);
@@ -466,7 +510,10 @@ impl Workspace {
 
     /// The manifest of the open page.
     pub fn page_manifest(&self) -> Option<&Manifest> {
-        self.page.as_ref().map(|page| &page.manifest)
+        self.page
+            .as_ref()
+            .and_then(PageSession::page_item)
+            .map(|page| &page.manifest)
     }
 
     /// The state of the view of the open page.
@@ -476,7 +523,10 @@ impl Workspace {
 
     /// The zoom of the open page, in percent.
     pub fn page_zoom(&self) -> Option<u16> {
-        self.page.as_ref().map(|page| page.zoom)
+        self.page
+            .as_ref()
+            .filter(|page| !page.is_board())
+            .map(|page| page.zoom)
     }
 
     /// The focus handle of the open page's element.
@@ -499,10 +549,16 @@ impl Workspace {
 
     /// Whether the item `id` is a page, by the library's row.
     pub(crate) fn is_page(&self, id: DocumentId, cx: &App) -> bool {
+        self.kind_of(id, cx) == Some(DocumentKind::Page)
+    }
+
+    /// The kind of the item `id`, by the library's row.
+    pub(crate) fn kind_of(&self, id: DocumentId, cx: &App) -> Option<DocumentKind> {
         self.library
             .read(cx)
             .document_meta(id)
-            .is_ok_and(|meta| meta.kind == DocumentKind::Page)
+            .ok()
+            .map(|meta| meta.kind)
     }
 
     // ----- opening and closing -----------------------------------------------------
@@ -551,39 +607,27 @@ impl Workspace {
                 return false;
             }
         };
-        // The text that was open is saved and closed; the editor holds an
+        // The item that was open is saved and closed; the editor holds an
         // empty, read-only document while the page is open.
-        let had_text_focus = self.editor.read(cx).is_focused(window);
-        self.close_text_for_page(cx);
-        self.discard_page(window);
-        let focus = cx.focus_handle();
-        if had_text_focus {
-            window.focus(&focus);
-        }
+        let focus = self.leave_for_web_item(window, cx);
         let missing = pages::missing_files(self.library.read(cx), &manifest);
-        let inbox: SharedInbox = Rc::default();
-        let keys = Rc::new(RefCell::new(PageKeys::default()));
-        let events: Rc<dyn innerword_web::PageEvents> = Rc::new(ViewEvents {
-            inbox: inbox.clone(),
-            keys: keys.clone(),
-        });
+        let (inbox, keys, events) = web_plumbing(PageKeys::default());
         let theme = appearance_for(self.settings.theme, cx);
         let engine = pages::engine(cx);
         let seed = match &engine {
             Some(PageEngine::WebKit) => {
                 let library = self.library.read(cx);
                 let source = pages::LibraryPageSource::of(library, &manifest);
-                let rules_dir = pages::rules_dir_of(library.path())
-                    .unwrap_or_else(|| std::env::temp_dir().join("inner-word-WebKit"));
                 Some(ViewSeed::WebKit(
                     innerword_web::ViewConfig {
                         host: pages::page_host(id, stored.meta.created_at),
                         entry: manifest.entry.clone(),
                         source,
-                        rules_dir,
+                        rules_dir: self.web_rules_dir(cx),
                         appearance: theme.0,
                         background: theme.1,
                     },
+                    innerword_web::ViewExtras::default(),
                     events,
                 ))
             }
@@ -598,8 +642,94 @@ impl Workspace {
             ))),
             None => None,
         };
-        let fake = match &engine {
-            Some(PageEngine::Fake(fake)) => Some(fake.clone()),
+        let state = if engine.is_some() {
+            PageState::Loading
+        } else {
+            PageState::Failed(pages::not_shown_sentence(cx))
+        };
+        let item = WebItem::Page(PageItem {
+            source_url: stored.meta.source_url.clone(),
+            manifest,
+            words: stored.meta.word_count,
+            missing,
+        });
+        self.install_web_session(
+            WebSessionParts {
+                id,
+                title: stored.meta.title.clone(),
+                item,
+                seed,
+                state,
+                focus,
+                inbox,
+                keys,
+                theme,
+            },
+            window,
+            cx,
+        );
+        if missing > 0 {
+            self.show_toast(
+                Toast::new(format!(
+                    "Some files of “{}” are missing from the library ({missing}). The page may \
+                     not show as it did.",
+                    super::session_title(&stored.meta.title)
+                ))
+                .duration(Duration::from_secs(10)),
+                cx,
+            );
+        }
+        true
+    }
+
+    /// Where the rule list of a view is compiled and kept.
+    pub(crate) fn web_rules_dir(&self, cx: &App) -> std::path::PathBuf {
+        pages::rules_dir_of(self.library.read(cx).path())
+            .unwrap_or_else(|| std::env::temp_dir().join("inner-word-WebKit"))
+    }
+
+    /// The open item is saved and closed for a web item that opens: the text
+    /// (the editor holds an empty, read-only document), or the web item (a
+    /// whiteboard's end asks its page first). Returns the focus handle of
+    /// the new item's element, which has the keyboard when the text had it.
+    pub(crate) fn leave_for_web_item(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> gpui::FocusHandle {
+        let had_text_focus = self.editor.read(cx).is_focused(window);
+        let had_web_focus = self.page_has_focus(window);
+        self.close_text_for_page(cx);
+        self.discard_page(window, cx);
+        let focus = cx.focus_handle();
+        if had_text_focus || had_web_focus {
+            window.focus(&focus);
+        }
+        focus
+    }
+
+    /// Puts the web item `parts` in the window: the task that drains its
+    /// view's inbox, the session, the keys it hands on, the sidebar's row,
+    /// the last open item, the title, the assistant.
+    pub(crate) fn install_web_session(
+        &mut self,
+        parts: WebSessionParts,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let WebSessionParts {
+            id,
+            title,
+            item,
+            seed,
+            state,
+            focus,
+            inbox,
+            keys,
+            theme,
+        } = parts;
+        let fake = match pages::engine(cx) {
+            Some(PageEngine::Fake(fake)) => Some(fake),
             _ => None,
         };
         let task_inbox = inbox.clone();
@@ -629,17 +759,11 @@ impl Workspace {
         });
         self.page = Some(PageSession {
             id,
-            title: stored.meta.title.clone(),
-            source_url: stored.meta.source_url.clone(),
-            manifest,
-            words: stored.meta.word_count,
+            title,
+            item,
             view: Rc::default(),
             seed: Rc::new(RefCell::new(seed)),
-            state: if engine.is_some() {
-                PageState::Loading
-            } else {
-                PageState::Failed(pages::not_shown_sentence(cx))
-            },
+            state,
             zoom: 100,
             find: None,
             overlay: Overlay::None,
@@ -648,7 +772,6 @@ impl Workspace {
             keys,
             to_drop: Rc::default(),
             appearance: Some(theme),
-            missing,
             loaded_waiters: Vec::new(),
             bounds: Rc::default(),
             fake,
@@ -670,28 +793,24 @@ impl Workspace {
             })
             .ok();
         self.update_window_title(window);
-        if missing > 0 {
-            self.show_toast(
-                Toast::new(format!(
-                    "Some files of “{}” are missing from the library ({missing}). The page may \
-                     not show as it did.",
-                    super::session_title(&stored.meta.title)
-                ))
-                .duration(Duration::from_secs(10)),
-                cx,
-            );
-        }
         self.assistant_document_changed(window, cx);
         cx.emit(WorkspaceEvent::DocumentOpened(id));
         cx.notify();
-        true
     }
 
-    /// Drops the session of the open page, its pictures handed back to the
-    /// window first ([`PageSession::release_pictures`]). Every way a page
-    /// session ends goes through here.
-    fn discard_page(&mut self, window: &mut Window) {
-        if let Some(mut page) = self.page.take() {
+    /// Ends the session of the open web item, its pictures handed back to
+    /// the window first ([`PageSession::release_pictures`]). Every way such a
+    /// session ends goes through here. A whiteboard's end saves what the app
+    /// holds of it, and asks its page first when it holds more
+    /// (`board.rs`, `end_board_session`).
+    pub(crate) fn discard_page(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(mut page) = self.page.take() else {
+            return;
+        };
+        if page.is_board() {
+            crate::menus::set_open_item(crate::menus::OpenItemKind::Other, cx);
+            self.end_board_session(page, window, cx);
+        } else {
             page.release_pictures(window);
         }
     }
@@ -721,7 +840,7 @@ impl Workspace {
         if page.focus.contains_focused(window, cx) {
             window.focus(&self.focus_handle);
         }
-        self.discard_page(window);
+        self.discard_page(window, cx);
         if self.session.is_none() {
             self.panel
                 .update(cx, |panel, cx| panel.set_active_document(None, cx));
@@ -760,22 +879,38 @@ impl Workspace {
         let Some(page) = self.page.as_ref().filter(|page| page.id == id) else {
             return;
         };
+        // A whiteboard's own save is no outside change: it neither adopts nor
+        // reloads. Outside changes reach an open whiteboard through an
+        // agent's request or a restored version, which adopt (`board.rs`),
+        // and a save that meets one adopts it (compare-and-swap).
+        let Some(item) = page.page_item() else {
+            if let Ok(meta) = self.library.read(cx).document_meta(id)
+                && let Some(page) = self.page.as_mut()
+            {
+                page.title = meta.title;
+            }
+            self.update_window_title(window);
+            cx.notify();
+            return;
+        };
         let Ok(stored) = self.library.read(cx).document(id) else {
             return;
         };
         let title = stored.meta.title.clone();
-        if Manifest::from_json(&stored.content).is_ok_and(|manifest| manifest == page.manifest) {
+        if Manifest::from_json(&stored.content).is_ok_and(|manifest| manifest == item.manifest) {
             // Only the row changed (a rename, a move).
             if let Some(page) = self.page.as_mut() {
                 page.title = title;
-                page.source_url = stored.meta.source_url.clone();
+                if let WebItem::Page(item) = &mut page.item {
+                    item.source_url = stored.meta.source_url.clone();
+                }
             }
             self.update_window_title(window);
             cx.notify();
             return;
         }
         let had_focus = self.page_has_focus(window);
-        self.discard_page(window);
+        self.discard_page(window, cx);
         if self.load_page(id, window, cx)
             && had_focus
             && let Some(focus) = self.page_focus_handle()
@@ -816,13 +951,20 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // A whiteboard that is closing still hands over its scene.
+        if let PageEvent::Board(message) = event {
+            self.on_board_message(id, message, window, cx);
+            return;
+        }
         if self.open_page_id() != Some(id) {
             return;
         }
+        let board = self.page.as_ref().is_some_and(PageSession::is_board);
         match event {
             PageEvent::Loaded => {
                 if let Some(page) = self.page.as_mut() {
-                    if !matches!(page.state, PageState::Crashed { again: true, .. }) {
+                    // A whiteboard is loaded once its page posted `ready`.
+                    if !board && !matches!(page.state, PageState::Crashed { again: true, .. }) {
                         page.state = PageState::Loaded;
                     }
                     for waiter in page.loaded_waiters.drain(..) {
@@ -848,7 +990,12 @@ impl Workspace {
                     page.state = PageState::Failed(message);
                 }
             }
-            PageEvent::Crashed => self.page_crashed(),
+            PageEvent::Crashed => {
+                if board {
+                    self.board_crashed(cx);
+                }
+                self.page_crashed();
+            }
             PageEvent::WantsFocus => {
                 if let Some(focus) = self.page_focus_handle()
                     && !focus.is_focused(window)
@@ -858,6 +1005,7 @@ impl Workspace {
                 }
             }
             PageEvent::OpenExternally(url) => cx.open_url(&url),
+            PageEvent::Alert(_) if board => {}
             PageEvent::Alert(message) => {
                 self.show_toast(
                     Toast::new(format!("The page says: {message}"))
@@ -887,6 +1035,7 @@ impl Workspace {
             }
             // Dispatched by the task, outside this update.
             PageEvent::KeyHandedOn(_) => {}
+            PageEvent::Board(_) => {}
         }
         cx.notify();
     }
@@ -1083,7 +1232,9 @@ impl Workspace {
         let Some(page) = self.page.as_ref() else {
             return;
         };
-        let has_source = page.source_url.is_some();
+        let has_source = page
+            .page_item()
+            .is_some_and(|item| item.source_url.is_some());
         let item =
             |title: &str, action: Box<dyn Action>, enabled: bool, separator: bool| PageMenuItem {
                 title: title.to_string(),
@@ -1092,7 +1243,10 @@ impl Workspace {
                 separator_before: separator,
                 action,
             };
-        let menu = vec![
+        // A whiteboard: Excalidraw draws its own right-click menu and stops
+        // WebKit's; the app's items are in the title menu and `ctrl-enter`.
+        let board = page.is_board();
+        let menu = if board { Vec::new() } else { vec![
             item("Find in Page…", Box::new(tools::Find), true, true),
             item(
                 "Reload Page",
@@ -1120,7 +1274,7 @@ impl Workspace {
                 true,
                 false,
             ),
-        ];
+        ] };
         let version = cx.key_bindings().borrow().version();
         let mut keys = page.keys.borrow_mut();
         keys.refresh_keys(cx);
@@ -1274,12 +1428,17 @@ impl Workspace {
                     && let Some(seed) = seed.borrow_mut().take()
                 {
                     let made = match seed {
-                        ViewSeed::WebKit(config, events) => native.map(|native| {
+                        ViewSeed::WebKit(config, extras, events) => native.map(|native| {
                             // SAFETY: the NSView behind this window, on the
                             // main thread; `pages::use_webkit` asked
                             // `innerword_web::available` before installing.
                             let web = unsafe {
-                                innerword_web::WebPage::new(native.as_ptr(), config, events)
+                                innerword_web::WebPage::new_with(
+                                    native.as_ptr(),
+                                    config,
+                                    extras,
+                                    events,
+                                )
                             };
                             if draw_when_covered {
                                 pages::keep_drawing_when_covered(web.native_view());
@@ -1318,6 +1477,11 @@ impl Workspace {
         .size_full();
 
         let title = super::session_title(&page.title);
+        let is_board = page.is_board();
+        let page_text = page
+            .page_item()
+            .map(|item| item.manifest.text.clone())
+            .unwrap_or_default();
         let mut area = div()
             .id("page-area")
             .debug_selector(|| "page-area".into())
@@ -1329,6 +1493,32 @@ impl Workspace {
             .bg(colors.canvas);
         // What stands in for the view, or the fake engine's drawing.
         let stand_in: Option<AnyElement> = match (&page.state, page.fake.is_some()) {
+            (PageState::Crashed { again: true, .. }, _) if is_board => Some(
+                div()
+                    .size_full()
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .justify_center()
+                    .gap(SPACE_3)
+                    .child(div().text_color(colors.muted).child(super::board::BOARD_STOPPED))
+                    .child(
+                        Button::new("board-reload", "Reload").on_click(|_, window, cx| {
+                            window.dispatch_action(Box::new(crate::actions::ReloadPage), cx);
+                        }),
+                    )
+                    .into_any_element(),
+            ),
+            (PageState::Failed(message), false) if is_board => Some(super::board::render_listing(
+                self.board_listing_text(cx),
+                Some(message.clone()),
+                cx,
+            )),
+            (_, true) if is_board => Some(super::board::render_listing(
+                self.board_listing_text(cx),
+                None,
+                cx,
+            )),
             (PageState::Crashed { again: true, .. }, _) => Some(
                 div()
                     .size_full()
@@ -1346,9 +1536,9 @@ impl Workspace {
                     .into_any_element(),
             ),
             (PageState::Failed(message), false) => {
-                Some(self.render_page_text_column(Some(message.clone()), &page.manifest.text, cx))
+                Some(self.render_page_text_column(Some(message.clone()), &page_text, cx))
             }
-            (_, true) => Some(self.render_page_text_column(None, &page.manifest.text, cx)),
+            (_, true) => Some(self.render_page_text_column(None, &page_text, cx)),
             _ if failed_snapshot => Some(
                 div()
                     .size_full()
@@ -1379,6 +1569,30 @@ impl Workspace {
                     }
                 }),
             );
+        if is_board {
+            return div()
+                .id("board")
+                .debug_selector(|| "board".into())
+                .key_context(crate::boards::BOARD_VIEW)
+                .track_focus(&page.focus)
+                .size_full()
+                .flex()
+                .flex_col()
+                .on_action(cx.listener(|this, _: &super::board::OpenContextMenu, window, cx| {
+                    this.open_board_menu(window, cx)
+                }))
+                .on_action(cx.listener(|this, _: &tools::Find, _, _| this.search_board(None)))
+                // Files dropped on the whiteboard: the web view takes no drops,
+                // so they reach GPUI's view: pictures go onto the canvas, web
+                // pages are added as pages.
+                .on_drop::<gpui::ExternalPaths>(cx.listener(
+                    |this, paths: &gpui::ExternalPaths, window, cx| {
+                        this.files_dropped_on_board(paths.paths().to_vec(), window, cx);
+                    },
+                ))
+                .child(area)
+                .into_any_element();
+        }
         div()
             .id("page")
             .key_context(PAGE_VIEW)
@@ -1512,7 +1726,9 @@ impl Workspace {
             .get()
             .map(|bounds| bounds.origin + point(px(8.), px(8.)))
             .unwrap_or_default();
-        let has_source = page.source_url.is_some();
+        let has_source = page
+            .page_item()
+            .is_some_and(|item| item.source_url.is_some());
         let mut items = Vec::new();
         if let Some(link) = link {
             items.push(ContextMenuItem::new(
@@ -1811,7 +2027,7 @@ impl Workspace {
     /// selection, or on a field of the page). Returns whether the page took
     /// the command (the page element has the keyboard).
     pub(crate) fn edit_on_page(&mut self, command: EditCommand, window: &Window) -> bool {
-        let Some(page) = self.page.as_ref() else {
+        let Some(page) = self.page.as_ref().filter(|page| !page.is_board()) else {
             return false;
         };
         if !page.focus.is_focused(window) {
@@ -1890,6 +2106,9 @@ impl Workspace {
         if self.page.is_none() {
             return root;
         }
+        if self.open_board_id().is_some() {
+            return self.board_actions(root, cx);
+        }
         fn say<A: Action>(
             root: gpui::Stateful<gpui::Div>,
             sentence: &'static str,
@@ -1953,7 +2172,12 @@ impl Workspace {
 
     /// "Copy page address": the address the page came from, on the clipboard.
     pub(crate) fn copy_page_address(&mut self, cx: &mut Context<Self>) {
-        let Some(address) = self.page.as_ref().and_then(|page| page.source_url.clone()) else {
+        let Some(address) = self
+            .page
+            .as_ref()
+            .and_then(PageSession::page_item)
+            .and_then(|item| item.source_url.clone())
+        else {
             self.say_about_page("This page has no address: it was added from a file.", cx);
             return;
         };
@@ -1967,7 +2191,12 @@ impl Workspace {
     /// "Open page address in browser": the address the page came from, in
     /// the default browser.
     pub(crate) fn open_page_address(&mut self, cx: &mut Context<Self>) {
-        let Some(address) = self.page.as_ref().and_then(|page| page.source_url.clone()) else {
+        let Some(address) = self
+            .page
+            .as_ref()
+            .and_then(PageSession::page_item)
+            .and_then(|item| item.source_url.clone())
+        else {
             self.say_about_page("This page has no address: it was added from a file.", cx);
             return;
         };
@@ -2064,7 +2293,7 @@ impl Workspace {
     /// `id=12 state=loaded zoom=100% overlay=none focus=page responder=web
     /// find="harbour":found missing=0`, or `none`.
     pub fn describe_page(&self, window: &Window, cx: &App) -> String {
-        let Some(page) = self.page.as_ref() else {
+        let Some(page) = self.page.as_ref().filter(|page| !page.is_board()) else {
             return "none".to_string();
         };
         let state = match &page.state {
@@ -2107,7 +2336,9 @@ impl Workspace {
         format!(
             "id={} state={state} zoom={}% overlay={overlay} focus={focus} responder={responder}{find} \
              missing={}",
-            page.id.0, page.zoom, page.missing
+            page.id.0,
+            page.zoom,
+            page.page_item().map_or(0, |item| item.missing)
         )
     }
 
@@ -2115,6 +2346,7 @@ impl Workspace {
     pub(crate) fn page_words(&self) -> Option<String> {
         self.page
             .as_ref()
+            .and_then(PageSession::page_item)
             .map(|page| super::counted(page.words as usize, "word", "words"))
     }
 }
@@ -2148,4 +2380,41 @@ pub(crate) async fn print_view(view: &SharedView) -> Result<innerword_web::Print
     start_printing(view, tx);
     rx.await
         .unwrap_or_else(|| Err("the print was not finished".to_string()))
+}
+
+/// What [`Workspace::install_web_session`] puts in the window.
+pub(crate) struct WebSessionParts {
+    pub id: DocumentId,
+    pub title: String,
+    pub item: WebItem,
+    pub seed: Option<ViewSeed>,
+    pub state: PageState,
+    pub focus: gpui::FocusHandle,
+    pub inbox: SharedInbox,
+    pub keys: Rc<RefCell<PageKeys>>,
+    pub theme: (Appearance, (f64, f64, f64)),
+}
+
+/// The inbox of a new view, the keys it asks about, and what WebKit tells
+/// it (posted to the inbox).
+pub(crate) fn web_plumbing(
+    keys: PageKeys,
+) -> (
+    SharedInbox,
+    Rc<RefCell<PageKeys>>,
+    Rc<dyn innerword_web::PageEvents>,
+) {
+    let inbox: SharedInbox = Rc::default();
+    let keys = Rc::new(RefCell::new(keys));
+    let events: Rc<dyn innerword_web::PageEvents> = Rc::new(ViewEvents {
+        inbox: inbox.clone(),
+        keys: keys.clone(),
+    });
+    (inbox, keys, events)
+}
+
+/// The appearance and the colour under the view for the app's theme (for
+/// a whiteboard's view too).
+pub(crate) fn theme_for(mode: ThemeMode, cx: &App) -> (Appearance, (f64, f64, f64)) {
+    appearance_for(mode, cx)
 }

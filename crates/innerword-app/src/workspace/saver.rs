@@ -246,3 +246,227 @@ fn write(
         .cloned();
     Ok((meta, view_state))
 }
+
+// ----- whiteboards ---------------------------------------------------------------------
+
+/// What a picture of a whiteboard is, for a save: its stored bytes and their
+/// type, by Excalidraw's file id.
+pub(crate) type StoredPictures =
+    std::collections::HashMap<String, (innerword_board::FileHex, String)>;
+
+/// A whiteboard's scene made into what the library stores.
+pub(crate) struct PreparedBoard {
+    /// The stored scene (`Scene::to_stored`).
+    pub scene: String,
+    /// The `FileId`s it names.
+    pub files: Vec<innerword_library::store::FileId>,
+    pub plain_text: String,
+    pub words: u64,
+    pub characters: u64,
+}
+
+impl PreparedBoard {
+    /// The content of a save of it.
+    pub fn content(&self) -> innerword_library::store::BoardContent<'_> {
+        innerword_library::store::BoardContent {
+            scene: &self.scene,
+            files: &self.files,
+            plain_text: &self.plain_text,
+            word_count: self.words,
+            char_count: self.characters,
+        }
+    }
+}
+
+/// Why a posted scene was not made into a stored one.
+pub(crate) enum NotPrepared {
+    /// It names pictures the app does not know (their Excalidraw ids): the
+    /// page is asked for them first.
+    NeedsFiles(Vec<String>),
+    /// It cannot be saved at all (not JSON, no scene, over the hard cap):
+    /// the reason, for the recovery file.
+    Unsaveable(String),
+}
+
+/// Makes the scene the page posted (`json`) into what the library stores:
+/// `Scene::from_view` with the pictures the app has stored (`stored`), and
+/// `known` the ids the app knows at all (a picture it knows as missing or
+/// refused is left out of `files`, its element stays). The work of a
+/// whiteboard's save, on whichever thread saves.
+pub(crate) fn prepare_board(
+    json: &str,
+    stored: &StoredPictures,
+    known: &std::collections::HashSet<String>,
+) -> Result<PreparedBoard, NotPrepared> {
+    let lookup = |id: &str| stored.get(id).cloned();
+    let parsed = innerword_board::Scene::from_view(json, &lookup)
+        .map_err(|error| NotPrepared::Unsaveable(error.to_string()))?;
+    for warning in &parsed.warnings {
+        eprintln!("Inner Word: a whiteboard's scene: {warning}");
+    }
+    let unknown: Vec<String> = parsed
+        .scene
+        .named_file_ids()
+        .into_iter()
+        .filter(|id| !known.contains(id) && !stored.contains_key(id))
+        .collect();
+    if !unknown.is_empty() {
+        return Err(NotPrepared::NeedsFiles(unknown));
+    }
+    Ok(prepared_of(&parsed.scene))
+}
+
+/// What the library stores of `scene`.
+pub(crate) fn prepared_of(scene: &innerword_board::Scene) -> PreparedBoard {
+    let plain_text = scene.text();
+    let stats = innerword_core::Fragment::from_plain_text(&plain_text)
+        .to_document()
+        .stats();
+    PreparedBoard {
+        scene: scene.to_stored(),
+        files: scene
+            .stored_files()
+            .iter()
+            .filter_map(|hex| innerword_library::store::FileId::parse(hex.as_str()))
+            .collect(),
+        plain_text,
+        words: stats.words as u64,
+        characters: stats.characters as u64,
+    }
+}
+
+/// Everything a background save of a whiteboard needs, taken on the main
+/// thread: the raw scene the page posted (it is parsed only here).
+pub(crate) struct BoardSaveJob {
+    pub seq: u64,
+    pub id: DocumentId,
+    /// The rev of the posted scene.
+    pub rev: u64,
+    pub json: Arc<str>,
+    pub stored: StoredPictures,
+    pub known: std::collections::HashSet<String>,
+    /// The stamp of the stored scene the view's scene descends from.
+    pub expect: innerword_library::store::ContentStamp,
+    /// Where the writer looked, to store with it.
+    pub view_state: Option<String>,
+    pub snapshot_interval: Duration,
+}
+
+/// What a background save of a whiteboard did.
+pub(crate) enum BoardSaveOutcome {
+    Saved {
+        meta: DocumentMeta,
+        stamp: innerword_library::store::ContentStamp,
+        /// The stored scene that was written.
+        scene: Arc<str>,
+        files: Vec<String>,
+        view_state: Option<String>,
+        duration: Duration,
+    },
+    /// See [`NotPrepared::NeedsFiles`]; nothing was written.
+    NeedsFiles(Vec<String>),
+    /// The row changed under the view (`StoreError::Stale`); nothing was
+    /// written.
+    Stale,
+    /// The scene cannot be saved (the reason); nothing was written.
+    Unsaveable(String),
+    Superseded,
+    Failed(String),
+}
+
+impl Saver {
+    /// The work of `job` for a background thread; `None` when this saver is
+    /// synchronous.
+    pub fn work_board(
+        &self,
+        job: BoardSaveJob,
+    ) -> Option<impl FnOnce() -> BoardSaveOutcome + Send + 'static> {
+        let background = self.background.clone()?;
+        Some(move || {
+            let started = Instant::now();
+            let prepared = match prepare_board(&job.json, &job.stored, &job.known) {
+                Ok(prepared) => prepared,
+                Err(NotPrepared::NeedsFiles(ids)) => return BoardSaveOutcome::NeedsFiles(ids),
+                Err(NotPrepared::Unsaveable(why)) => return BoardSaveOutcome::Unsaveable(why),
+            };
+            let mut background = lock(&background);
+            if job.seq < background.cancel_before {
+                return BoardSaveOutcome::Superseded;
+            }
+            let store = &mut background.store;
+            match store.save_board(job.id, &prepared.content(), Some(job.expect)) {
+                Ok(saved) => {
+                    if let Err(error) = store.snapshot_if_stale(job.id, job.snapshot_interval) {
+                        eprintln!("Inner Word: could not take a version snapshot: {error}");
+                    }
+                    let view_state = job
+                        .view_state
+                        .as_ref()
+                        .filter(|json| store.save_view_state(job.id, json).is_ok())
+                        .cloned();
+                    BoardSaveOutcome::Saved {
+                        meta: saved.meta,
+                        stamp: saved.stamp,
+                        files: prepared.files.iter().map(|id| id.to_hex()).collect(),
+                        scene: Arc::from(prepared.scene),
+                        view_state,
+                        duration: started.elapsed(),
+                    }
+                }
+                Err(innerword_library::StoreError::Stale { .. }) => BoardSaveOutcome::Stale,
+                Err(error) => BoardSaveOutcome::Failed(error.to_string()),
+            }
+        })
+    }
+
+    /// The work of storing the shape library (`items`: what the glue
+    /// posted) for a background thread; `None` when this saver is
+    /// synchronous. The answer is the stored form that was written, or why
+    /// nothing was.
+    pub fn work_shape_library(
+        &self,
+        seq: u64,
+        items: Arc<str>,
+    ) -> Option<impl FnOnce() -> Result<Option<String>, String> + Send + 'static> {
+        let background = self.background.clone()?;
+        Some(move || {
+            let stored = shape_library_to_store(&items)?;
+            let mut background = lock(&background);
+            if seq < background.cancel_before {
+                return Ok(None);
+            }
+            let raw = serde_json::value::RawValue::from_string(stored.clone())
+                .map_err(|error| error.to_string())?;
+            background
+                .store
+                .set_setting(crate::boards::SHAPE_LIBRARY_SETTING, &raw)
+                .map_err(|error| error.to_string())?;
+            Ok(Some(stored))
+        })
+    }
+}
+
+/// The stored form of the shape library the glue posted (`items`), or why
+/// it is not stored: not readable, or over the limits (8 MB stored, 1,000
+/// items).
+pub(crate) fn shape_library_to_store(items: &str) -> Result<String, String> {
+    use innerword_board::limits::{MAX_LIBRARY_BYTES, MAX_LIBRARY_ITEMS};
+    let parsed = innerword_board::ShapeLibrary::from_view(items).map_err(|error| match error {
+        innerword_board::SceneError::TooLarge { .. } => TOO_LARGE_LIBRARY.to_string(),
+        other => other.to_string(),
+    })?;
+    for warning in &parsed.warnings {
+        eprintln!("Inner Word: the shape library: {warning}");
+    }
+    if parsed.library.items().len() > MAX_LIBRARY_ITEMS {
+        return Err(TOO_LARGE_LIBRARY.to_string());
+    }
+    let stored = parsed.library.to_stored();
+    if stored.len() > MAX_LIBRARY_BYTES {
+        return Err(TOO_LARGE_LIBRARY.to_string());
+    }
+    Ok(stored)
+}
+
+/// Why a shape library is not stored when it is over the limits.
+pub(crate) const TOO_LARGE_LIBRARY: &str = "too large";

@@ -53,6 +53,9 @@ actions!(
         NewDocument,
         /// Create a folder in the folder selected in the library.
         NewFolder,
+        /// Create a whiteboard in the folder selected in the library and open
+        /// it.
+        NewBoard,
         /// Move focus to the library sidebar.
         FocusLibrary,
         /// Move focus to the editor.
@@ -226,6 +229,16 @@ pub fn commands() -> Vec<CommandDescriptor> {
             "add",
             "directory",
             "group",
+        ]),
+        CommandDescriptor::new("New whiteboard", CATEGORY_FILE, NewBoard).keywords([
+            "create",
+            "add",
+            "drawing",
+            "canvas",
+            "diagram",
+            "sketch",
+            "excalidraw",
+            "board",
         ]),
         CommandDescriptor::new("Export", CATEGORY_FILE, Export).keywords([
             "markdown",
@@ -435,6 +448,49 @@ pub fn commands() -> Vec<CommandDescriptor> {
 
 /// The commands about pages. None has a key by default: a page is read,
 /// not worked in, and the keys a reader needs are WebKit's own.
+/// The category of the commands of an open whiteboard.
+pub const CATEGORY_WHITEBOARD: &str = "Whiteboard";
+
+/// The commands of an open whiteboard (`workspace/board.rs`): the six Add
+/// commands, Mermaid, the shape library. No default keys; the user can give
+/// them some.
+pub fn board_commands() -> Vec<CommandDescriptor> {
+    use crate::workspace::{
+        AddArrow, AddDiamond, AddEllipse, AddFrame, AddRectangle, AddText, AddToShapeLibrary,
+        InsertFromShapeLibrary, MermaidToDrawing, ToggleShapeLibrary,
+    };
+    let element = ["draw", "shape", "new element", "whiteboard"];
+    vec![
+        CommandDescriptor::new("Add text", CATEGORY_WHITEBOARD, AddText).keywords(element),
+        CommandDescriptor::new("Add rectangle", CATEGORY_WHITEBOARD, AddRectangle)
+            .keywords(element),
+        CommandDescriptor::new("Add ellipse", CATEGORY_WHITEBOARD, AddEllipse).keywords(element),
+        CommandDescriptor::new("Add diamond", CATEGORY_WHITEBOARD, AddDiamond).keywords(element),
+        CommandDescriptor::new("Add arrow", CATEGORY_WHITEBOARD, AddArrow).keywords(element),
+        CommandDescriptor::new("Add frame", CATEGORY_WHITEBOARD, AddFrame).keywords(element),
+        CommandDescriptor::new("Mermaid to drawing…", CATEGORY_WHITEBOARD, MermaidToDrawing)
+            .keywords(["mermaid", "flowchart", "diagram", "sequence"]),
+        CommandDescriptor::new(
+            "Show or hide the shape library",
+            CATEGORY_WHITEBOARD,
+            ToggleShapeLibrary,
+        )
+        .keywords(["library", "shapes", "reuse", "stencil"]),
+        CommandDescriptor::new(
+            "Add selection to shape library",
+            CATEGORY_WHITEBOARD,
+            AddToShapeLibrary,
+        )
+        .keywords(["library", "shapes", "reuse", "stencil"]),
+        CommandDescriptor::new(
+            "Insert from shape library…",
+            CATEGORY_WHITEBOARD,
+            InsertFromShapeLibrary,
+        )
+        .keywords(["library", "shapes", "reuse", "stencil"]),
+    ]
+}
+
 pub fn page_commands() -> Vec<CommandDescriptor> {
     vec![
         CommandDescriptor::new("Import page…", CATEGORY_PAGES, ImportPage)

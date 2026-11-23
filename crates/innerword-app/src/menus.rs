@@ -182,6 +182,8 @@ fn base_menus() -> Vec<Menu> {
             items: vec![
                 MenuItem::action("New Document", NewDocument),
                 MenuItem::action("New Folder", NewFolder),
+                // Greyed out without a page engine (a whiteboard is shown by it).
+                MenuItem::action("New Whiteboard", crate::actions::NewBoard),
                 // Pages: greyed out without a page engine (Import) and while
                 // nothing is being added (Cancel).
                 MenuItem::action("Import Page…", crate::actions::ImportPage),
@@ -353,6 +355,31 @@ fn base_menus() -> Vec<Menu> {
                 MenuItem::action("Comment", comments::AddComment),
                 MenuItem::separator(),
                 MenuItem::action("Insert Menu…", tools::OpenInsertMenu),
+                MenuItem::separator(),
+                // An open whiteboard: drawing without the pointer.
+                MenuItem::submenu(Menu {
+                    name: "Whiteboard".into(),
+                    items: vec![
+                        MenuItem::action("Text", crate::workspace::AddText),
+                        MenuItem::action("Rectangle", crate::workspace::AddRectangle),
+                        MenuItem::action("Ellipse", crate::workspace::AddEllipse),
+                        MenuItem::action("Diamond", crate::workspace::AddDiamond),
+                        MenuItem::action("Arrow", crate::workspace::AddArrow),
+                        MenuItem::action("Frame", crate::workspace::AddFrame),
+                        MenuItem::separator(),
+                        MenuItem::action("From Mermaid…", crate::workspace::MermaidToDrawing),
+                        MenuItem::action(
+                            "From Shape Library…",
+                            crate::workspace::InsertFromShapeLibrary,
+                        ),
+                        MenuItem::separator(),
+                        MenuItem::action("Shape Library", crate::workspace::ToggleShapeLibrary),
+                        MenuItem::action(
+                            "Add Selection to Shape Library",
+                            crate::workspace::AddToShapeLibrary,
+                        ),
+                    ],
+                }),
             ],
         },
         Menu {
@@ -439,10 +466,19 @@ pub fn menu_actions(menus: &[Menu]) -> Vec<(String, Box<dyn Action>)> {
 /// default keys that is "Page Break", "Line Break" and "Tick or Untick
 /// To-do". A command the user left without a key has no binding and shows
 /// none.
-pub fn menu_key_bindings(keymap: &Keymap) -> Vec<KeyBinding> {
+///
+/// While a whiteboard is the open item (`open`), no item shows a key that
+/// is the whiteboard's own (`innerword_board_web::keys::WHITEBOARD_KEYS`):
+/// such an item gets the two-key placeholder, so AppKit offers none of those
+/// chords to the menu bar and the whiteboard has them (section 4.7).
+pub fn menu_key_bindings(keymap: &Keymap, open: OpenItemKind) -> Vec<KeyBinding> {
     let context: Rc<gpui::KeyBindingContextPredicate> = Rc::new(
         gpui::KeyBindingContextPredicate::parse(MENU_KEY_CONTEXT).expect("a valid key context"),
     );
+    let the_boards = |binding: &KeyBinding| {
+        open == OpenItemKind::Board
+            && crate::boards::is_whiteboard_keys(&crate::keymap::keys_of(binding))
+    };
     let mut bindings = Vec::new();
     let mut seen: Vec<Box<dyn Action>> = Vec::new();
     for (_, action) in menu_actions(&app_menus()) {
@@ -456,6 +492,15 @@ pub fn menu_key_bindings(keymap: &Keymap) -> Vec<KeyBinding> {
             continue;
         };
         let keys = match shown_binding(keymap, action.as_ref()) {
+            // A whiteboard's own key: the item shows none while one is open.
+            _ if the_boards(native) => {
+                let key = crate::keymap::keys_of(native);
+                Some(format!("{key} {key}"))
+            }
+            Some(shown) if the_boards(shown) => {
+                let key = crate::keymap::keys_of(native);
+                Some(format!("{key} {key}"))
+            }
             // GPUI finds the right key by itself.
             Some(shown) if shown.keystrokes() == native.keystrokes() => None,
             Some(shown) => Some(crate::keymap::keys_of(shown)),
@@ -577,6 +622,41 @@ pub fn install(cx: &mut App) {
     cx.set_menus(app_menus_with(assistant));
     // A new menu bar has new items: their check marks go on again.
     apply_check_marks(cx);
+}
+
+// ----- what is open ----------------------------------------------------------------
+
+/// What the open item is, as far as the menu bar cares: a whiteboard keeps
+/// its own keys out of it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum OpenItemKind {
+    /// A text, a page or nothing.
+    #[default]
+    Other,
+    Board,
+}
+
+#[derive(Default)]
+struct OpenItem(OpenItemKind);
+impl gpui::Global for OpenItem {}
+
+/// What the open item is, for the menu bar.
+pub fn open_item(cx: &App) -> OpenItemKind {
+    cx.try_global::<OpenItem>()
+        .map(|open| open.0)
+        .unwrap_or_default()
+}
+
+/// The open item became `kind`: when that changes whether a whiteboard is
+/// open, the keymap's menu bindings and the menu bar are built again (1 to 5
+/// ms, the cost of a change of a key).
+pub fn set_open_item(kind: OpenItemKind, cx: &mut App) {
+    if open_item(cx) == kind {
+        return;
+    }
+    cx.set_global(OpenItem(kind));
+    crate::keymap::reinstall(cx);
+    install(cx);
 }
 
 // ----- the assistant's items -----------------------------------------------------

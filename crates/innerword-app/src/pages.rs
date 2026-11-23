@@ -242,6 +242,9 @@ pub enum PageEvent {
     /// A key the fake view handed on (`FakePages::press`), as GPUI's view
     /// gets the real one.
     KeyHandedOn(Keystroke),
+    /// A message of a whiteboard's bridge, read
+    /// (`innerword_board_web::bridge::parse`); nothing it says is run.
+    Board(innerword_board_web::bridge::Message),
 }
 
 /// The events of one view, in order, and the task that waits for them.
@@ -421,6 +424,30 @@ impl innerword_web::PageEvents for ViewEvents {
     fn menu_chosen(&self, id: u32) {
         post(&self.inbox, PageEvent::MenuChosen(id));
     }
+
+    fn message(&self, body: String) {
+        crate::workspace::post_board_message(&self.inbox, body);
+    }
+}
+
+/// `first`'s output, or `None` when `timer` came first.
+pub async fn within<T>(
+    first: impl Future<Output = T>,
+    timer: impl Future<Output = ()>,
+) -> Option<T> {
+    use std::pin::pin;
+    let mut first = pin!(first);
+    let mut timer = pin!(timer);
+    std::future::poll_fn(move |cx| {
+        if let Poll::Ready(value) = first.as_mut().poll(cx) {
+            return Poll::Ready(Some(value));
+        }
+        if timer.as_mut().poll(cx).is_ready() {
+            return Poll::Ready(None);
+        }
+        Poll::Pending
+    })
+    .await
 }
 
 // ----- the keys a page hands on -----------------------------------------------------
@@ -465,7 +492,24 @@ pub fn page_contexts() -> Vec<KeyContext> {
         .collect()
 }
 
+/// The key contexts from the window's root to the element of a whiteboard.
+pub fn board_contexts() -> Vec<KeyContext> {
+    [crate::workspace::KEY_CONTEXT, crate::boards::BOARD_VIEW]
+        .into_iter()
+        .filter_map(|name| KeyContext::parse(name).ok())
+        .collect()
+}
+
 impl PageKeys {
+    /// The keys of a whiteboard's view: those bound where a whiteboard has
+    /// the keyboard (`[Workspace, BoardView]`).
+    pub fn for_board() -> PageKeys {
+        PageKeys {
+            contexts: board_contexts(),
+            ..PageKeys::default()
+        }
+    }
+
     /// The keys as the keymap installed now has them.
     pub fn refresh_keys(&mut self, cx: &App) {
         let bindings: Vec<KeyBinding> = cx.key_bindings().borrow().bindings().cloned().collect();
@@ -1037,20 +1081,22 @@ pub(crate) fn check_bundle(
 /// at a time, as the real engine.
 #[derive(Default)]
 pub struct FakePages {
-    state: RefCell<FakeState>,
+    pub(crate) state: RefCell<FakeState>,
     /// Snapshots handed to `Window::drop_image` by the workspace.
     dropped: Cell<usize>,
+    /// The whiteboard a view shows (`boards.rs`).
+    pub(crate) board: RefCell<crate::boards::FakeBoard>,
 }
 
 #[derive(Default)]
-struct FakeState {
+pub(crate) struct FakeState {
     opened: Vec<(DocumentId, String)>,
     /// The origin host of each view made, in order.
     hosts: Vec<String>,
     /// The events of the open view.
-    events: Option<Rc<dyn innerword_web::PageEvents>>,
+    pub(crate) events: Option<Rc<dyn innerword_web::PageEvents>>,
     /// The inbox of the open view (snapshots and finds answer through it).
-    inbox: Option<SharedInbox>,
+    pub(crate) inbox: Option<SharedInbox>,
     zoom: Option<u16>,
     finds: Vec<(String, bool)>,
     snapshots_made: usize,
@@ -1073,6 +1119,9 @@ struct FakeState {
     )>,
     /// How many checks were asked for.
     checks: usize,
+    /// The number of the newest view made: a view that goes after a newer
+    /// one was made (a whiteboard's parked view) leaves the newer one alone.
+    serial: u64,
 }
 
 impl FakePages {
@@ -1271,9 +1320,12 @@ impl FakePages {
     }
 }
 
-/// The fake engine's view of one page.
+/// The fake engine's view of one page or whiteboard.
 pub struct FakeView {
-    pages: Rc<FakePages>,
+    pub(crate) pages: Rc<FakePages>,
+    /// The whiteboard it shows, when it shows one.
+    pub(crate) board: Option<DocumentId>,
+    serial: u64,
 }
 
 impl FakeView {
@@ -1287,8 +1339,9 @@ impl FakeView {
         events: Rc<dyn innerword_web::PageEvents>,
         inbox: SharedInbox,
     ) -> FakeView {
-        {
+        let serial = {
             let mut state = pages.state.borrow_mut();
+            state.serial += 1;
             state.opened.push((id, entry.to_string()));
             state.hosts.push(host.to_string());
             state.events = Some(events);
@@ -1298,8 +1351,13 @@ impl FakeView {
             state.holes.clear();
             state.first_responder_is_page = false;
             state.text = text.to_string();
+            state.serial
+        };
+        FakeView {
+            pages,
+            board: None,
+            serial,
         }
-        FakeView { pages }
     }
 
     fn post(&self, event: PageEvent) {
@@ -1391,6 +1449,17 @@ impl FakeView {
 
 impl Drop for FakeView {
     fn drop(&mut self) {
+        // A parked view that goes after another view was made leaves the
+        // newer one alone.
+        if self.pages.state.borrow().serial != self.serial {
+            return;
+        }
+        if self.board.is_some() {
+            let mut board = self.pages.board.borrow_mut();
+            if board.open == self.board {
+                board.open = None;
+            }
+        }
         let mut state = self.pages.state.borrow_mut();
         state.events = None;
         state.inbox = None;

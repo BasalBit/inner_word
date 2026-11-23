@@ -65,6 +65,14 @@ innerword-page.workspace = true
 # Pages (no GPUI): WebKit, the view of an open page above GPUI's view, the
 # check, the print to a PDF.
 innerword-web.workspace = true
+# Whiteboards (no GPUI): the scene in Rust (stored form, delta, merge, the
+# converter of skeletons, the shape library).
+innerword-board.workspace = true
+# Whiteboards: the bundle of Excalidraw (its files, the bridge's messages,
+# the calls, the whiteboard's own keys).
+innerword-board-web.workspace = true
+# A picture pasted on a whiteboard arrives as a data URL.
+base64 = "0.22"
 # A snapshot of a page (BGRA pixels) made into what GPUI paints, as the
 # editor's pictures are (`image::Frame`, `smallvec`).
 image = { version = "0.25", default-features = false }

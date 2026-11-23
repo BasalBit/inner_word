@@ -42,6 +42,7 @@
 //! | `page:find:<query>`   | opens the find strip of the open page with that query |
 //! | `page:js:<script>`    | evaluates a script in the open page and prints the answer |
 //! | `page:menu`           | opens the page's context menu, as `ctrl-enter` does |
+//! | `board:<step>`        | a step of the open whiteboard: `new[:<title>]`, `wait[:<ms>]`, `scene`, `draw:<json>`, `press:<keys>`, `js:<script>`, `pdf:<path>`, `menu`, `library`, `mermaid:<definition>` (`crate::board_steps`) |
 //! | `resize:<w>x<h>`      | resizes the window content                                   |
 //! | `theme:<mode>`        | `light`, `dark` or `system`                                  |
 //! | `screenshot:<path>`   | captures only this window to a PNG (waits for a fresh frame) |
@@ -206,6 +207,8 @@ pub enum Step {
     ExportWait(Duration),
     Image(ImageStep),
     Page(PageStep),
+    /// A step of the open whiteboard (`crate::board_steps`).
+    Board(crate::board_steps::BoardStep),
     Quit,
 }
 
@@ -601,6 +604,7 @@ fn parse_step(name: &str, arg: &str) -> Result<Step> {
             }
         }
         "page" => Step::Page(parse_page_step(arg)?),
+        "board" => Step::Board(crate::board_steps::parse(arg, unescape)?),
         "zoom" => {
             if arg.is_empty() {
                 bail!("expected a zoom: in, out, actual, fit, page, life, auto, a percentage");
@@ -1211,6 +1215,10 @@ async fn execute(
         }
         Step::Page(step) => {
             run_page_step(step, window, cx).await?;
+            frame_pause(window, view, cx).await;
+        }
+        Step::Board(step) => {
+            crate::board_steps::run(step, window, cx).await?;
             frame_pause(window, view, cx).await;
         }
         Step::Image(ImageStep::Insert(path)) => {
@@ -1946,6 +1954,7 @@ pub fn describe_state(
     let export = workspace.describe_pdf_export();
     let images = workspace.describe_images(cx);
     let web = workspace.describe_page(window, cx);
+    let board = workspace.describe_board(window, cx);
     let adding = workspace.describe_adding();
     format!(
         "document={:?} title={:?} save={:?} saving={} last_save=[{last_save}] focus={focus} \
@@ -1954,7 +1963,7 @@ pub fn describe_state(
          vim=[{vim}] tool=[{tool}] bar=[{bar}] comments=[{comments}] spelling=[{spelling}] \
          keys=[{shortcuts}] words={:?} characters={:?} \
          page={:?} \
-         limit={:?} web=[{web}] adding=[{adding}] live=[{live}]{agents}{assistant}{font_list}",
+         limit={:?} web=[{web}] board=[{board}] adding=[{adding}] live=[{live}]{agents}{assistant}{font_list}",
         workspace.open_item_id().map(|id| id.0),
         workspace
             .document_title()

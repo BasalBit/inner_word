@@ -55,6 +55,8 @@ pub mod agents;
 pub mod agents_view;
 pub mod assistant;
 pub mod automation;
+pub mod board_steps;
+pub mod boards;
 pub mod character_limit;
 pub mod commands;
 pub mod controls;
@@ -148,6 +150,8 @@ pub fn init(cx: &mut App) {
     // An open page: its context menu's keys, and the find keys once more
     // (the tools bind them where a text is, which a page is not).
     cx.bind_keys(workspace::page_key_bindings());
+    // An open whiteboard: its menu's keys, and Find once more.
+    cx.bind_keys(workspace::board_key_bindings());
 
     register_commands(cx);
 
@@ -194,6 +198,8 @@ fn register_commands(cx: &mut App) {
     commands::register(live::commands(), cx);
     // Pages: importing them, and what works on an open one.
     commands::register(actions::page_commands(), cx);
+    // Whiteboards: what works on an open one.
+    commands::register(actions::board_commands(), cx);
     // The editor and its tools title their commands Like This; the rest of
     // the app says them like this.
     commands::register(commands::in_sentence_case(innerword_editor::commands()), cx);

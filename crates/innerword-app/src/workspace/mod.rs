@@ -76,6 +76,8 @@
 //! modals get their keys directly.
 
 mod assistant;
+mod board;
+mod board_pdf;
 mod fonts;
 mod images;
 mod live;
@@ -125,6 +127,15 @@ use crate::{
 };
 
 pub use assistant::{library_attachments, library_tool_server};
+pub(crate) use board::post_board_message;
+pub use board::{
+    AddArrow, AddDiamond, AddEllipse, AddFrame, AddRectangle, AddText, AddToShapeLibrary,
+    BOARD_SAVE_DELAY, BOARD_STOPPED, InsertFromShapeLibrary, LARGE_BOARD, LIBRARY_TOO_LARGE,
+    MermaidToDrawing, NO_COMMENTS_ON_A_BOARD, NO_PAPER_ON_A_BOARD, NO_SETTINGS_ON_A_BOARD,
+    NO_SPELLING_ON_A_BOARD, NO_VIM_ON_A_BOARD, OpenContextMenu as OpenBoardContextMenu, RELOADED,
+    Recovered, STILL_LOADING, ShapeLibraryDelegate, TITLE_OF_A_BOARD, ToggleShapeLibrary,
+    board_key_bindings,
+};
 pub use images::{SELECT_AN_IMAGE_FIRST, is_image_command};
 pub use live::{
     AgentChanges, ChangeCost, Names, Offer, Subject, UPDATED_PAGE, Undo as AgentUndo, run_sentence,
@@ -230,8 +241,14 @@ pub struct Workspace {
     pub(crate) focus_handle: FocusHandle,
     pub(crate) settings: Settings,
     pub(crate) session: Option<Session>,
-    /// The open page; never together with a session (`page.rs`).
+    /// The open page or whiteboard; never together with a session
+    /// (`page.rs`, `board.rs`).
     pub(crate) page: Option<page::PageSession>,
+    /// A whiteboard whose session ended while its page held more than it had
+    /// posted: its view parked until that is saved (`board.rs`).
+    pub(crate) closing_board: Option<board::ClosingBoard>,
+    /// Excalidraw's shape library, one for every whiteboard (`board.rs`).
+    pub(crate) shape_library: board::ShapeLibraryState,
     /// The background half of the autosave.
     pub(crate) saver: saver::Saver,
     /// What the last save cost.
@@ -507,6 +524,8 @@ impl Workspace {
             settings,
             session: None,
             page: None,
+            closing_board: None,
+            shape_library: board::ShapeLibraryState::default(),
             saver,
             last_save: None,
             sidebar_dragging: false,
@@ -1070,16 +1089,30 @@ impl Workspace {
     pub fn toggle_command_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let workspace = cx.weak_entity();
         let recent = self.recent_commands(cx);
-        // While a page is open the commands that act on a text are not
-        // offered (they have no handler: the menu bar greys them out).
-        let mut left_out = self.commands_not_for_the_open_page(cx);
-        // Without a page engine nothing can be imported.
+        // While a page or a whiteboard is open the commands that act on a
+        // text are not offered (they have no handler: the menu bar greys
+        // them out).
+        let board_open = self.open_board_id().is_some();
+        let mut left_out = if board_open {
+            self.commands_not_for_the_open_board(cx)
+        } else {
+            self.commands_not_for_the_open_page(cx)
+        };
+        // The commands of a whiteboard, only while one is open.
+        if !board_open {
+            left_out.extend(Self::board_only_commands());
+        }
+        // Without a page engine nothing can be imported, and no whiteboard
+        // made.
         if crate::pages::engine(cx).is_none() {
             left_out.push(gpui::Action::name(&ImportPage));
+            left_out.push(gpui::Action::name(&NewBoard));
         }
         let page_open = self.page.is_some();
         let renamed = move |command: &mut innerword_ui::CommandDescriptor| {
-            if page_open {
+            if board_open {
+                Self::board_title_of(command);
+            } else if page_open {
                 Self::page_title_of(command);
             }
         };
@@ -1692,6 +1725,15 @@ impl Workspace {
         self.new_document(window, cx);
     }
 
+    pub(crate) fn on_new_board(
+        &mut self,
+        _: &NewBoard,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.new_board(None, window, cx);
+    }
+
     pub(crate) fn on_new_folder(
         &mut self,
         _: &NewFolder,
@@ -1964,6 +2006,12 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         use innerword_ui::text_field as field;
+        // A whiteboard with the keyboard: Undo, Redo and Select All go to
+        // Excalidraw through the glue, Copy, Cut and Paste to the view.
+        if self.edit_on_board(command, window) {
+            cx.stop_propagation();
+            return;
+        }
         // A page with the keyboard: WebKit acts on its selection, or on a
         // field of the page.
         if self.edit_on_page(command, window) {

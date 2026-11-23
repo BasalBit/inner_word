@@ -148,6 +148,9 @@ impl Workspace {
     /// The items of the workspace menu `kind` as things are now. Empty
     /// when the menu has nothing to act on (no document is open).
     pub fn menu_items(&self, kind: MenuKind, cx: &mut Context<Self>) -> Vec<ContextMenuItem> {
+        if self.open_board_id().is_some() {
+            return self.board_menu_items(kind, cx);
+        }
         if self.page.is_some() {
             return self.page_menu_items(kind, cx);
         }
@@ -248,6 +251,7 @@ impl Workspace {
         let has_source = self
             .page
             .as_ref()
+            .and_then(super::page::PageSession::page_item)
             .is_some_and(|page| page.source_url.is_some());
         match kind {
             MenuKind::Title => {
@@ -306,6 +310,56 @@ impl Workspace {
                 ]
             }
             MenuKind::Save | MenuKind::Page | MenuKind::Limit => Vec::new(),
+        }
+    }
+
+    /// The menus of the title and the status bar items while a whiteboard is
+    /// open (section 1): the title's has what can be done with a whiteboard,
+    /// the save state's Save Now, the counts' the elements by kind, the
+    /// zoom's Excalidraw's zoom.
+    fn board_menu_items(&self, kind: MenuKind, cx: &mut Context<Self>) -> Vec<ContextMenuItem> {
+        match kind {
+            MenuKind::Title => {
+                let mut items = vec![
+                    ContextMenuItem::action("Rename…", RenameDocument),
+                    ContextMenuItem::submenu("Add", super::board::board_add_items()),
+                ];
+                items.extend(super::board::board_title_items(false, self.can_print(cx)));
+                if self.assistant_shown() {
+                    items.push(ContextMenuItem::separator());
+                    items.push(
+                        ContextMenuItem::action("Assistant", ToggleAssistant).checked(
+                            self.right_panel_shown() == Some(super::RightPanel::Assistant),
+                        ),
+                    );
+                }
+                items
+            }
+            MenuKind::Zoom => self.zoom_menu_items(cx),
+            MenuKind::Save => vec![ContextMenuItem::action("Save Now", SaveNow)],
+            MenuKind::Statistics => {
+                let Some(scene) = self.board_scene() else {
+                    return Vec::new();
+                };
+                let summary = scene.summary();
+                let mut items = vec![ContextMenuItem::section("On this whiteboard")];
+                for (kind, count) in &summary.by_type {
+                    items.push(ContextMenuItem::new(
+                        format!("{count} {kind}"),
+                        |_, _: &mut gpui::App| {},
+                    ));
+                }
+                items.push(ContextMenuItem::new(
+                    super::counted(summary.pictures as usize, "picture", "pictures"),
+                    |_, _: &mut gpui::App| {},
+                ));
+                items.push(ContextMenuItem::new(
+                    super::counted(summary.words as usize, "word", "words"),
+                    |_, _: &mut gpui::App| {},
+                ));
+                items
+            }
+            MenuKind::Page | MenuKind::Limit => Vec::new(),
         }
     }
 

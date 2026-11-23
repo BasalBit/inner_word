@@ -211,9 +211,17 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> bool {
         // A page is opened as a page: its content is a manifest, never a
-        // text (`page.rs`).
-        if self.open_document_id() != Some(id) && self.is_page(id, cx) {
-            return self.open_page(id, focus_editor, window, cx);
+        // text (`page.rs`); a whiteboard as a whiteboard (`board.rs`).
+        if self.open_document_id() != Some(id) {
+            match self.kind_of(id, cx) {
+                Some(innerword_library::DocumentKind::Page) => {
+                    return self.open_page(id, focus_editor, window, cx);
+                }
+                Some(innerword_library::DocumentKind::Board) => {
+                    return self.open_board(id, focus_editor, window, cx);
+                }
+                Some(innerword_library::DocumentKind::Text) | None => {}
+            }
         }
         if self.open_document_id() != Some(id) && !self.load_into_editor(id, window, cx) {
             return false;
@@ -766,7 +774,10 @@ impl Workspace {
     /// to save, and returns when it is in the library. Returns `false` when
     /// the save failed (it is then retried).
     pub fn flush(&mut self, cx: &mut Context<Self>) -> bool {
-        self.save_now(cx)
+        let text = self.save_now(cx);
+        // The open and the closing whiteboard: what the app holds of them.
+        let boards = self.flush_boards(cx);
+        text && boards
     }
 
     /// The window is about to close or the app to quit: what a tool around
@@ -952,6 +963,9 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
+        if self.open_board_id().is_some() {
+            return self.restore_board_version(snapshot, window, cx);
+        }
         if self.page.is_some() {
             return self.restore_page_version(snapshot, window, cx);
         }
@@ -1111,6 +1125,11 @@ impl Workspace {
     ) -> bool {
         if !self.open_document(id, true, window, cx) {
             return false;
+        }
+        // A whiteboard: Excalidraw's search on the query.
+        if self.open_board_id() == Some(id) {
+            self.search_board(Some(query));
+            return true;
         }
         // A page: the find strip on the query.
         if self.open_page_id() == Some(id) {

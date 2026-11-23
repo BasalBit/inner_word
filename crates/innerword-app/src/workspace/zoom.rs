@@ -132,6 +132,10 @@ impl Workspace {
     /// What the status bar shows for the zoom: "125 %". Empty without a
     /// document.
     pub fn zoom_label(&self, cx: &App) -> String {
+        // A whiteboard: Excalidraw's canvas zoom, as its page said last.
+        if let Some(status) = self.board_status() {
+            return percent_label((status.zoom.max(0.0) * 100.0) as f32);
+        }
         if let Some(percent) = self.page_zoom() {
             return percent_label(f32::from(percent));
         }
@@ -194,6 +198,9 @@ impl Workspace {
         root: Stateful<gpui::Div>,
         cx: &mut Context<Self>,
     ) -> Stateful<gpui::Div> {
+        if self.open_board_id().is_some() {
+            return self.board_zoom_actions(root, cx);
+        }
         if self.page.is_some() {
             return self.page_zoom_actions(root, cx);
         }
@@ -232,6 +239,38 @@ impl Workspace {
                 action.as_ref(),
                 cx.listener(move |this, _: &dyn gpui::Action, _, cx| {
                     this.set_zoom(Zoom::Percent(percent), cx);
+                }),
+            );
+        }
+        root
+    }
+
+    /// The zoom commands on an open whiteboard: Excalidraw's canvas zoom (in,
+    /// out, actual size, the steps), and the fits show the whole drawing;
+    /// life size and Automatic say what a whiteboard is (`board.rs`).
+    fn board_zoom_actions(
+        &self,
+        root: Stateful<gpui::Div>,
+        cx: &mut Context<Self>,
+    ) -> Stateful<gpui::Div> {
+        use innerword_board_web::calls::Zoom as Canvas;
+        let mut root = root
+            .on_action(cx.listener(|this, _: &ZoomIn, _, _| this.zoom_board(Canvas::In)))
+            .on_action(cx.listener(|this, _: &ZoomOut, _, _| this.zoom_board(Canvas::Out)))
+            .on_action(cx.listener(|this, _: &ActualSize, _, _| this.zoom_board(Canvas::To(1.0))))
+            .on_action(cx.listener(|this, _: &FitWidth, _, _| this.zoom_board(Canvas::Fit)))
+            .on_action(cx.listener(|this, _: &FitPage, _, _| this.zoom_board(Canvas::Fit)));
+        for percent in MENU_STEPS {
+            let Some(action) = zoom::step_action(percent) else {
+                continue;
+            };
+            if percent == 100 {
+                continue;
+            }
+            root = root.on_boxed_action(
+                action.as_ref(),
+                cx.listener(move |this, _: &dyn gpui::Action, _, _| {
+                    this.zoom_board(Canvas::To(f64::from(percent) / 100.0))
                 }),
             );
         }
@@ -417,6 +456,30 @@ impl Workspace {
     /// width of the window, a whole page, the size of the paper), then
     /// the steps. The one in force is checked.
     pub(crate) fn zoom_menu_items(&self, cx: &App) -> Vec<ContextMenuItem> {
+        // A whiteboard: in, out, actual size, to fit and the steps.
+        if let Some(status) = self.board_status() {
+            let current = (status.zoom * 100.0).round() as i64;
+            let mut items = vec![
+                ContextMenuItem::action("Zoom In", ZoomIn),
+                ContextMenuItem::action("Zoom Out", ZoomOut),
+                ContextMenuItem::separator(),
+                ContextMenuItem::action("Actual Size", ActualSize).checked(current == 100),
+                ContextMenuItem::action("Zoom to Fit", FitPage),
+                ContextMenuItem::separator(),
+            ];
+            for percent in MENU_STEPS {
+                if percent == 100 {
+                    continue;
+                }
+                if let Some(action) = zoom::step_action(percent) {
+                    items.push(
+                        ContextMenuItem::action_boxed(percent_label(f32::from(percent)), action)
+                            .checked(current == i64::from(percent)),
+                    );
+                }
+            }
+            return items;
+        }
         // A page: in, out, actual size and the steps up to 300 %.
         if let Some(current) = self.page_zoom() {
             let mut items = vec![
@@ -587,6 +650,29 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> anyhow::Result<()> {
         let what = what.trim();
+        // A whiteboard: Excalidraw's canvas zoom.
+        if self.open_board_id().is_some() {
+            use innerword_board_web::calls::Zoom as Canvas;
+            match what {
+                "in" => self.zoom_board(Canvas::In),
+                "out" => self.zoom_board(Canvas::Out),
+                "actual" => self.zoom_board(Canvas::To(1.0)),
+                "fit" | "width" | "fit-width" | "page" | "fit-page" => {
+                    self.zoom_board(Canvas::Fit)
+                }
+                "life" | "auto" | "automatic" => {
+                    self.say_about_page(super::NO_PAPER_ON_A_BOARD, cx)
+                }
+                other => {
+                    let percent: f64 =
+                        other.trim_end_matches('%').trim().parse().map_err(|_| {
+                            anyhow::anyhow!("on a whiteboard: in, out, actual, fit or a percent")
+                        })?;
+                    self.zoom_board(Canvas::To(percent / 100.0));
+                }
+            }
+            return Ok(());
+        }
         // A page has its own zoom: in, out, actual size and a percentage;
         // a fit says what a page is.
         if self.page.is_some() {

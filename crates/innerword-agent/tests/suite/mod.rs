@@ -1,5 +1,6 @@
 //! What the tests share: a library in a temporary directory.
 
+mod boards;
 mod browse;
 mod comments;
 mod images;

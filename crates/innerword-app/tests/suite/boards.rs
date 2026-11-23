@@ -985,6 +985,28 @@ fn the_title_menu_and_ctrl_enter_have_the_whiteboards_items(cx: &mut TestAppCont
         w.menu_items(innerword_app::workspace::MenuKind::Title, cx)
     });
     assert!(!title.is_empty());
+    // The title's menu has the shape library's three items (section 4.15).
+    workspace.update_in(vcx, |w, window, cx| {
+        assert!(w.open_menu(innerword_app::workspace::MenuKind::Title, None, window, cx));
+    });
+    vcx.run_until_parked();
+    let labels = vcx.update(|window, cx| {
+        innerword_ui::ContextMenu::current(window, cx)
+            .map(|menu| menu.read(cx).labels())
+            .unwrap_or_default()
+    });
+    for wanted in [
+        "Shape Library",
+        "Add Selection to Shape Library",
+        "Version History…",
+    ] {
+        assert!(
+            labels.iter().any(|label| label == wanted),
+            "{wanted}: {labels:?}"
+        );
+    }
+    vcx.simulate_keystrokes("escape");
+    vcx.run_until_parked();
     let focus = workspace.read_with(vcx, |w, _| w.page_focus_handle().unwrap());
     vcx.update(|window, _| window.focus(&focus));
     vcx.simulate_keystrokes("ctrl-enter");
@@ -2058,4 +2080,38 @@ fn without_an_engine_a_folders_pdf_leaves_its_whiteboards_out_and_says_why(
         ),
         "{said:?}"
     );
+}
+
+#[gpui::test]
+fn an_add_command_asks_the_page_first_when_it_holds_more(cx: &mut TestAppContext) {
+    let (fake, _library, _workspace, _board, _, vcx) = open_board(cx);
+    fake.draw(&scene(&[rect("a", 0.0, 1), rect("b", 400.0, 1)]));
+    settle(vcx);
+    // The writer moved a shape; the page has not posted it yet.
+    fake.draw_unposted(&scene(&[rect("a", 50.0, 2), rect("b", 400.0, 1)]));
+    fake.select(&["a", "b"]);
+    vcx.run_until_parked();
+    vcx.update(|window, cx| {
+        window.dispatch_action(Box::new(innerword_app::workspace::AddArrow), cx)
+    });
+    vcx.run_until_parked();
+    let calls = fake.board_calls();
+    let collect = calls
+        .iter()
+        .rposition(|call| call == "collect")
+        .expect("a collect");
+    let center = calls
+        .iter()
+        .rposition(|call| call == "center")
+        .expect("center");
+    assert!(collect < center, "{calls:?}");
+    // The shape the arrow binds keeps the writer's move.
+    let canvas: Value = serde_json::from_str(&fake.canvas()).unwrap();
+    let a = canvas["elements"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|element| element["id"] == "a")
+        .unwrap();
+    assert_eq!(a["x"], 50.0);
 }

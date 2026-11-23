@@ -734,10 +734,12 @@ impl Workspace {
             .clone()
             .filter(|title| !title.trim().is_empty())
             .unwrap_or_else(|| {
-                if document_title.trim().is_empty() {
+                // A document shown "Untitled" has no title to name it after.
+                let shown = session_title(document_title.trim());
+                if shown == crate::document_io::UNTITLED {
                     "Drawing".to_string()
                 } else {
-                    format!("{} (drawing)", document_title.trim())
+                    format!("{shown} (drawing)")
                 }
             });
         let prepared = prepared_of(&scene);

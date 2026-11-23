@@ -3653,6 +3653,76 @@ fn two_drawings_in_a_row_are_one_note_until_the_writer_draws(cx: &mut TestAppCon
     );
 }
 
+/// An answer's drawing applied by the writer between two changes of an
+/// agent is the writer's change: the run's Undo goes when the drawing is
+/// applied, and does not come back with the agent's next change
+/// (`docs/assistant-draws-design.md`, 4.4).
+#[gpui::test]
+fn an_agent_run_loses_its_undo_to_a_drawing(cx: &mut TestAppContext) {
+    let (desk, fake, board, _text, cx) = desk_with_a_board(cx);
+    let tool = desk.tool();
+    let request = draw_on(
+        board,
+        json!([{"type": "ellipse", "id": "one", "x": 0, "y": 0}]),
+    );
+    ask(cx, move || tool.add_to_board(&request)).expect("the app drew");
+    settle_board(cx);
+    let note = |cx: &mut VisualTestContext| {
+        notes_shown(&desk, cx)
+            .into_iter()
+            .rfind(|(message, _)| message.starts_with("Claude"))
+            .expect("the note is up")
+    };
+    assert_eq!(note(cx).1, Some("Undo".to_string()));
+
+    // The writer applies an answer's drawing.
+    let drawing = innerword_assistant::Drawing::from_json(
+        r#"{"add": [{"type": "rectangle", "id": "box", "x": 0, "y": 400}]}"#,
+    )
+    .unwrap();
+    desk.workspace.update_in(cx, |workspace, window, cx| {
+        workspace.draw_answer_on_board(drawing, innerword_assistant::MessageId(1), window, cx)
+    });
+    settle_board(cx);
+    assert!(
+        notes_shown(&desk, cx)
+            .iter()
+            .any(|(message, _)| message.starts_with("Drew on")),
+        "{:?}",
+        notes_shown(&desk, cx)
+    );
+    assert_eq!(note(cx), (format!("Claude drew on {}", q("Plan")), None));
+    assert!(
+        desk.workspace
+            .read_with(cx, |workspace, _| workspace.last_agent_changes().cloned())
+            .is_some_and(|last| last.undo.is_none())
+    );
+
+    // The agent draws again while the note is up: one step would take out
+    // only that change, so the run offers no Undo.
+    let tool = desk.tool();
+    let request = draw_on(
+        board,
+        json!([{"type": "ellipse", "id": "two", "x": 300, "y": 0}]),
+    );
+    ask(cx, move || tool.add_to_board(&request)).expect("the app drew");
+    settle_board(cx);
+    assert_eq!(
+        note(cx),
+        (format!("Claude made 2 changes to {}", q("Plan")), None)
+    );
+    let ids = stored_ids(&desk, board, cx);
+    assert_eq!(ids, ["box", "one", "two"]);
+    assert!(
+        !fake
+            .board_calls()
+            .iter()
+            .any(|call| call.starts_with("undo")),
+        "{:?}",
+        fake.board_calls()
+    );
+}
+
 /// A run that began with something else than a drawing on the open
 /// whiteboard (here a document moved to the trash) is not undone by the
 /// whiteboard's undo: the note offers no Undo for it.

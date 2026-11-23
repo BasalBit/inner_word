@@ -2997,3 +2997,492 @@ fn a_message_over_a_whiteboard_waits_for_what_its_page_holds(cx: &mut TestAppCon
     pages.release_collects();
     vcx.run_until_parked();
 }
+
+// ----- an answer's drawing over a document (docs/assistant-draws-design.md, 6) ----------
+
+mod drawings {
+    use std::{rc::Rc, sync::Arc};
+
+    use gpui::TestAppContext;
+    use innerword_app::{
+        assistant::conversations,
+        commands,
+        pages::{self, FakePages},
+        workspace::{made_sentence, new_board_names_missing, origin_note},
+    };
+    use innerword_assistant::{DrawingTarget, FakeBackend, MessageId};
+    use innerword_assistant_ui::{ACTION_DRAW, ActionState, AssistantPanel};
+    use innerword_library::{DocumentKind, FolderId};
+
+    use crate::suite::*;
+
+    const WHO_SERVES_WHOM: &str = r#"{"title": "Who serves whom", "add": [
+  {"type": "ellipse", "id": "keeper", "x": 0, "y": 0, "width": 180, "height": 80, "label": {"text": "The keeper"}},
+  {"type": "ellipse", "id": "ada", "x": 320, "y": 0, "width": 180, "height": 80, "label": {"text": "Ada"}},
+  {"type": "arrow", "id": "serves", "x": 180, "y": 40, "start": {"id": "keeper"}, "end": {"id": "ada"}, "label": {"text": "serves"}}]}"#;
+
+    fn answer_with(drawing: &str) -> String {
+        format!("Here is who serves whom in the chapter.\n\n```whiteboard\n{drawing}\n```\n")
+    }
+
+    struct Desk<'a> {
+        fake: FakeBackend,
+        pages: Option<Rc<FakePages>>,
+        library: Entity<Library>,
+        workspace: Entity<Workspace>,
+        folder: FolderId,
+        chapter: DocumentId,
+        cx: &'a mut VisualTestContext,
+    }
+
+    /// The assistant on its fake engine, the fake page engine when `boards`,
+    /// and "Chapter 2" in the folder "Part one", open.
+    fn desk(cx: &mut TestAppContext, boards: bool) -> Desk<'_> {
+        init(cx);
+        let fake = FakeBackend::new();
+        cx.update(|cx| innerword_app::assistant::set_backend(Arc::new(fake.clone()), cx));
+        let pages = boards.then(|| cx.update(pages::use_fake));
+        let library = library(cx);
+        let folder = library.update(cx, |l, cx| {
+            l.create_folder(None, "Part one", cx).unwrap().id
+        });
+        let chapter = add_document(
+            &library,
+            Some(folder),
+            &simple_document("Chapter 2", "The keeper served Ada."),
+            cx,
+        );
+        let (workspace, vcx) = open_workspace(&library, cx);
+        workspace.update_in(vcx, |w, window, cx| {
+            assert!(w.open_document(chapter, true, window, cx));
+        });
+        vcx.run_until_parked();
+        Desk {
+            fake,
+            pages,
+            library,
+            workspace,
+            folder,
+            chapter,
+            cx: vcx,
+        }
+    }
+
+    impl Desk<'_> {
+        fn side(&mut self) -> Entity<AssistantPanel> {
+            self.workspace
+                .read_with(self.cx, |w, _| w.side_chat().expect("an engine").clone())
+        }
+
+        fn ask(&mut self, answer: &str) -> MessageId {
+            self.cx.simulate_keystrokes("cmd-3");
+            self.cx.run_until_parked();
+            let panel = self.side();
+            self.fake.reply(answer);
+            panel.update_in(self.cx, |panel, window, cx| {
+                panel.send("Draw who serves whom.", window, cx)
+            });
+            self.cx.run_until_parked();
+            panel.read_with(self.cx, |panel, _| {
+                panel.transcript().last_answer().expect("an answer").id
+            })
+        }
+
+        fn toasts(&mut self) -> Vec<String> {
+            self.workspace.read_with(self.cx, |w, cx| {
+                w.toast_layer()
+                    .read(cx)
+                    .toasts()
+                    .map(|toast| toast.message.to_string())
+                    .collect()
+            })
+        }
+
+        fn shown(&mut self, id: MessageId) -> String {
+            let panel = self.side();
+            panel.read_with(self.cx, |panel, cx| {
+                panel
+                    .messages()
+                    .read(cx)
+                    .answer_editor(id)
+                    .expect("the answer is shown")
+                    .read(cx)
+                    .document()
+                    .plain_text()
+            })
+        }
+
+        /// A document at the root of the library.
+        fn add(&mut self, document: &innerword_core::Document) -> DocumentId {
+            let form = innerword_app::document_io::StoredForm::of(document, None);
+            self.library.update(self.cx, |library, cx| {
+                library
+                    .create_document(None, &form.content(), cx)
+                    .unwrap()
+                    .id
+            })
+        }
+
+        fn open_board(&mut self) -> Option<DocumentId> {
+            self.workspace.read_with(self.cx, |w, _| w.open_board_id())
+        }
+
+        fn press_toast(&mut self, start: &str) {
+            let layer = self
+                .workspace
+                .read_with(self.cx, |workspace, _| workspace.toast_layer().clone());
+            let id = layer.read_with(self.cx, |layer, _| {
+                layer
+                    .ids()
+                    .into_iter()
+                    .zip(layer.toasts())
+                    .find(|(_, toast)| toast.message.starts_with(start))
+                    .map(|(id, _)| id)
+                    .unwrap_or_else(|| panic!("no toast says {start:?}"))
+            });
+            let ran = layer.update_in(self.cx, |layer, window, cx| {
+                layer.run_action(id, window, cx)
+            });
+            assert!(ran, "the toast {start:?} has no button");
+            self.cx.run_until_parked();
+        }
+    }
+
+    #[gpui::test]
+    fn an_answer_over_a_document_makes_a_new_whiteboard_in_its_folder(cx: &mut TestAppContext) {
+        let mut desk = desk(cx, true);
+        let answer = desk.ask(&answer_with(WHO_SERVES_WHOM));
+        let shown = desk.shown(answer);
+        assert!(
+            shown.contains(
+                "Drawing: adds 2 ellipses and an arrow (new whiteboard \u{201c}Who serves whom\u{201d})."
+            ),
+            "{shown}"
+        );
+        let panel = desk.side();
+        assert_eq!(
+            panel.read_with(desk.cx, |panel, cx| {
+                panel.messages().read(cx).action_state(ACTION_DRAW, answer)
+            }),
+            ActionState::Enabled
+        );
+        desk.cx.simulate_keystrokes("cmd-shift-d");
+        desk.cx.run_until_parked();
+
+        // Made in the chapter's folder, titled, opened with the keyboard on it.
+        let board = desk.open_board().expect("the new whiteboard is open");
+        let meta = desk
+            .library
+            .read_with(desk.cx, |l, _| l.document_meta(board).unwrap());
+        assert_eq!(meta.kind, DocumentKind::Board);
+        assert_eq!(meta.title, "Who serves whom");
+        assert_eq!(meta.folder_id, Some(desk.folder));
+        assert!(
+            desk.workspace
+                .update_in(desk.cx, |w, window, _| w.page_has_focus(window))
+        );
+        let content = desk
+            .library
+            .read_with(desk.cx, |l, _| l.document(board).unwrap().content);
+        let scene = innerword_board::Scene::from_stored(&content).unwrap().scene;
+        for id in ["keeper", "ada", "serves"] {
+            assert!(scene.element(id).is_some(), "{id} is drawn");
+        }
+        // The toast, and its way back.
+        let said = made_sentence("Who serves whom", Some("Part one"));
+        assert!(desk.toasts().contains(&said), "{:?}", desk.toasts());
+        let report = desk
+            .workspace
+            .read_with(desk.cx, |w, _| w.last_drawing_report().map(str::to_string))
+            .unwrap();
+        assert!(
+            report.starts_with(&format!(
+                "draw: new board:{} \u{201c}Who serves whom\u{201d} in Part one, 3 added",
+                board.0
+            )),
+            "{report}"
+        );
+        // The whiteboard's own chat says where it came from.
+        let note = panel.read_with(desk.cx, |panel, cx| {
+            panel
+                .messages()
+                .read(cx)
+                .empty_state()
+                .map(|state| state.note.to_string())
+        });
+        assert_eq!(note, Some(origin_note("Chapter 2")));
+        assert_eq!(
+            panel.read_with(desk.cx, |panel, _| panel.drawing_target()),
+            DrawingTarget::OpenWhiteboard
+        );
+        // The chapter's conversation is stored with the answer marked.
+        let chapter = desk.chapter;
+        let stored = desk
+            .library
+            .read_with(desk.cx, |l, _| conversations::load(l, chapter));
+        assert!(stored.last_answer().unwrap().drawn_at.is_some());
+
+        desk.press_toast(&said);
+        assert_eq!(
+            desk.workspace
+                .read_with(desk.cx, |w, _| w.open_document_id()),
+            Some(chapter)
+        );
+        let back = panel.read_with(desk.cx, |panel, _| {
+            panel.transcript().last_answer().cloned().unwrap()
+        });
+        assert_eq!(back.id, answer);
+        assert!(back.drawn_at.is_some(), "drawn, after the way back too");
+
+        // Without a title: after the document; for an untitled document,
+        // "Drawing".
+        let untitled = WHO_SERVES_WHOM.replace(r#""title": "Who serves whom", "#, "");
+        desk.ask(&answer_with(&untitled));
+        desk.cx.simulate_keystrokes("cmd-shift-d");
+        desk.cx.run_until_parked();
+        let second = desk.open_board().unwrap();
+        let title = desk
+            .library
+            .read_with(desk.cx, |l, _| l.document_meta(second).unwrap().title);
+        assert_eq!(title, "Chapter 2 (drawing)");
+        let nameless = desk.add(&innerword_core::Document::new());
+        desk.workspace.update_in(desk.cx, |w, window, cx| {
+            assert!(w.open_document(nameless, true, window, cx));
+        });
+        desk.cx.run_until_parked();
+        desk.ask(&answer_with(&untitled));
+        desk.cx.simulate_keystrokes("cmd-shift-d");
+        desk.cx.run_until_parked();
+        let third = desk.open_board().unwrap();
+        let title = desk
+            .library
+            .read_with(desk.cx, |l, _| l.document_meta(third).unwrap().title);
+        assert_eq!(title, "Drawing");
+    }
+
+    #[gpui::test]
+    fn a_document_in_the_trash_makes_its_whiteboard_at_the_root(cx: &mut TestAppContext) {
+        let mut desk = desk(cx, true);
+        let (folder, chapter) = (desk.folder, desk.chapter);
+        // Its folder in the trash, the document opened from there.
+        let text = desk.add(&simple_document("Elsewhere", "Words."));
+        desk.workspace.update_in(desk.cx, |w, window, cx| {
+            assert!(w.open_document(text, true, window, cx));
+        });
+        desk.library
+            .update(desk.cx, |l, cx| l.trash_folder(folder, cx).unwrap());
+        desk.workspace.update_in(desk.cx, |w, window, cx| {
+            assert!(w.open_document(chapter, true, window, cx));
+        });
+        desk.cx.run_until_parked();
+        desk.ask(&answer_with(WHO_SERVES_WHOM));
+        desk.cx.simulate_keystrokes("cmd-shift-d");
+        desk.cx.run_until_parked();
+        let board = desk.open_board().expect("made");
+        let meta = desk
+            .library
+            .read_with(desk.cx, |l, _| l.document_meta(board).unwrap());
+        assert_eq!(meta.folder_id, None, "at the root, not in the trash");
+        assert!(meta.trashed_at.is_none());
+        assert!(
+            desk.toasts()
+                .contains(&made_sentence("Who serves whom", None)),
+            "{:?}",
+            desk.toasts()
+        );
+    }
+
+    #[gpui::test]
+    fn an_answer_that_names_what_it_does_not_add_says_so_over_a_document(cx: &mut TestAppContext) {
+        let mut desk = desk(cx, true);
+        desk.ask(&answer_with(
+            r#"{"add": [{"type": "arrow", "id": "to", "x": 0, "y": 0, "start": {"id": "keeper"}, "end": {"id": "cache"}},
+                        {"type": "ellipse", "id": "keeper", "x": 0, "y": 200}]}"#,
+        ));
+        desk.cx.simulate_keystrokes("cmd-shift-d");
+        desk.cx.run_until_parked();
+        assert!(desk.open_board().is_none(), "no whiteboard was made");
+        assert!(
+            desk.toasts()
+                .contains(&new_board_names_missing(&["cache".to_string()])),
+            "{:?}",
+            desk.toasts()
+        );
+    }
+
+    #[gpui::test]
+    fn a_drawing_that_changes_a_whiteboard_is_not_offered_over_a_document(cx: &mut TestAppContext) {
+        let mut desk = desk(cx, true);
+        let answer = desk.ask(&answer_with(r#"{"update": [{"id": "api", "x": 40}]}"#));
+        let panel = desk.side();
+        let state = panel.read_with(desk.cx, |panel, cx| {
+            panel.messages().read(cx).action_state(ACTION_DRAW, answer)
+        });
+        assert!(matches!(state, ActionState::Disabled(_)), "{state:?}");
+        desk.cx.simulate_keystrokes("cmd-shift-d");
+        desk.cx.run_until_parked();
+        assert!(desk.open_board().is_none());
+        assert!(
+            desk.toasts().iter().any(|toast| toast
+                == "Nothing was drawn: it changes elements of a whiteboard: open that whiteboard and ask there."),
+            "{:?}",
+            desk.toasts()
+        );
+    }
+
+    #[gpui::test]
+    fn insert_at_caret_leaves_the_drawing_out(cx: &mut TestAppContext) {
+        let mut desk = desk(cx, true);
+        desk.ask(&answer_with(WHO_SERVES_WHOM));
+        desk.cx.simulate_keystrokes("cmd-enter");
+        desk.cx.run_until_parked();
+        let text = editor_text(&desk.workspace, desk.cx);
+        assert!(
+            text.contains("Here is who serves whom in the chapter."),
+            "{text}"
+        );
+        assert!(!text.contains("whiteboard"), "{text}");
+        assert!(!text.contains("keeper\""), "{text}");
+    }
+
+    #[gpui::test]
+    fn without_a_page_engine_no_drawing_is_offered(cx: &mut TestAppContext) {
+        let mut desk = desk(cx, false);
+        let answer = desk.ask(&answer_with(WHO_SERVES_WHOM));
+        let panel = desk.side();
+        assert_eq!(
+            panel.read_with(desk.cx, |panel, _| panel.drawing_target()),
+            DrawingTarget::None
+        );
+        assert_eq!(
+            panel.read_with(desk.cx, |panel, cx| {
+                panel.messages().read(cx).action_state(ACTION_DRAW, answer)
+            }),
+            ActionState::Hidden
+        );
+        let prompt = desk.fake.last_started().unwrap().system_prompt;
+        assert!(!prompt.contains("Drawing a new whiteboard."), "{prompt}");
+        assert!(!prompt.contains("Drawing on the open whiteboard."));
+        desk.cx.simulate_keystrokes("cmd-shift-d");
+        desk.cx.run_until_parked();
+        let sentence = desk
+            .cx
+            .update(|_, cx| innerword_app::boards::not_shown_sentence(cx));
+        assert!(desk.toasts().contains(&sentence), "{:?}", desk.toasts());
+    }
+
+    /// Each item's conversation starts with the prompt of what it offers: a
+    /// document's tells how to draw a new whiteboard, a whiteboard's how to
+    /// draw on it, a page's neither; each starts once.
+    #[gpui::test]
+    fn each_item_starts_its_chat_with_its_own_prompt(cx: &mut TestAppContext) {
+        let mut desk = desk(cx, true);
+        desk.ask("About the chapter.");
+        let started = desk.fake.started();
+        assert_eq!(started.len(), 1);
+        assert!(
+            started[0]
+                .system_prompt
+                .contains("Drawing a new whiteboard.")
+        );
+        assert!(
+            !started[0]
+                .system_prompt
+                .contains("Drawing on the open whiteboard.")
+        );
+
+        let board = desk
+            .workspace
+            .update_in(desk.cx, |w, window, cx| {
+                w.new_board(Some("Plan"), window, cx)
+            })
+            .unwrap();
+        desk.cx.run_until_parked();
+        desk.pages.as_ref().unwrap().board_ready();
+        desk.cx.run_until_parked();
+        desk.ask("About the whiteboard.");
+        let started = desk.fake.started();
+        assert_eq!(started.len(), 2, "one start for the whiteboard");
+        assert!(
+            started[1]
+                .system_prompt
+                .contains("Drawing on the open whiteboard.")
+        );
+        assert!(
+            !started[1]
+                .system_prompt
+                .contains("Drawing a new whiteboard.")
+        );
+
+        let bundle = innerword_app::pages::offline_bundle(
+            "harbour",
+            "index.html",
+            vec![(
+                "index.html".to_string(),
+                b"<!doctype html><title>Harbour</title><p>Boats.</p>".to_vec(),
+            )],
+        );
+        let library = desk.library.clone();
+        let page = desk.cx.update(|_, cx| {
+            innerword_app::pages::store_offline_bundle(&library, bundle, None, None, cx)
+                .unwrap()
+                .id
+        });
+        desk.workspace.update_in(desk.cx, |w, window, cx| {
+            assert!(w.open_document(page, true, window, cx));
+        });
+        desk.cx.run_until_parked();
+        desk.ask("About the page.");
+        let started = desk.fake.started();
+        assert_eq!(started.len(), 3, "one start for the page");
+        assert!(!started[2].system_prompt.contains("Drawing"));
+        // Back on the whiteboard: its chat is where it was, nothing restarts.
+        desk.workspace.update_in(desk.cx, |w, window, cx| {
+            assert!(w.open_document(board, true, window, cx));
+        });
+        desk.cx.run_until_parked();
+        assert_eq!(desk.fake.started().len(), 3);
+    }
+
+    #[gpui::test]
+    fn the_palette_names_the_command_by_the_open_item(cx: &mut TestAppContext) {
+        let mut desk = desk(cx, true);
+        let listed = |desk: &mut Desk<'_>| {
+            let workspace = desk.workspace.clone();
+            workspace.update_in(desk.cx, |w, window, cx| {
+                w.toggle_command_palette(window, cx)
+            });
+            desk.cx.run_until_parked();
+            let palette = workspace
+                .read_with(desk.cx, |w, cx| {
+                    w.modal_layer()
+                        .read(cx)
+                        .active::<innerword_app::palette::CommandPalette>()
+                })
+                .expect("the palette is open");
+            let titles = palette.read_with(desk.cx, |palette, _| palette.delegate.listed_titles());
+            workspace.update_in(desk.cx, |w, window, cx| w.dismiss_modal(window, cx));
+            desk.cx.run_until_parked();
+            titles
+                .into_iter()
+                .filter(|title| title.contains("answer") && title.contains("whiteboard"))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(listed(&mut desk), ["New whiteboard from answer"]);
+        desk.workspace
+            .update_in(desk.cx, |w, window, cx| {
+                w.new_board(Some("Plan"), window, cx)
+            })
+            .unwrap();
+        desk.cx.run_until_parked();
+        desk.pages.as_ref().unwrap().board_ready();
+        desk.cx.run_until_parked();
+        assert_eq!(listed(&mut desk), ["Draw answer on whiteboard"]);
+        // The command is one of the assistant's, by itself.
+        let all = desk.cx.update(|_, cx| commands::all(cx));
+        assert!(
+            all.iter()
+                .any(|command| command.title.as_ref() == "New whiteboard from answer")
+        );
+    }
+}

@@ -3786,6 +3786,50 @@ mod drawings {
         assert!(desk.drawn(answer));
     }
 
+    /// The answer's menu has "Draw on Whiteboard", last, and it draws.
+    #[gpui::test]
+    fn the_answers_menu_draws_on_the_whiteboard(cx: &mut TestAppContext) {
+        let mut desk = desk(cx);
+        let answer = desk.ask(&answer_with(DB_AND_BLUE));
+        let panel = desk.side();
+        panel.update_in(desk.cx, |panel, window, cx| {
+            panel.messages().update(cx, |list, cx| {
+                list.open_menu(
+                    answer,
+                    gpui::point(gpui::px(300.), gpui::px(200.)),
+                    true,
+                    window,
+                    cx,
+                )
+            })
+        });
+        desk.cx.run_until_parked();
+        let labels = desk
+            .cx
+            .update(|window, cx| {
+                innerword_ui::ContextMenu::current(window, cx).map(|menu| menu.read(cx).labels())
+            })
+            .expect("the answer's menu is open");
+        let last = labels.iter().rev().find(|label| *label != "-").unwrap();
+        assert!(last.starts_with("Draw on Whiteboard"), "{labels:?}");
+        let at = desk.cx.update(|window, cx| {
+            let menu = innerword_ui::ContextMenu::current(window, cx).unwrap();
+            let menu = menu.read(cx);
+            let ix = menu
+                .labels()
+                .iter()
+                .position(|label| label.starts_with("Draw on Whiteboard"))
+                .unwrap();
+            menu.item_bounds(ix).expect("the menu was drawn").center()
+        });
+        desk.cx
+            .simulate_mouse_move(at, None, gpui::Modifiers::default());
+        desk.cx.simulate_click(at, gpui::Modifiers::default());
+        desk.cx.run_until_parked();
+        assert_eq!(desk.pages.adopted().len(), 1);
+        assert!(desk.drawn(answer));
+    }
+
     #[gpui::test]
     fn the_line_names_the_whiteboards_elements(cx: &mut TestAppContext) {
         let mut desk = desk(cx);

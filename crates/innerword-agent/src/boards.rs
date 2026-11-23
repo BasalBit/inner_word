@@ -339,11 +339,83 @@ fn what_it_is(element: &Element, scene: &Scene) -> String {
 
 /// For each line of `text` (the scene's text, [`Scene::text`]), the element it is on.
 ///
-/// The text is the texts of the elements in reading order, one after the other: each line
-/// is given to the element whose text the lines from there are, the first one in the
-/// order of the drawing that is not given yet (two elements with the same text are the
-/// same to whoever reads a hit).
+/// The text is the texts of the elements in reading order, one after the other. Which
+/// element comes where is asked of `innerword_board` itself, so that its order and this
+/// one never part: the texts of a copy of the scene are replaced by the number of their
+/// element (where an element stands does not depend on its text: a text keeps its width
+/// and height), and the text of the copy is those numbers in reading order. Should the
+/// lines not add up, the lines are matched to the texts instead ([`lines_matched`]).
 fn line_owners(scene: &Scene, text: &str) -> Vec<Option<String>> {
+    let normalized = innerword_core::text::normalize_input(text);
+    let count = normalized.split('\n').count();
+    let mut owners: Vec<Option<String>> = Vec::with_capacity(count);
+    if let Some(order) = reading_order(scene) {
+        for n in order {
+            let element = &scene.elements()[n];
+            let Some(own) = text_on(element) else {
+                owners.clear();
+                break;
+            };
+            let what = what_it_is(element, scene);
+            owners.extend(std::iter::repeat_n(Some(what), own.split('\n').count()));
+        }
+        if owners.len() == count {
+            return owners;
+        }
+    }
+    lines_matched(scene, &normalized)
+}
+
+/// The elements whose texts make the scene's text ([`text_on`]), by their place in
+/// [`Scene::elements`], in the order [`Scene::text`] puts them; `None` when the copy that
+/// asks cannot be read back.
+fn reading_order(scene: &Scene) -> Option<Vec<usize>> {
+    let elements = scene.elements();
+    let with_text: Vec<usize> = (0..elements.len())
+        .filter(|&n| text_on(&elements[n]).is_some())
+        .collect();
+    if with_text.is_empty() {
+        return Some(Vec::new());
+    }
+    // The elements with a text and the containers of the labels among them: where a
+    // label stands is where its container stands.
+    let containers: HashSet<&str> = with_text
+        .iter()
+        .filter_map(|&n| elements[n].container_id())
+        .collect();
+    let mut copy = Vec::new();
+    for (n, element) in elements.iter().enumerate() {
+        let mut json = element.json().clone();
+        if text_on(element).is_some() {
+            let marker = Value::String(n.to_string());
+            if element.kind() == ElementType::Frame {
+                json.insert("name".into(), marker);
+            } else {
+                json.insert("originalText".into(), marker.clone());
+                json.insert("text".into(), marker);
+            }
+        } else if !containers.contains(element.id()) {
+            continue;
+        }
+        copy.push(Value::Object(json));
+    }
+    let stored = serde_json::json!({ "elements": copy }).to_string();
+    let parsed = Scene::from_stored(&stored).ok()?;
+    let order: Vec<usize> = parsed
+        .scene
+        .text()
+        .split('\n')
+        .map(|line| line.parse::<usize>().ok())
+        .collect::<Option<_>>()?;
+    (order.len() == with_text.len()).then_some(order)
+}
+
+/// For each line of the normalized text of a scene, the element it is on, by matching:
+/// each line is given to the element whose text the lines from there are, the first one
+/// in the order of the drawing that is not given yet (two elements with the same text
+/// are the same to whoever reads a hit). Wrong where one text begins another's and the
+/// shorter one is drawn first, which is why [`line_owners`] asks for the order first.
+fn lines_matched(scene: &Scene, normalized: &str) -> Vec<Option<String>> {
     struct Entry {
         lines: Vec<String>,
         what: String,
@@ -360,7 +432,6 @@ fn line_owners(scene: &Scene, text: &str) -> Vec<Option<String>> {
             })
         })
         .collect();
-    let normalized = innerword_core::text::normalize_input(text);
     let lines: Vec<&str> = normalized.split('\n').collect();
     let mut owners: Vec<Option<String>> = vec![None; lines.len()];
     let mut at = 0;
@@ -1470,11 +1541,18 @@ pub(crate) fn update_board(
     // request of nothing but such changes keeps no version of the whiteboard and says it
     // would change nothing. What is left is made again from the scene as it was, so a
     // dry run and the real run make the same.
+    let kept = changes_that_change(&request.changes, &before, &scene, |scene, changes| {
+        let mut making = self::making(Some(meta.id), &raw, &changes, &[], session.clock.now_ms())?;
+        innerword_board::update(scene, changes, &mut making)
+            .map_err(|error| refused(error, &name))?;
+        Ok(())
+    })?;
     let effective: Vec<ElementChange> = request
         .changes
         .iter()
-        .filter(|change| !left_as_it_was(change, &before, &scene))
-        .cloned()
+        .zip(&kept)
+        .filter(|(_, kept)| **kept)
+        .map(|(change, _)| change.clone())
         .collect();
     if effective.is_empty() {
         updated.changed.clear();
@@ -1550,9 +1628,69 @@ fn same_element(before: &Element, after: &Element) -> bool {
             .all(|(key, value)| after.get(key).is_some_and(|other| same_value(value, other)))
 }
 
+/// Which changes of an update change something, each judged against the scene as it
+/// stood just before it, as the update applies them one after the other (`apply` runs
+/// some of them on a scene). A change is no change when it leaves its element and that
+/// element's label as they were then: it set what the element already had.
+///
+/// Judging a change by the scene after the whole update would drop one that undoes what
+/// another change of the request did (a frame moved and its child set back where it
+/// was), and the drawing saved would not be the one asked for. So the whole update
+/// (`before` to `after`) only says which changes may be no change (their elements end as
+/// they were); those are judged where they stand. A run of them that leaves every element
+/// it names as it was is no change at all (one request that sets every element as it is
+/// costs one more update, not one per change); otherwise each is applied alone.
+fn changes_that_change(
+    changes: &[ElementChange],
+    before: &Scene,
+    after: &Scene,
+    mut apply: impl FnMut(&mut Scene, &[ElementChange]) -> Result<()>,
+) -> Result<Vec<bool>> {
+    let maybe: Vec<bool> = changes
+        .iter()
+        .map(|change| left_as_it_was(change, before, after))
+        .collect();
+    let mut kept = vec![true; changes.len()];
+    if !maybe.contains(&true) {
+        return Ok(kept);
+    }
+    let mut work = before.clone();
+    let mut start = 0;
+    while start < changes.len() {
+        let mut end = start + 1;
+        while end < changes.len() && maybe[end] == maybe[start] {
+            end += 1;
+        }
+        let run = &changes[start..end];
+        if !maybe[start] {
+            apply(&mut work, run)?;
+        } else {
+            let was = work.clone();
+            apply(&mut work, run)?;
+            if run.iter().all(|change| left_as_it_was(change, &was, &work)) {
+                kept[start..end].fill(false);
+                work = was;
+            } else {
+                work = was;
+                for (n, change) in run.iter().enumerate() {
+                    let was = work.clone();
+                    apply(&mut work, std::slice::from_ref(change))?;
+                    if left_as_it_was(change, &was, &work) {
+                        kept[start + n] = false;
+                        work = was;
+                    }
+                }
+            }
+        }
+        start = end;
+    }
+    Ok(kept)
+}
+
 /// Whether a change of an update left its element as it was: the element it names and
-/// that element's label are what they were before (`before`) and after the whole update
-/// (`after`). Such a change set what the element already has, and is no change at all.
+/// that element's label are what they were in `before` and in `after`. Between the scene
+/// just before the change and just after it, such a change set what the element already
+/// has, and is no change at all.
 fn left_as_it_was(change: &ElementChange, before: &Scene, after: &Scene) -> bool {
     let Some(id) = change.0.get("id").and_then(Value::as_str) else {
         return false;

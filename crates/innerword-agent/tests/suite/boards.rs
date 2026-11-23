@@ -1085,6 +1085,94 @@ fn a_change_to_what_an_element_already_is_changes_nothing() {
     assert_eq!(after.element("db").unwrap().x(), 420.0);
 }
 
+/// A change that undoes what another change of the same request did is a change: it is
+/// judged against the drawing as it stood just before it, not by where its element ends.
+#[test]
+fn a_change_that_undoes_another_of_the_request_is_kept() {
+    let fx = fixture();
+    let plan = board(
+        &fx,
+        None,
+        "Plan",
+        &format!(
+            "{},{}",
+            PLAN.trim_end().trim_end_matches(']'),
+            r#"{"type":"frame","id":"backend","children":["api","db","reads"],"name":"Backend"}]"#
+        ),
+    )
+    .board
+    .id;
+    let x = |id: &str| scene(&fx, plan).element(id).unwrap().x();
+    let (api, db) = (x("api"), x("db"));
+    let update = |changes_json: &str, write: WriteOptions| {
+        fx.clock.advance_ms(1000);
+        fx.library
+            .update_board(&UpdateBoardRequest {
+                board: plan.into(),
+                changes: changes(changes_json),
+                write,
+            })
+            .unwrap()
+    };
+
+    // The frame moves its children; then one of them is set back where it was.
+    let asked = format!(r#"[{{"id":"backend","dx":40}},{{"id":"api","x":{api}}}]"#);
+    let tried = update(&asked, dry());
+    assert!(tried.written.would_change, "{tried:?}");
+    assert_eq!(tried.updated[..2], ["backend", "api"], "{tried:?}");
+    let done = update(&asked, claude());
+    assert!(done.written.changed, "{done:?}");
+    assert_eq!(x("api"), api, "api stays where it was asked to be");
+    assert_eq!(x("db"), db + 40.0, "db moved with its frame");
+
+    // The same with a move back by as much.
+    let frame = x("backend");
+    update(r#"[{"id":"backend","dx":40},{"id":"api","dx":-40}]"#, claude());
+    assert_eq!(x("backend"), frame + 40.0);
+    assert_eq!(x("api"), api, "api moved with its frame and back");
+    assert_eq!(x("db"), db + 80.0);
+
+    // A move and its undoing in one request change nothing at all.
+    let stored = fx.store().document(plan).unwrap().content;
+    let none = update(r#"[{"id":"db","dx":40},{"id":"db","dx":-40}]"#, claude());
+    assert!(
+        !none.written.changed && none.version.is_none() && none.updated.is_empty(),
+        "{none:?}"
+    );
+    assert_eq!(fx.store().document(plan).unwrap().content, stored);
+}
+
+/// A hit of a find names the element it is on, also where one text begins another and
+/// the shorter one was drawn first.
+#[test]
+fn a_hit_names_its_element_when_one_text_begins_another() {
+    let fx = fixture();
+    let plan = board(
+        &fx,
+        None,
+        "Plan",
+        r#"[{"type":"rectangle","id":"api","x":100,"y":300,"width":200,"height":90,"label":{"text":"API"}},
+            {"type":"text","id":"title","x":100,"y":20,"text":"API\nGateway"}]"#,
+    )
+    .board
+    .id;
+    let found = |text: &str| {
+        fx.library
+            .find(&FindRequest {
+                document: plan.into(),
+                text: text.into(),
+                ..Default::default()
+            })
+            .unwrap()
+            .occurrences
+            .into_iter()
+            .map(|hit| hit.element.unwrap_or_default())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(found("Gateway"), ["title (text)"]);
+    assert_eq!(found("API"), ["title (text)", "api (rectangle label)"]);
+}
+
 // ----- export --------------------------------------------------------------------------------
 
 #[test]

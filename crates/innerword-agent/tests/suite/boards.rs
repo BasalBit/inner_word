@@ -193,8 +193,12 @@ fn a_whiteboard_is_made_drawn_on_changed_and_cut_down() {
     assert_eq!(read.content, after.to_stored());
     assert_eq!(read.comments, Some(Vec::new()));
     let info = read.board.expect("what a whiteboard holds");
-    assert_eq!(info.summary.elements, 8);
-    assert_eq!(info.summary.by_type["text"], 4);
+    // One count of elements everywhere: a label is part of its shape or arrow (the
+    // listing's header says 5 elements).
+    assert_eq!(info.summary.elements, 5);
+    assert_eq!(info.summary.labels, 3);
+    assert_eq!(info.summary.by_type["text"], 1);
+    assert_eq!(info.summary.by_type.values().sum::<u64>(), 5);
     let elements = info.elements.expect("every element as data");
     let api = elements.iter().find(|e| e.id == "api").unwrap();
     assert_eq!(api.label.as_deref(), Some("API"));
@@ -216,8 +220,14 @@ fn a_whiteboard_is_made_drawn_on_changed_and_cut_down() {
     assert!(info.custom_title);
     assert_eq!(info.headings, []);
     assert_eq!(info.versions, 1);
-    assert_eq!(info.board.as_ref().unwrap().summary.elements, 8);
+    assert_eq!(info.board.as_ref().unwrap().summary.elements, 5);
     assert!(info.board.unwrap().elements.is_none());
+    let listed = fx.library.boards(&BoardsRequest::default()).unwrap();
+    let row = listed.boards.iter().find(|b| b.board.id == id).unwrap();
+    assert_eq!(
+        row.elements, 5,
+        "the list counts as info and the listing do"
+    );
 
     // Find names the element of each hit.
     let find = |text: &str| {
@@ -982,6 +992,97 @@ fn a_dry_run_writes_nothing_and_names_the_ids_the_real_run_gives() {
         "{}",
         listing(&fx, untitled.board.id)
     );
+}
+
+/// The version of an element of the stored whiteboard, and the number of versions kept.
+fn stamps(fx: &Fixture, board: DocumentId, id: &str) -> (i64, usize) {
+    let version = scene(fx, board).element(id).expect("the element").version();
+    let kept = fx
+        .library
+        .versions(&ListVersionsRequest {
+            document: board.into(),
+        })
+        .unwrap()
+        .versions
+        .len();
+    (version, kept)
+}
+
+#[test]
+fn a_change_to_what_an_element_already_is_changes_nothing() {
+    let fx = fixture();
+    let plan = board(&fx, Some("Sketches"), "Plan", PLAN).board.id;
+    let stored = fx.store().document(plan).unwrap().content;
+    let (api, kept) = stamps(&fx, plan, "api");
+    // Every value as it is: a position, a colour, a move by nothing, a label's own text.
+    let same = |write: WriteOptions| UpdateBoardRequest {
+        board: plan.into(),
+        changes: changes(
+            r##"[{"id":"api","x":100,"y":80,"backgroundColor":"#a5d8ff","fillStyle":"solid"},
+                {"id":"db","dx":0,"dy":0,"text":"Postgres"}]"##,
+        ),
+        write,
+    };
+    let bytes = fx.bytes();
+    let tried = fx.library.update_board(&same(dry())).unwrap();
+    assert!(tried.written.dry_run, "{tried:?}");
+    assert!(
+        !tried.written.would_change,
+        "a dry run says it would change nothing"
+    );
+    assert!(
+        tried.updated.is_empty() && tried.version.is_none(),
+        "{tried:?}"
+    );
+    assert_eq!(fx.bytes(), bytes, "a dry run wrote");
+    fx.clock.advance_ms(1000);
+    let done = fx.library.update_board(&same(claude())).unwrap();
+    assert!(
+        !done.written.changed && !done.written.would_change,
+        "{done:?}"
+    );
+    assert!(
+        done.updated.is_empty() && done.version.is_none(),
+        "{done:?}"
+    );
+    assert_eq!(fx.store().document(plan).unwrap().content, stored);
+    assert_eq!(
+        stamps(&fx, plan, "api"),
+        (api, kept),
+        "no version raised, none kept"
+    );
+
+    // A request that changes one element and sets another as it is: only the first
+    // changes, and the second keeps its version.
+    let (db, _) = stamps(&fx, plan, "db");
+    fx.clock.advance_ms(1000);
+    let mixed = fx
+        .library
+        .update_board(&UpdateBoardRequest {
+            board: plan.into(),
+            changes: changes(
+                r##"[{"id":"api","dx":40},{"id":"db","x":420,"y":80,"text":"Postgres"}]"##,
+            ),
+            write: claude(),
+        })
+        .unwrap();
+    assert!(
+        mixed.written.changed && mixed.version.is_some(),
+        "{mixed:?}"
+    );
+    assert!(mixed.updated.iter().any(|id| id == "api"), "{mixed:?}");
+    assert!(!mixed.updated.iter().any(|id| id == "db"), "{mixed:?}");
+    let (api_after, kept_after) = stamps(&fx, plan, "api");
+    assert!(api_after > api, "the element that moved has a new version");
+    assert_eq!(kept_after, kept + 1, "one version kept");
+    assert_eq!(
+        stamps(&fx, plan, "db").0,
+        db,
+        "the one set as it was keeps its version"
+    );
+    let after = scene(&fx, plan);
+    assert_eq!(after.element("api").unwrap().x(), 140.0);
+    assert_eq!(after.element("db").unwrap().x(), 420.0);
 }
 
 // ----- export --------------------------------------------------------------------------------

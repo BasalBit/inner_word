@@ -22,8 +22,8 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use innerword_board::{
-    Added, BoardError, Element, ElementType, FileHex, HashedMaking, ListingHeader, Picture,
-    Pictures, Scene,
+    Added, BoardError, Element, ElementChange, ElementType, FileHex, HashedMaking, ListingHeader,
+    Picture, Pictures, Scene,
 };
 use innerword_core::{Document, Fragment, Stats};
 use innerword_store::{
@@ -1455,6 +1455,7 @@ pub(crate) fn update_board(
     }
     let name = quoted_excerpt(title_of(&meta));
     let (mut scene, raw, mut warnings) = stored_scene(session.store, &meta)?;
+    let before = scene.clone();
     let mut making = making(
         Some(meta.id),
         &raw,
@@ -1462,8 +1463,28 @@ pub(crate) fn update_board(
         &[],
         session.clock.now_ms(),
     )?;
-    let updated = innerword_board::update(&mut scene, &request.changes, &mut making)
+    let mut updated = innerword_board::update(&mut scene, &request.changes, &mut making)
         .map_err(|error| refused(error, &name))?;
+    // A change that sets what an element already has changes nothing (spec 7.7): it is
+    // left out, so that its element, and the arrows joined to it, keep their versions; a
+    // request of nothing but such changes keeps no version of the whiteboard and says it
+    // would change nothing. What is left is made again from the scene as it was, so a
+    // dry run and the real run make the same.
+    let effective: Vec<ElementChange> = request
+        .changes
+        .iter()
+        .filter(|change| !left_as_it_was(change, &before, &scene))
+        .cloned()
+        .collect();
+    if effective.is_empty() {
+        updated.changed.clear();
+    } else if effective.len() < request.changes.len() {
+        scene = before;
+        let mut making =
+            self::making(Some(meta.id), &raw, &effective, &[], session.clock.now_ms())?;
+        updated = innerword_board::update(&mut scene, &effective, &mut making)
+            .map_err(|error| refused(error, &name))?;
+    }
     warnings.extend(updated.warnings.iter().cloned());
     if updated.changed.is_empty() {
         return Ok(BoardChanged {
@@ -1491,6 +1512,67 @@ pub(crate) fn update_board(
         warnings,
         written: session.written(true),
     })
+}
+
+/// The fields of an element that every change of it sets anew: they say that it changed,
+/// not what it is.
+const STAMPS: [&str; 3] = ["version", "versionNonce", "updated"];
+
+/// Whether two values are the same as JSON reads them (a number by its value: `100` and
+/// `100.0` are one).
+fn same_value(a: &Value, b: &Value) -> bool {
+    match (a, b) {
+        (Value::Number(a), Value::Number(b)) => a == b || a.as_f64() == b.as_f64(),
+        (Value::Array(a), Value::Array(b)) => {
+            a.len() == b.len() && a.iter().zip(b).all(|(a, b)| same_value(a, b))
+        }
+        (Value::Object(a), Value::Object(b)) => {
+            a.len() == b.len()
+                && a.iter()
+                    .all(|(key, a)| b.get(key).is_some_and(|b| same_value(a, b)))
+        }
+        _ => a == b,
+    }
+}
+
+/// Whether an element is what it was, its stamps ([`STAMPS`]) aside.
+fn same_element(before: &Element, after: &Element) -> bool {
+    let (before, after) = (before.json(), after.json());
+    let fields = |map: &'_ serde_json::Map<String, Value>| {
+        map.keys()
+            .filter(|key| !STAMPS.contains(&key.as_str()))
+            .count()
+    };
+    fields(before) == fields(after)
+        && before
+            .iter()
+            .filter(|(key, _)| !STAMPS.contains(&key.as_str()))
+            .all(|(key, value)| after.get(key).is_some_and(|other| same_value(value, other)))
+}
+
+/// Whether a change of an update left its element as it was: the element it names and
+/// that element's label are what they were before (`before`) and after the whole update
+/// (`after`). Such a change set what the element already has, and is no change at all.
+fn left_as_it_was(change: &ElementChange, before: &Scene, after: &Scene) -> bool {
+    let Some(id) = change.0.get("id").and_then(Value::as_str) else {
+        return false;
+    };
+    let label = |scene: &Scene| {
+        scene.element(id).and_then(|element| {
+            element
+                .bound_elements()
+                .into_iter()
+                .find(|(_, kind)| *kind == "text")
+                .map(|(label, _)| label.to_string())
+        })
+    };
+    let same = |id: &str| match (before.element(id), after.element(id)) {
+        (Some(was), Some(is)) => same_element(was, is),
+        (None, None) => true,
+        _ => false,
+    };
+    let (label_before, label_after) = (label(before), label(after));
+    label_before == label_after && same(id) && label_before.as_deref().is_none_or(same)
 }
 
 /// Removes elements of a whiteboard by id. See [`RemoveFromBoardRequest`].

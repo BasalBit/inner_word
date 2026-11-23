@@ -120,7 +120,10 @@ impl Shape {
                 let (s, c) = self.angle.sin_cos();
                 let ex = ((hw * c).powi(2) + (hh * s).powi(2)).sqrt();
                 let ey = ((hw * s).powi(2) + (hh * c).powi(2)).sqrt();
-                vec![(center.0 - ex, center.1 - ey), (center.0 + ex, center.1 + ey)]
+                vec![
+                    (center.0 - ex, center.1 - ey),
+                    (center.0 + ex, center.1 + ey),
+                ]
             }
             ShapeKind::Rectangle => [(-hw, -hh), (hw, -hh), (hw, hh), (-hw, hh)]
                 .iter()
@@ -163,11 +166,18 @@ pub(crate) fn element_bounds(element: &Element) -> Option<[f64; 4]> {
             let min_y = pts.iter().map(|p| p.1).fold(f64::INFINITY, f64::min);
             let max_y = pts.iter().map(|p| p.1).fold(f64::NEG_INFINITY, f64::max);
             let center = (x + (min_x + max_x) / 2.0, y + (min_y + max_y) / 2.0);
-            pts.iter().map(|p| rotate((x + p.0, y + p.1), center, element.angle())).collect()
+            pts.iter()
+                .map(|p| rotate((x + p.0, y + p.1), center, element.angle()))
+                .collect()
         }
         _ => Shape::of(element).extremes(),
     };
-    let mut b = [f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY];
+    let mut b = [
+        f64::INFINITY,
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+        f64::NEG_INFINITY,
+    ];
     for (px, py) in points {
         if !px.is_finite() || !py.is_finite() {
             continue;
@@ -209,10 +219,16 @@ pub(crate) fn focus(shape: &Shape, a: Point, b: Point) -> f64 {
         return 0.0;
     }
     let reach = (w * 2.0).max(h * 2.0);
-    let end = (rb.0 + direction.0 / length * reach, rb.1 + direction.1 / length * reach);
+    let end = (
+        rb.0 + direction.0 / length * reach,
+        rb.1 + direction.1 / length * reach,
+    );
     let diamond = shape.kind == ShapeKind::Diamond;
     let axes: [(Point, Point); 2] = if diamond {
-        [((x + w / 2.0, y), (x + w / 2.0, y + h)), ((x, y + h / 2.0), (x + w, y + h / 2.0))]
+        [
+            ((x + w / 2.0, y), (x + w / 2.0, y + h)),
+            ((x, y + h / 2.0), (x + w, y + h / 2.0)),
+        ]
     } else {
         [((x, y), (x + w, y + h)), ((x + w, y), (x, y + h))]
     };
@@ -222,7 +238,10 @@ pub(crate) fn focus(shape: &Shape, a: Point, b: Point) -> f64 {
             ((x - w, y + h / 2.0), (x + w * 2.0, y + h / 2.0)),
         ]
     } else {
-        [((x - w, y - h), (x + w * 2.0, y + h * 2.0)), ((x + w * 2.0, y - h), (x - w, y + h * 2.0))]
+        [
+            ((x - w, y - h), (x + w * 2.0, y + h * 2.0)),
+            ((x + w * 2.0, y - h), (x - w, y + h * 2.0)),
+        ]
     };
     let mut hits: Vec<(f64, usize, Point)> = Vec::new();
     for (n, (p, q)) in interceptees.iter().enumerate() {
@@ -243,7 +262,11 @@ pub(crate) fn focus(shape: &Shape, a: Point, b: Point) -> f64 {
             } else {
                 (w * w + h * h).sqrt() / 2.0
             };
-            if half == 0.0 { 0.0 } else { sign * distance(center, *p) / half }
+            if half == 0.0 {
+                0.0
+            } else {
+                sign * distance(center, *p) / half
+            }
         })
         .collect();
     ratios.sort_by(|g, h| g.abs().total_cmp(&h.abs()));
@@ -266,7 +289,14 @@ mod tests {
     use super::*;
 
     fn shape(kind: ShapeKind) -> Shape {
-        Shape { kind, x: 100.0, y: 100.0, width: 200.0, height: 100.0, angle: 0.0 }
+        Shape {
+            kind,
+            x: 100.0,
+            y: 100.0,
+            width: 200.0,
+            height: 100.0,
+            angle: 0.0,
+        }
     }
 
     #[test]
@@ -286,16 +316,30 @@ mod tests {
         let e = shape(ShapeKind::Ellipse);
         assert_eq!(focus(&e, (0.0, 150.0), (100.0, 150.0)), 0.0);
         let off = focus(&e, (0.0, 140.0), (100.0, 140.0));
-        assert!(off != 0.0 && off.abs() < 0.2, "{off}");
+        assert!((off.abs() - 0.2).abs() < 1e-9, "{off}");
     }
 
     #[test]
     fn focus_as_excalidraw_computed_it_for_the_scout() {
         // An arrow at y 155 ending on an ellipse centred at (590, 160): Excalidraw wrote 0.1.
-        let e = Shape { kind: ShapeKind::Ellipse, x: 500.0, y: 110.0, width: 180.0, height: 100.0, angle: 0.0 };
+        let e = Shape {
+            kind: ShapeKind::Ellipse,
+            x: 500.0,
+            y: 110.0,
+            width: 180.0,
+            height: 100.0,
+            angle: 0.0,
+        };
         let f = focus(&e, (320.0, 155.0), (500.0, 155.0));
         assert!((f - 0.1).abs() < 1e-9, "{f}");
-        let r = Shape { kind: ShapeKind::Rectangle, x: 100.0, y: 100.0, width: 220.0, height: 110.0, angle: 0.0 };
+        let r = Shape {
+            kind: ShapeKind::Rectangle,
+            x: 100.0,
+            y: 100.0,
+            width: 220.0,
+            height: 110.0,
+            angle: 0.0,
+        };
         assert_eq!(focus(&r, (500.0, 155.0), (320.0, 155.0)), 0.0);
     }
 }

@@ -5,8 +5,13 @@ use std::collections::BTreeSet;
 use serde_json::{Map, Value};
 
 use super::add::apply_common;
-use super::fields::{ARROWHEADS, At, FILL_FIELDS, NEVER_FROM_AGENTS, STYLE_FIELDS, normalize_angle};
-use super::make::{self, Snap, TextStyle, add_bound, bump, invisibly_small_points, is_bindable, label_id, remove_bound};
+use super::fields::{
+    ARROWHEADS, At, FILL_FIELDS, NEVER_FROM_AGENTS, STYLE_FIELDS, normalize_angle,
+};
+use super::make::{
+    self, Snap, TextStyle, add_bound, bump, invisibly_small_points, is_bindable, label_id,
+    remove_bound,
+};
 use super::{BoardError, ElementChange, Updated, check_limits, known_ids, new_id};
 use crate::limits::MAX_REQUEST_ELEMENTS;
 use crate::metrics;
@@ -35,13 +40,28 @@ const CHANGE_FIELDS: [&str; 20] = [
     "startArrowhead",
 ];
 const MORE_FIELDS: [&str; 1] = ["endArrowhead"];
-const LABEL_CHANGE_FIELDS: [&str; 8] =
-    ["id", "text", "fontSize", "fontFamily", "textAlign", "verticalAlign", "strokeColor", "opacity"];
+const LABEL_CHANGE_FIELDS: [&str; 8] = [
+    "id",
+    "text",
+    "fontSize",
+    "fontFamily",
+    "textAlign",
+    "verticalAlign",
+    "strokeColor",
+    "opacity",
+];
 const FONT_FIELDS: [&str; 4] = ["fontSize", "fontFamily", "textAlign", "verticalAlign"];
 
-pub(super) fn update(scene: &mut Scene, changes: &[ElementChange], making: &mut dyn Making) -> Result<Updated, BoardError> {
+pub(super) fn update(
+    scene: &mut Scene,
+    changes: &[ElementChange],
+    making: &mut dyn Making,
+) -> Result<Updated, BoardError> {
     if changes.len() > MAX_REQUEST_ELEMENTS {
-        return Err(BoardError::TooLarge { what: "request", limit: MAX_REQUEST_ELEMENTS });
+        return Err(BoardError::TooLarge {
+            what: "request",
+            limit: MAX_REQUEST_ELEMENTS,
+        });
     }
     let mut changed: Vec<String> = Vec::new();
     let mut warnings = Vec::new();
@@ -54,14 +74,26 @@ pub(super) fn update(scene: &mut Scene, changes: &[ElementChange], making: &mut 
             None => return Err(at.invalid("id", "a change names its element by id")),
         };
         let Some(element) = scene.element(&id).cloned() else {
-            return Err(BoardError::NotFound { id: id.clone(), known: known_ids(scene, &id) });
+            return Err(BoardError::NotFound {
+                id: id.clone(),
+                known: known_ids(scene, &id),
+            });
         };
         check_fields(at, map, &element)?;
         let mut touched = Touched::default();
         if element.container_id().is_some() {
-            change_label(at, map, scene, &id, making, &mut touched)?;
+            change_label(at, map, scene, &id, &mut touched)?;
         } else {
-            change_element(at, map, scene, &id, &mut taken, making, &mut touched, &mut warnings)?;
+            change_element(
+                at,
+                map,
+                scene,
+                &id,
+                &mut taken,
+                making,
+                &mut touched,
+                &mut warnings,
+            )?;
         }
         for id in touched.ids {
             if let Some(element) = scene.element_mut(&id) {
@@ -97,12 +129,25 @@ fn check_fields(at: At, map: &Map<String, Value>, element: &Element) -> Result<(
             return Err(at.invalid(key, *why));
         }
         match key.as_str() {
-            "type" => return Err(at.invalid(key, "the type of an element cannot change; remove it and add another")),
+            "type" => {
+                return Err(at.invalid(
+                    key,
+                    "the type of an element cannot change; remove it and add another",
+                ));
+            }
             "path" => {
-                return Err(at.invalid(key, "the file of a picture cannot change; remove the element and add another"));
+                return Err(at.invalid(
+                    key,
+                    "the file of a picture cannot change; remove the element and add another",
+                ));
             }
             "label" => return Err(at.invalid(key, "a label's text is changed with text")),
-            "children" => return Err(at.invalid(key, "a frame's children are not changed; remove the frame and add another")),
+            "children" => {
+                return Err(at.invalid(
+                    key,
+                    "a frame's children are not changed; remove the frame and add another",
+                ));
+            }
             _ => {}
         }
         if element.container_id().is_some() {
@@ -141,7 +186,11 @@ fn check_fields(at: At, map: &Map<String, Value>, element: &Element) -> Result<(
                 "width" | "height" => "a text's size follows its text; change fontSize".to_string(),
                 "angle" => "a frame is not rotated".to_string(),
                 k if FILL_FIELDS.contains(&k) => format!("{k} means nothing on a picture"),
-                k => format!("{} is {}, which has no {k}", element.id(), element.type_name()),
+                k => format!(
+                    "{} is {}, which has no {k}",
+                    element.id(),
+                    element.type_name()
+                ),
             };
             return Err(at.invalid(key, why));
         }
@@ -161,12 +210,17 @@ fn change_label(
     map: &Map<String, Value>,
     scene: &mut Scene,
     id: &str,
-    making: &mut dyn Making,
     touched: &mut Touched,
 ) -> Result<(), BoardError> {
-    let container_id = scene.element(id).and_then(|e| e.container_id()).unwrap_or("").to_string();
+    let container_id = scene
+        .element(id)
+        .and_then(|e| e.container_id())
+        .unwrap_or("")
+        .to_string();
     {
-        let label = scene.element_mut(id).ok_or_else(|| at.invalid("id", "the label is gone"))?;
+        let label = scene
+            .element_mut(id)
+            .ok_or_else(|| at.invalid("id", "the label is gone"))?;
         apply_text_fields(at, map, label)?;
         if let Some(color) = at.color(map, "strokeColor")? {
             label.set("strokeColor", Value::String(color));
@@ -180,7 +234,7 @@ fn change_label(
     }
     touched.add(id);
     if scene.element(&container_id).is_some() {
-        relayout_label(scene, &container_id, touched, making);
+        relayout_label(scene, &container_id, touched);
     } else if let Some(label) = scene.element_mut(id) {
         make::remeasure_free_text(label);
     }
@@ -188,9 +242,15 @@ fn change_label(
 }
 
 /// The text and font fields of a change, set on a text element (not laid out).
-fn apply_text_fields(at: At, map: &Map<String, Value>, text: &mut Element) -> Result<(), BoardError> {
+fn apply_text_fields(
+    at: At,
+    map: &Map<String, Value>,
+    text: &mut Element,
+) -> Result<(), BoardError> {
     if let Some(value) = map.get("text") {
-        let Some(value) = value.as_str() else { return Err(at.invalid("text", "text must be a string")) };
+        let Some(value) = value.as_str() else {
+            return Err(at.invalid("text", "text must be a string"));
+        };
         let value = at.text(value, "text")?;
         text.set("originalText", Value::String(value.clone()));
         text.set("text", Value::String(value));
@@ -222,7 +282,10 @@ fn change_element(
     touched: &mut Touched,
     warnings: &mut Vec<String>,
 ) -> Result<(), BoardError> {
-    let before = scene.element(id).cloned().ok_or_else(|| at.invalid("id", "the element is gone"))?;
+    let before = scene
+        .element(id)
+        .cloned()
+        .ok_or_else(|| at.invalid("id", "the element is gone"))?;
     let kind = before.kind();
     let mut element = before.clone();
 
@@ -247,7 +310,9 @@ fn change_element(
                 let scale_x = match width {
                     Some(w) if old_w > 0.0 => w / old_w,
                     Some(_) => {
-                        warnings.push(format!("The width of {id} was left: its points lie on one vertical line."));
+                        warnings.push(format!(
+                            "The width of {id} was left: its points lie on one vertical line."
+                        ));
                         1.0
                     }
                     None => 1.0,
@@ -255,12 +320,17 @@ fn change_element(
                 let scale_y = match height {
                     Some(h) if old_h > 0.0 => h / old_h,
                     Some(_) => {
-                        warnings.push(format!("The height of {id} was left: its points lie on one horizontal line."));
+                        warnings.push(format!(
+                            "The height of {id} was left: its points lie on one horizontal line."
+                        ));
                         1.0
                     }
                     None => 1.0,
                 };
-                let scaled: Vec<(f64, f64)> = points.iter().map(|p| (p.0 * scale_x, p.1 * scale_y)).collect();
+                let scaled: Vec<(f64, f64)> = points
+                    .iter()
+                    .map(|p| (p.0 * scale_x, p.1 * scale_y))
+                    .collect();
                 set_any_points(&mut element, &kind, &scaled);
             }
             ElementType::Image => {
@@ -286,7 +356,10 @@ fn change_element(
     }
     if let Some(points) = at.points(map, "points")? {
         if invisibly_small_points(&points) {
-            return Err(at.invalid("points", "the points all lie within 1 px of each other: the element could not be seen"));
+            return Err(at.invalid(
+                "points",
+                "the points all lie within 1 px of each other: the element could not be seen",
+            ));
         }
         set_any_points(&mut element, &kind, &points);
         resized = true;
@@ -325,7 +398,11 @@ fn change_element(
     if kind == ElementType::Text {
         let mut text = element.clone();
         apply_text_fields(at, map, &mut text)?;
-        if FONT_FIELDS.iter().chain(["text"].iter()).any(|f| map.contains_key(*f)) {
+        if FONT_FIELDS
+            .iter()
+            .chain(["text"].iter())
+            .any(|f| map.contains_key(*f))
+        {
             make::remeasure_free_text(&mut text);
         }
         element = text;
@@ -335,14 +412,20 @@ fn change_element(
     let mut rebind = false;
     if kind == ElementType::Arrow {
         for (field, key) in [("start", "startBinding"), ("end", "endBinding")] {
-            let Some(new_end) = at.end(map, field)? else { continue };
+            let Some(new_end) = at.end(map, field)? else {
+                continue;
+            };
             rebind = true;
             let old = element.binding(field).map(str::to_string);
             if let Some(old) = &old
                 && Some(old) != new_end.as_ref()
                 && let Some(target) = scene.element_mut(old)
             {
-                let other = if field == "start" { element.binding("end") } else { element.binding("start") };
+                let other = if field == "start" {
+                    element.binding("end")
+                } else {
+                    element.binding("start")
+                };
                 if other != Some(old.as_str()) && remove_bound(target, id) {
                     touched.add(old);
                 }
@@ -354,7 +437,10 @@ fn change_element(
                         return Err(at.invalid(field, "an arrow cannot be bound to itself"));
                     }
                     let Some(target) = scene.element(&target_id) else {
-                        return Err(BoardError::NotFound { id: target_id.clone(), known: known_ids(scene, &target_id) });
+                        return Err(BoardError::NotFound {
+                            id: target_id.clone(),
+                            known: known_ids(scene, &target_id),
+                        });
                     };
                     if !is_bindable(target) {
                         return Err(at.invalid(
@@ -393,15 +479,28 @@ fn change_element(
             None => {
                 if !wants_text {
                     return Err(at.invalid(
-                        FONT_FIELDS.iter().find(|f| map.contains_key(**f)).copied().unwrap_or("fontSize"),
+                        FONT_FIELDS
+                            .iter()
+                            .find(|f| map.contains_key(**f))
+                            .copied()
+                            .unwrap_or("fontSize"),
                         format!("{id} has no label; give it text first"),
                     ));
                 }
-                let text = at.text(map.get("text").and_then(Value::as_str).unwrap_or(""), "text")?;
+                let text = at.text(
+                    map.get("text").and_then(Value::as_str).unwrap_or(""),
+                    "text",
+                )?;
                 let style = TextStyle {
-                    font_size: at.font_size(map, "fontSize")?.unwrap_or(metrics::DEFAULT_FONT_SIZE),
-                    font_family: at.font_family(map, "fontFamily")?.unwrap_or(metrics::DEFAULT_FONT_FAMILY),
-                    text_align: at.one_of(map, "textAlign", &["left", "center", "right"])?.unwrap_or_else(|| "center".into()),
+                    font_size: at
+                        .font_size(map, "fontSize")?
+                        .unwrap_or(metrics::DEFAULT_FONT_SIZE),
+                    font_family: at
+                        .font_family(map, "fontFamily")?
+                        .unwrap_or(metrics::DEFAULT_FONT_FAMILY),
+                    text_align: at
+                        .one_of(map, "textAlign", &["left", "center", "right"])?
+                        .unwrap_or_else(|| "center".into()),
                     vertical_align: at
                         .one_of(map, "verticalAlign", &["top", "middle", "bottom"])?
                         .unwrap_or_else(|| "middle".into()),
@@ -409,13 +508,28 @@ fn change_element(
                 let label_id = new_id(taken, making);
                 let mut label = make::text_element(&label_id, 0.0, 0.0, &text, &style, making);
                 label.set("containerId", Value::String(id.to_string()));
-                let container = scene.element(id).cloned().unwrap_or_else(|| Element(Map::new()));
-                label.set("strokeColor", Value::String(container.str_field("strokeColor").unwrap_or("#1e1e1e").to_string()));
+                let container = scene
+                    .element(id)
+                    .cloned()
+                    .unwrap_or_else(|| Element(Map::new()));
+                label.set(
+                    "strokeColor",
+                    Value::String(
+                        container
+                            .str_field("strokeColor")
+                            .unwrap_or("#1e1e1e")
+                            .to_string(),
+                    ),
+                );
                 if let Some(frame) = container.frame_id() {
                     label.set("frameId", Value::String(frame.to_string()));
                 }
-                let last = crate::fractional::greatest(scene.elements.iter().map(|e| e.index())).map(str::to_string);
-                label.set("index", Value::String(crate::fractional::key_after(last.as_deref())));
+                let last = crate::fractional::greatest(scene.elements.iter().map(|e| e.index()))
+                    .map(str::to_string);
+                label.set(
+                    "index",
+                    Value::String(crate::fractional::key_after(last.as_deref())),
+                );
                 if let Some(container) = scene.element_mut(id) {
                     add_bound(container, &label_id, "text");
                 }
@@ -426,11 +540,9 @@ fn change_element(
     }
 
     // What follows.
-    let geometry = moved || resized || turned || wants_text || font_only || rebind;
-    if geometry {
-        follow(scene, id, move_x, move_y, moved, touched, making);
-    } else if scene.element(id).and_then(label_id).is_some() {
-        // A style change: the label keeps its place.
+    // (A change of style alone leaves the label and the arrows where they are.)
+    if moved || resized || turned || wants_text || font_only || rebind {
+        follow(scene, id, touched);
     }
     if kind == ElementType::Frame && moved {
         let children: Vec<String> = scene
@@ -448,7 +560,7 @@ fn change_element(
             touched.add(child);
         }
         for child in &children {
-            follow(scene, child, move_x, move_y, true, touched, making);
+            follow(scene, child, touched);
         }
     }
 
@@ -480,27 +592,24 @@ fn store(scene: &mut Scene, id: &str, element: Element) {
 /// What follows a change of the element's place, size, angle or label: its label laid out
 /// again, the arrows bound to it put back on its outline, and (for an arrow) its own ends
 /// put back on theirs.
-pub(super) fn follow(
-    scene: &mut Scene,
-    id: &str,
-    _dx: f64,
-    _dy: f64,
-    _moved: bool,
-    touched: &mut Touched,
-    making: &mut dyn Making,
-) {
-    let Some(element) = scene.element(id).cloned() else { return };
+fn follow(scene: &mut Scene, id: &str, touched: &mut Touched) {
+    let Some(element) = scene.element(id).cloned() else {
+        return;
+    };
     if element.kind() == ElementType::Arrow {
         resnap(scene, id, touched);
     }
     if label_id(&element).is_some() {
-        relayout_label(scene, id, touched, making);
+        relayout_label(scene, id, touched);
     }
     if is_bindable(&element) {
         let arrows: Vec<String> = scene
             .elements
             .iter()
-            .filter(|e| e.kind() == ElementType::Arrow && (e.binding("start") == Some(id) || e.binding("end") == Some(id)))
+            .filter(|e| {
+                e.kind() == ElementType::Arrow
+                    && (e.binding("start") == Some(id) || e.binding("end") == Some(id))
+            })
             .map(|e| e.id().to_string())
             .collect();
         for arrow in arrows {
@@ -511,10 +620,16 @@ pub(super) fn follow(
 
 /// The label of a container laid out again; when the container grew, what is bound to it
 /// follows.
-fn relayout_label(scene: &mut Scene, container_id: &str, touched: &mut Touched, making: &mut dyn Making) {
-    let Some(mut container) = scene.element(container_id).cloned() else { return };
-    let Some(label_id) = label_id(&container) else { return };
-    let Some(mut label) = scene.element(&label_id).cloned() else { return };
+fn relayout_label(scene: &mut Scene, container_id: &str, touched: &mut Touched) {
+    let Some(mut container) = scene.element(container_id).cloned() else {
+        return;
+    };
+    let Some(label_id) = label_id(&container) else {
+        return;
+    };
+    let Some(mut label) = scene.element(&label_id).cloned() else {
+        return;
+    };
     let resized = make::lay_out_label(&mut container, &mut label);
     store(scene, &label_id, label);
     touched.add(&label_id);
@@ -526,7 +641,8 @@ fn relayout_label(scene: &mut Scene, container_id: &str, touched: &mut Touched, 
             .iter()
             .filter(|e| {
                 e.kind() == ElementType::Arrow
-                    && (e.binding("start") == Some(container_id) || e.binding("end") == Some(container_id))
+                    && (e.binding("start") == Some(container_id)
+                        || e.binding("end") == Some(container_id))
             })
             .map(|e| e.id().to_string())
             .collect();
@@ -534,18 +650,24 @@ fn relayout_label(scene: &mut Scene, container_id: &str, touched: &mut Touched, 
             resnap(scene, &arrow, touched);
         }
     }
-    let _ = making;
 }
 
 /// An arrow's bound ends put back on the outlines of their elements, its label at its
 /// middle.
 fn resnap(scene: &mut Scene, arrow_id: &str, touched: &mut Touched) {
-    let Some(mut arrow) = scene.element(arrow_id).cloned() else { return };
-    let start = arrow.binding("start").and_then(|id| scene.element(id)).cloned();
-    let end = arrow.binding("end").and_then(|id| scene.element(id)).cloned();
-    if start.is_none() && end.is_none() {
-        // Its label still follows it.
-    } else {
+    let Some(mut arrow) = scene.element(arrow_id).cloned() else {
+        return;
+    };
+    let start = arrow
+        .binding("start")
+        .and_then(|id| scene.element(id))
+        .cloned();
+    let end = arrow
+        .binding("end")
+        .and_then(|id| scene.element(id))
+        .cloned();
+    // An arrow bound to nothing keeps its points; its label still follows it.
+    if start.is_some() || end.is_some() {
         make::snap_arrow(&mut arrow, start.as_ref(), end.as_ref(), Snap::Gap);
     }
     if let Some(label) = label_id(&arrow)

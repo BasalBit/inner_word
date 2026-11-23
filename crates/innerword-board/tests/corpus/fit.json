@@ -1,0 +1,8 @@
+[
+  {"type": "rectangle", "id": "rect", "x": 0, "y": 0, "label": {"text": "Fits its label"}},
+  {"type": "ellipse", "id": "oval", "x": 300, "y": 0, "label": {"text": "Postgres"}},
+  {"type": "diamond", "id": "rhombus", "x": 600, "y": 0, "label": {"text": "Ok"}},
+  {"type": "rectangle", "id": "wide", "x": 0, "y": 200, "width": 300, "label": {"text": "Only the height\nis worked out"}},
+  {"type": "rectangle", "id": "narrow", "x": 400, "y": 200, "width": 90, "height": 40, "label": {"text": "A label of many words, wrapped and grown"}},
+  {"type": "ellipse", "id": "tall", "x": 600, "y": 200, "width": 120, "height": 50, "label": {"text": "One two three four five six"}}
+]

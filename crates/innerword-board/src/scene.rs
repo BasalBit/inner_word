@@ -16,7 +16,10 @@ pub(crate) const NEVER_KEPT: [&str; 3] = ["iframe", "embeddable", "magicframe"];
 /// "database")` keeps, with Excalidraw's defaults.
 pub(crate) fn default_app_state() -> Map<String, Value> {
     let mut map = Map::new();
-    map.insert("viewBackgroundColor".into(), Value::String("#ffffff".into()));
+    map.insert(
+        "viewBackgroundColor".into(),
+        Value::String("#ffffff".into()),
+    );
     map.insert("gridSize".into(), Value::from(20));
     map.insert("gridStep".into(), Value::from(5));
     map.insert("gridModeEnabled".into(), Value::Bool(false));
@@ -82,9 +85,15 @@ impl std::fmt::Display for SceneError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             SceneError::NotJson(message) => write!(f, "the drawing is not JSON ({message})"),
-            SceneError::NotAScene(message) => write!(f, "the drawing is not a whiteboard's scene ({message})"),
+            SceneError::NotAScene(message) => {
+                write!(f, "the drawing is not a whiteboard's scene ({message})")
+            }
             SceneError::TooLarge { what, limit } => {
-                write!(f, "the {what} is larger than {}", crate::skeleton::limit_words(*limit))
+                write!(
+                    f,
+                    "the {what} is larger than {}",
+                    crate::skeleton::limit_words(*limit)
+                )
             }
         }
     }
@@ -127,7 +136,10 @@ impl ElementType {
 
     /// A rectangle, an ellipse or a diamond: what holds a label and binds an arrow.
     pub fn is_shape(&self) -> bool {
-        matches!(self, ElementType::Rectangle | ElementType::Ellipse | ElementType::Diamond)
+        matches!(
+            self,
+            ElementType::Rectangle | ElementType::Ellipse | ElementType::Diamond
+        )
     }
 
     /// An arrow or a line.
@@ -178,7 +190,10 @@ impl Element {
     /// Excalidraw's `version`, which grows with every change (0 when it has none).
     pub fn version(&self) -> i64 {
         match self.0.get("version") {
-            Some(Value::Number(n)) => n.as_i64().or_else(|| n.as_f64().map(|f| f as i64)).unwrap_or(0),
+            Some(Value::Number(n)) => n
+                .as_i64()
+                .or_else(|| n.as_f64().map(|f| f as i64))
+                .unwrap_or(0),
             _ => 0,
         }
     }
@@ -186,7 +201,10 @@ impl Element {
     /// Excalidraw's `versionNonce` (0 when it has none).
     pub fn version_nonce(&self) -> i64 {
         match self.0.get("versionNonce") {
-            Some(Value::Number(n)) => n.as_i64().or_else(|| n.as_f64().map(|f| f as i64)).unwrap_or(0),
+            Some(Value::Number(n)) => n
+                .as_i64()
+                .or_else(|| n.as_f64().map(|f| f as i64))
+                .unwrap_or(0),
             _ => 0,
         }
     }
@@ -221,11 +239,17 @@ impl Element {
     }
 
     pub fn locked(&self) -> bool {
-        self.0.get("locked").and_then(Value::as_bool).unwrap_or(false)
+        self.0
+            .get("locked")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
     }
 
     pub fn is_deleted(&self) -> bool {
-        self.0.get("isDeleted").and_then(Value::as_bool).unwrap_or(false)
+        self.0
+            .get("isDeleted")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
     }
 
     /// Excalidraw's fractional `index` (the order it keeps elements in).
@@ -253,7 +277,11 @@ impl Element {
 
     /// The id of the element an arrow's end is bound to (`"start"` or `"end"`).
     pub fn binding(&self, end: &str) -> Option<&str> {
-        let key = if end == "start" { "startBinding" } else { "endBinding" };
+        let key = if end == "start" {
+            "startBinding"
+        } else {
+            "endBinding"
+        };
         self.0.get(key)?.get("elementId")?.as_str()
     }
 
@@ -345,7 +373,12 @@ fn read_elements(items: Vec<Value>, warnings: &mut Vec<String>) -> Vec<Element> 
 fn read_app_state(value: Option<&Value>) -> Map<String, Value> {
     let mut state = default_app_state();
     if let Some(Value::Object(given)) = value {
-        for key in ["viewBackgroundColor", "gridSize", "gridStep", "gridModeEnabled"] {
+        for key in [
+            "viewBackgroundColor",
+            "gridSize",
+            "gridStep",
+            "gridModeEnabled",
+        ] {
             if let Some(v) = given.get(key)
                 && !v.is_null()
             {
@@ -358,7 +391,8 @@ fn read_app_state(value: Option<&Value>) -> Map<String, Value> {
 
 fn parse_object(json: &str) -> Result<Map<String, Value>, SceneError> {
     let text = well_formed_json(json);
-    let value: Value = serde_json::from_str(&text).map_err(|e| SceneError::NotJson(e.to_string()))?;
+    let value: Value =
+        serde_json::from_str(&text).map_err(|e| SceneError::NotJson(e.to_string()))?;
     match value {
         Value::Object(map) => Ok(map),
         _ => Err(SceneError::NotAScene("it is not an object".into())),
@@ -376,7 +410,11 @@ fn take_elements(map: &mut Map<String, Value>) -> Result<Vec<Value>, SceneError>
 impl Scene {
     /// A scene without elements, with Excalidraw's default canvas.
     pub fn empty() -> Scene {
-        Scene { elements: Vec::new(), app_state: default_app_state(), files: BTreeMap::new() }
+        Scene {
+            elements: Vec::new(),
+            app_state: default_app_state(),
+            files: BTreeMap::new(),
+        }
     }
 
     /// The stored form (`documents.content` of a whiteboard, a snapshot's content). Read as
@@ -391,19 +429,39 @@ impl Scene {
         let mut files = BTreeMap::new();
         if let Some(Value::Object(entries)) = map.get("files") {
             for (id, entry) in entries {
-                let Value::Object(entry) = entry else { continue };
-                let file = entry.get("file").and_then(Value::as_str).and_then(FileHex::parse);
+                let Value::Object(entry) = entry else {
+                    continue;
+                };
+                let file = entry
+                    .get("file")
+                    .and_then(Value::as_str)
+                    .and_then(FileHex::parse);
                 files.insert(
                     id.clone(),
                     FileEntry {
-                        mime_type: entry.get("mimeType").and_then(Value::as_str).unwrap_or("").to_string(),
+                        mime_type: entry
+                            .get("mimeType")
+                            .and_then(Value::as_str)
+                            .unwrap_or("")
+                            .to_string(),
                         file,
-                        created: entry.get("created").and_then(Value::as_f64).map(|v| v as i64).unwrap_or(0),
+                        created: entry
+                            .get("created")
+                            .and_then(Value::as_f64)
+                            .map(|v| v as i64)
+                            .unwrap_or(0),
                     },
                 );
             }
         }
-        Ok(Parsed { scene: Scene { elements, app_state, files }, warnings })
+        Ok(Parsed {
+            scene: Scene {
+                elements,
+                app_state,
+                files,
+            },
+            warnings,
+        })
     }
 
     /// A scene as the view posts it (files without `file` and without `dataURL`). Lenient:
@@ -412,9 +470,15 @@ impl Scene {
     /// `elements` array (and over [`limits::MAX_VIEW_SCENE_BYTES`]). `stored` maps
     /// Excalidraw's file id to the stored bytes and their type (the type written into
     /// `files`); a picture it does not know is left out of `files` (its element stays).
-    pub fn from_view(json: &str, stored: &dyn Fn(&str) -> Option<(FileHex, String)>) -> Result<Parsed, SceneError> {
+    pub fn from_view(
+        json: &str,
+        stored: &dyn Fn(&str) -> Option<(FileHex, String)>,
+    ) -> Result<Parsed, SceneError> {
         if json.len() > limits::MAX_VIEW_SCENE_BYTES {
-            return Err(SceneError::TooLarge { what: "drawing", limit: limits::MAX_VIEW_SCENE_BYTES });
+            return Err(SceneError::TooLarge {
+                what: "drawing",
+                limit: limits::MAX_VIEW_SCENE_BYTES,
+            });
         }
         let mut map = parse_object(json)?;
         let mut warnings = Vec::new();
@@ -425,7 +489,11 @@ impl Scene {
             Some(Value::Object(entries)) => entries.clone(),
             _ => Map::new(),
         };
-        let mut scene = Scene { elements, app_state, files: BTreeMap::new() };
+        let mut scene = Scene {
+            elements,
+            app_state,
+            files: BTreeMap::new(),
+        };
         for id in scene.named_file_ids() {
             match stored(&id) {
                 Some((file, mime_type)) => {
@@ -435,9 +503,18 @@ impl Scene {
                         .and_then(Value::as_f64)
                         .map(|v| v as i64)
                         .unwrap_or(0);
-                    scene.files.insert(id, FileEntry { mime_type, file: Some(file), created });
+                    scene.files.insert(
+                        id,
+                        FileEntry {
+                            mime_type,
+                            file: Some(file),
+                            created,
+                        },
+                    );
                 }
-                None => warnings.push(format!("The picture {id} is not stored; its element shows a missing picture.")),
+                None => warnings.push(format!(
+                    "The picture {id} is not stored; its element shows a missing picture."
+                )),
             }
         }
         Ok(Parsed { scene, warnings })
@@ -518,7 +595,11 @@ impl Scene {
 
     /// The `FileId`s the scene names, distinct and sorted: what the store checks.
     pub fn stored_files(&self) -> Vec<FileHex> {
-        let set: BTreeSet<FileHex> = self.files.values().filter_map(|entry| entry.file.clone()).collect();
+        let set: BTreeSet<FileHex> = self
+            .files
+            .values()
+            .filter_map(|entry| entry.file.clone())
+            .collect();
         set.into_iter().collect()
     }
 

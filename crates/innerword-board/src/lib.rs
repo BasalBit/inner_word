@@ -48,8 +48,8 @@ pub use listing::{BoardSummary, Bounds, ListedElement, ListedStyle, ListingHeade
 pub use making::{HashedMaking, Making};
 pub use scene::{Element, ElementType, FileEntry, Parsed, Scene, SceneError};
 pub use skeleton::{
-    Added, AddedElement, BoardError, ElementChange, Picture, Pictures, Removed, Skeleton,
-    Updated, add, picture_paths, remove, update,
+    Added, AddedElement, BoardError, ElementChange, Picture, Pictures, Removed, Skeleton, Updated,
+    add, picture_paths, remove, update,
 };
 pub use svg::sniff_svg;
 

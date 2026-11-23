@@ -131,15 +131,26 @@ impl Scene {
             if text.trim().is_empty() {
                 continue;
             }
-            let anchor = element.container_id().and_then(|c| self.element(c)).unwrap_or(element);
+            let anchor = element
+                .container_id()
+                .and_then(|c| self.element(c))
+                .unwrap_or(element);
             let (top, left) = match element_bounds(anchor) {
                 Some(b) => (b[1], b[0]),
                 None => (anchor.y(), anchor.x()),
             };
             entries.push((top, left, n, text));
         }
-        entries.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.total_cmp(&b.1)).then(a.2.cmp(&b.2)));
-        entries.into_iter().map(|(_, _, _, text)| text).collect::<Vec<_>>().join("\n")
+        entries.sort_by(|a, b| {
+            a.0.total_cmp(&b.0)
+                .then(a.1.total_cmp(&b.1))
+                .then(a.2.cmp(&b.2))
+        });
+        entries
+            .into_iter()
+            .map(|(_, _, _, text)| text)
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 
     /// What the whiteboard holds, counted.
@@ -171,10 +182,20 @@ impl Scene {
         for b in self.elements.iter().filter_map(element_bounds) {
             acc = Some(match acc {
                 None => b,
-                Some(a) => [a[0].min(b[0]), a[1].min(b[1]), a[2].max(b[2]), a[3].max(b[3])],
+                Some(a) => [
+                    a[0].min(b[0]),
+                    a[1].min(b[1]),
+                    a[2].max(b[2]),
+                    a[3].max(b[3]),
+                ],
             });
         }
-        acc.map(|b| Bounds { x: b[0], y: b[1], width: b[2] - b[0], height: b[3] - b[1] })
+        acc.map(|b| Bounds {
+            x: b[0],
+            y: b[1],
+            width: b[2] - b[0],
+            height: b[3] - b[1],
+        })
     }
 
     /// The size of the whiteboard's PDF page as Rust estimates it (section 5): the drawn
@@ -202,8 +223,16 @@ impl Scene {
     }
 
     /// The listing, with `has` saying whether the library has a picture's bytes.
-    pub fn listing_with(&self, header: &ListingHeader<'_>, has: &dyn Fn(&FileHex) -> bool) -> String {
-        let title = if header.title.trim().is_empty() { "Untitled" } else { header.title };
+    pub fn listing_with(
+        &self,
+        header: &ListingHeader<'_>,
+        has: &dyn Fn(&FileHex) -> bool,
+    ) -> String {
+        let title = if header.title.trim().is_empty() {
+            "Untitled"
+        } else {
+            header.title
+        };
         let mut out = format!("{} “{}”", header.reference, title);
         if let Some(folder) = header.folder.filter(|f| !f.is_empty()) {
             out.push_str(" in ");
@@ -214,7 +243,11 @@ impl Scene {
             out.push_str(": empty");
             return out;
         }
-        let pictures = self.elements.iter().filter(|e| e.kind() == ElementType::Image).count();
+        let pictures = self
+            .elements
+            .iter()
+            .filter(|e| e.kind() == ElementType::Image)
+            .count();
         out.push_str(&format!(
             ": {}, {}",
             plural(listed.len(), "element", "elements"),
@@ -257,7 +290,10 @@ impl Scene {
 
     /// A label: a text bound to a container that is on the whiteboard.
     fn is_label(&self, element: &Element) -> bool {
-        element.kind() == ElementType::Text && element.container_id().is_some_and(|c| self.element(c).is_some())
+        element.kind() == ElementType::Text
+            && element
+                .container_id()
+                .is_some_and(|c| self.element(c).is_some())
     }
 
     fn label_text(&self, element: &Element) -> Option<String> {
@@ -266,7 +302,11 @@ impl Scene {
         Some(original_text(label))
     }
 
-    fn picture_state(&self, element: &Element, has: &dyn Fn(&FileHex) -> bool) -> (bool, Option<String>) {
+    fn picture_state(
+        &self,
+        element: &Element,
+        has: &dyn Fn(&FileHex) -> bool,
+    ) -> (bool, Option<String>) {
         let entry = element.file_id().and_then(|id| self.files.get(id));
         match entry {
             Some(entry) => {
@@ -294,7 +334,13 @@ impl Scene {
                 row.push(place);
                 let points = global_points(element);
                 let ends = match (points.first(), points.last()) {
-                    (Some(a), Some(b)) => format!("({}, {}) -> ({}, {})", whole(a.0), whole(a.1), whole(b.0), whole(b.1)),
+                    (Some(a), Some(b)) => format!(
+                        "({}, {}) -> ({}, {})",
+                        whole(a.0),
+                        whole(a.1),
+                        whole(b.0),
+                        whole(b.1)
+                    ),
                     _ => size,
                 };
                 row.push(ends);
@@ -308,7 +354,11 @@ impl Scene {
                 row.push(size);
                 rest.push(quote(&original_text(element)));
                 let style = crate::skeleton::make::text_style_of(element);
-                rest.push(format!("{} px {}", whole(style.font_size), metrics::family_name(style.font_family)));
+                rest.push(format!(
+                    "{} px {}",
+                    whole(style.font_size),
+                    metrics::family_name(style.font_family)
+                ));
                 if style.text_align != "left" {
                     rest.push(format!("align {}", style.text_align));
                 }
@@ -399,13 +449,25 @@ impl Scene {
                     stroke_style: element.str_field("strokeStyle").map(str::to_string),
                     roughness: element.json().get("roughness").and_then(Value::as_f64),
                     opacity: element.json().get("opacity").and_then(Value::as_f64),
-                    font_size: if text_like { element.json().get("fontSize").and_then(Value::as_f64) } else { None },
-                    font_family: if text_like {
-                        element.json().get("fontFamily").and_then(Value::as_u64).map(|f| metrics::family_name(f as u8))
+                    font_size: if text_like {
+                        element.json().get("fontSize").and_then(Value::as_f64)
                     } else {
                         None
                     },
-                    text_align: if text_like { element.str_field("textAlign").map(str::to_string) } else { None },
+                    font_family: if text_like {
+                        element
+                            .json()
+                            .get("fontFamily")
+                            .and_then(Value::as_u64)
+                            .map(|f| metrics::family_name(f as u8))
+                    } else {
+                        None
+                    },
+                    text_align: if text_like {
+                        element.str_field("textAlign").map(str::to_string)
+                    } else {
+                        None
+                    },
                 };
                 let points = if kind.is_linear() || kind == ElementType::Freedraw {
                     Some(element.points().into_iter().map(|p| [p.0, p.1]).collect())
@@ -426,14 +488,22 @@ impl Scene {
                     width: element.width(),
                     height: element.height(),
                     angle: element.angle(),
-                    text: if text_like { Some(original_text(element)) } else { None },
+                    text: if text_like {
+                        Some(original_text(element))
+                    } else {
+                        None
+                    },
                     label: self.label_text(element),
                     container: element.container_id().map(str::to_string),
                     start: element.binding("start").map(str::to_string),
                     end: element.binding("end").map(str::to_string),
                     points,
                     frame: element.frame_id().map(str::to_string),
-                    groups: element.group_ids().into_iter().map(str::to_string).collect(),
+                    groups: element
+                        .group_ids()
+                        .into_iter()
+                        .map(str::to_string)
+                        .collect(),
                     style,
                     link: element.link().filter(|l| !l.is_empty()).map(str::to_string),
                     locked: element.locked(),
@@ -447,7 +517,9 @@ impl Scene {
 use serde_json::Value;
 
 fn push_fill(element: &Element, rest: &mut Vec<String>) {
-    let background = element.str_field("backgroundColor").unwrap_or("transparent");
+    let background = element
+        .str_field("backgroundColor")
+        .unwrap_or("transparent");
     if background != "transparent" {
         let fill = element.str_field("fillStyle").unwrap_or("solid");
         rest.push(format!("fill {background} {fill}"));
@@ -468,7 +540,11 @@ fn push_stroke(element: &Element, rest: &mut Vec<String>) {
 /// A number of the listing: whole, -0 written 0.
 fn whole(value: f64) -> String {
     let rounded = value.round();
-    if rounded == 0.0 { "0".to_string() } else { format!("{}", rounded as i64) }
+    if rounded == 0.0 {
+        "0".to_string()
+    } else {
+        format!("{}", rounded as i64)
+    }
 }
 
 fn plural(n: usize, one: &str, many: &str) -> String {
@@ -494,5 +570,7 @@ fn short_type(mime: &str) -> String {
 /// Words as the listing counts them: runs between white space that hold a letter or a
 /// digit. (The library counts a whiteboard's text by the rule of a text.)
 pub(crate) fn count_words(text: &str) -> u64 {
-    text.split_whitespace().filter(|w| w.chars().any(char::is_alphanumeric)).count() as u64
+    text.split_whitespace()
+        .filter(|w| w.chars().any(char::is_alphanumeric))
+        .count() as u64
 }

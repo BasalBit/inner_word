@@ -1,0 +1,12 @@
+[
+  {"type": "rectangle", "id": "api", "x": 100, "y": 80, "width": 200, "height": 90, "label": {"text": "API"}},
+  {"type": "ellipse", "id": "db", "x": 420, "y": 80, "width": 160, "height": 90, "label": {"text": "Postgres"}},
+  {"type": "diamond", "id": "gate", "x": 100, "y": 300, "width": 200, "height": 100},
+  {"type": "arrow", "id": "reads", "x": 300, "y": 125, "width": 120, "height": 0, "start": {"id": "api"}, "end": {"id": "db"}, "label": {"text": "reads"}},
+  {"type": "arrow", "id": "down", "x": 200, "y": 170, "points": [[0, 0], [0, 130]], "start": {"id": "api"}, "end": {"id": "gate"}, "endArrowhead": "triangle", "startArrowhead": "dot"},
+  {"type": "arrow", "id": "free", "x": 620, "y": 300, "width": 150, "height": 60, "strokeStyle": "dotted"},
+  {"type": "arrow", "id": "bent", "x": 620, "y": 400, "points": [[0, 0], [80, 40], [160, 0]], "endArrowhead": null},
+  {"type": "line", "id": "rule", "x": 100, "y": 450, "points": [[0, 0], [480, 0]], "strokeWidth": 1},
+  {"type": "line", "id": "zig", "x": 100, "y": 500, "points": [[0, 0], [40, 30], [80, 0], [120, 30]]},
+  {"type": "freedraw", "id": "scribble", "x": 100, "y": 560, "points": [[0, 10], [10, 0], [20, 10], [30, 0]]}
+]

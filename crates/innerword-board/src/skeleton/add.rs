@@ -5,10 +5,12 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde_json::{Map, Value};
 
 use super::fields::{
-    ARROWHEADS, At, FILL_FIELDS, FILL_STYLES, NEVER_FROM_AGENTS, STROKE_STYLES, STYLE_FIELDS, normalize_angle,
+    ARROWHEADS, At, FILL_FIELDS, FILL_STYLES, NEVER_FROM_AGENTS, STROKE_STYLES, STYLE_FIELDS,
+    normalize_angle,
 };
 use super::make::{
-    self, DEFAULT_DIMENSION, FRAME_PADDING, Snap, TextStyle, add_bound, bump, invisibly_small_points, is_bindable,
+    self, DEFAULT_DIMENSION, FRAME_PADDING, Snap, TextStyle, add_bound, bump,
+    invisibly_small_points, is_bindable,
 };
 use super::{Added, AddedElement, BoardError, Pictures, Skeleton, check_limits, known_ids, new_id};
 use crate::geometry::element_bounds;
@@ -23,8 +25,24 @@ const COMMON: [&str; 7] = ["type", "id", "x", "y", "angle", "link", "locked"];
 fn type_fields(kind: &str) -> &'static [&'static str] {
     match kind {
         "rectangle" | "ellipse" | "diamond" => &["width", "height", "label"],
-        "text" => &["text", "fontSize", "fontFamily", "textAlign", "verticalAlign"],
-        "arrow" => &["width", "height", "points", "start", "end", "startArrowhead", "endArrowhead", "label", "elbowed"],
+        "text" => &[
+            "text",
+            "fontSize",
+            "fontFamily",
+            "textAlign",
+            "verticalAlign",
+        ],
+        "arrow" => &[
+            "width",
+            "height",
+            "points",
+            "start",
+            "end",
+            "startArrowhead",
+            "endArrowhead",
+            "label",
+            "elbowed",
+        ],
         "line" => &["width", "height", "points"],
         "freedraw" => &["points"],
         "frame" => &["children", "width", "height", "name"],
@@ -33,7 +51,14 @@ fn type_fields(kind: &str) -> &'static [&'static str] {
     }
 }
 
-const LABEL_FIELDS: [&str; 6] = ["text", "fontSize", "fontFamily", "textAlign", "verticalAlign", "strokeColor"];
+const LABEL_FIELDS: [&str; 6] = [
+    "text",
+    "fontSize",
+    "fontFamily",
+    "textAlign",
+    "verticalAlign",
+    "strokeColor",
+];
 
 /// One skeleton, read and checked.
 struct Planned {
@@ -55,7 +80,10 @@ pub(super) fn add(
     making: &mut dyn Making,
 ) -> Result<Added, BoardError> {
     if skeletons.len() > MAX_REQUEST_ELEMENTS {
-        return Err(BoardError::TooLarge { what: "request", limit: MAX_REQUEST_ELEMENTS });
+        return Err(BoardError::TooLarge {
+            what: "request",
+            limit: MAX_REQUEST_ELEMENTS,
+        });
     }
     // The ids given: unique, and none already on the whiteboard.
     let mut taken: BTreeSet<String> = scene.elements.iter().map(|e| e.id().to_string()).collect();
@@ -64,10 +92,16 @@ pub(super) fn add(
         if let Some(value) = skeleton.0.get("id") {
             let id = At(Some(n)).id(value, "id")?;
             if taken.contains(&id) {
-                return Err(At(Some(n)).invalid("id", format!("the whiteboard already has an element {id}; give another id")));
+                return Err(At(Some(n)).invalid(
+                    "id",
+                    format!("the whiteboard already has an element {id}; give another id"),
+                ));
             }
             if !given.insert(id.clone()) {
-                return Err(At(Some(n)).invalid("id", format!("two elements of the request have the id {id}")));
+                return Err(At(Some(n)).invalid(
+                    "id",
+                    format!("two elements of the request have the id {id}"),
+                ));
             }
         }
     }
@@ -75,9 +109,19 @@ pub(super) fn add(
 
     let mut planned = Vec::with_capacity(skeletons.len());
     for (n, skeleton) in skeletons.iter().enumerate() {
-        planned.push(plan(At(Some(n)), &skeleton.0, pictures, &mut taken, making)?);
+        planned.push(plan(
+            At(Some(n)),
+            &skeleton.0,
+            pictures,
+            &mut taken,
+            making,
+        )?);
     }
-    let request_ids: BTreeMap<String, usize> = planned.iter().enumerate().map(|(n, p)| (p.id.clone(), n)).collect();
+    let request_ids: BTreeMap<String, usize> = planned
+        .iter()
+        .enumerate()
+        .map(|(n, p)| (p.id.clone(), n))
+        .collect();
 
     // Every id an arrow's end or a frame's children name is on the whiteboard or in the
     // request.
@@ -89,7 +133,16 @@ pub(super) fn add(
         }
         if let Some(children) = &p.children {
             for id in children {
-                check_named(p.at, "children", id, &p.id, scene, &planned, &request_ids, false)?;
+                check_named(
+                    p.at,
+                    "children",
+                    id,
+                    &p.id,
+                    scene,
+                    &planned,
+                    &request_ids,
+                    false,
+                )?;
             }
         }
     }
@@ -103,7 +156,12 @@ pub(super) fn add(
             let label_id = new_id(&mut taken, making);
             let mut label = make::text_element(&label_id, 0.0, 0.0, &text, &style, making);
             label.set("containerId", Value::String(p.id.clone()));
-            let stroke = color.unwrap_or_else(|| p.element.str_field("strokeColor").unwrap_or("#1e1e1e").to_string());
+            let stroke = color.unwrap_or_else(|| {
+                p.element
+                    .str_field("strokeColor")
+                    .unwrap_or("#1e1e1e")
+                    .to_string()
+            });
             label.set("strokeColor", Value::String(stroke));
             add_bound(&mut p.element, &label_id, "text");
             make::lay_out_label(&mut p.element, &mut label);
@@ -127,13 +185,21 @@ pub(super) fn add(
         let find = |id: &str| -> Element {
             match request_ids.get(id) {
                 Some(&i) => planned[i].element.clone(),
-                None => scene.element(id).cloned().unwrap_or_else(|| Element(Map::new())),
+                None => scene
+                    .element(id)
+                    .cloned()
+                    .unwrap_or_else(|| Element(Map::new())),
             }
         };
         let start_element = start.as_deref().map(find);
         let end_element = end.as_deref().map(find);
         let mut arrow = planned[n].element.clone();
-        make::snap_arrow(&mut arrow, start_element.as_ref(), end_element.as_ref(), Snap::New);
+        make::snap_arrow(
+            &mut arrow,
+            start_element.as_ref(),
+            end_element.as_ref(),
+            Snap::New,
+        );
         let arrow_id = planned[n].id.clone();
         planned[n].element = arrow;
         for id in [start, end].into_iter().flatten() {
@@ -157,22 +223,36 @@ pub(super) fn add(
 
     // Frames hold their children.
     for n in 0..planned.len() {
-        let Some(children) = planned[n].children.clone() else { continue };
+        let Some(children) = planned[n].children.clone() else {
+            continue;
+        };
         let frame_id = planned[n].id.clone();
         let mut members: Vec<Element> = Vec::new();
         for child in &children {
             let mut follow: Vec<String> = vec![child.clone()];
             let bound: Vec<String> = match request_ids.get(child) {
-                Some(&i) => planned[i].element.bound_elements().iter().map(|(id, _)| id.to_string()).collect(),
+                Some(&i) => planned[i]
+                    .element
+                    .bound_elements()
+                    .iter()
+                    .map(|(id, _)| id.to_string())
+                    .collect(),
                 None => scene
                     .element(child)
-                    .map(|e| e.bound_elements().iter().map(|(id, _)| id.to_string()).collect())
+                    .map(|e| {
+                        e.bound_elements()
+                            .iter()
+                            .map(|(id, _)| id.to_string())
+                            .collect()
+                    })
                     .unwrap_or_default(),
             };
             follow.extend(bound);
             for id in follow {
                 if let Some(&i) = request_ids.get(&id) {
-                    planned[i].element.set("frameId", Value::String(frame_id.clone()));
+                    planned[i]
+                        .element
+                        .set("frameId", Value::String(frame_id.clone()));
                     members.push(planned[i].element.clone());
                 } else if let Some((_, label)) = labels.iter_mut().find(|(_, l)| l.id() == id) {
                     label.set("frameId", Value::String(frame_id.clone()));
@@ -184,12 +264,21 @@ pub(super) fn add(
                 }
             }
         }
-        let bounds = members.iter().filter_map(element_bounds).fold(None, |acc: Option<[f64; 4]>, b| {
-            Some(match acc {
-                None => b,
-                Some(a) => [a[0].min(b[0]), a[1].min(b[1]), a[2].max(b[2]), a[3].max(b[3])],
-            })
-        });
+        let bounds =
+            members
+                .iter()
+                .filter_map(element_bounds)
+                .fold(None, |acc: Option<[f64; 4]>, b| {
+                    Some(match acc {
+                        None => b,
+                        Some(a) => [
+                            a[0].min(b[0]),
+                            a[1].min(b[1]),
+                            a[2].max(b[2]),
+                            a[3].max(b[3]),
+                        ],
+                    })
+                });
         let [given_x, given_y, given_w, given_h] = planned[n].frame_box;
         let (mut x, mut y, mut w, mut h) = (0.0, 0.0, DEFAULT_DIMENSION, DEFAULT_DIMENSION);
         if let Some(b) = bounds {
@@ -214,7 +303,11 @@ pub(super) fn add(
         {
             scene.files.insert(
                 file_id.to_string(),
-                FileEntry { mime_type: picture.mime_type.clone(), file: Some(picture.file.clone()), created: making.now_ms() },
+                FileEntry {
+                    mime_type: picture.mime_type.clone(),
+                    file: Some(picture.file.clone()),
+                    created: making.now_ms(),
+                },
             );
         }
     }
@@ -226,9 +319,13 @@ pub(super) fn add(
     }
 
     // Indices after the last one, in order.
-    let mut last = crate::fractional::greatest(scene.elements.iter().map(|e| e.index())).map(str::to_string);
+    let mut last =
+        crate::fractional::greatest(scene.elements.iter().map(|e| e.index())).map(str::to_string);
     let mut added = Vec::new();
-    let label_of: BTreeMap<usize, String> = labels.iter().map(|(n, l)| (*n, l.id().to_string())).collect();
+    let label_of: BTreeMap<usize, String> = labels
+        .iter()
+        .map(|(n, l)| (*n, l.id().to_string()))
+        .collect();
     for (n, p) in planned.into_iter().enumerate() {
         let mut element = p.element;
         let index = crate::fractional::key_after(last.as_deref());
@@ -248,7 +345,10 @@ pub(super) fn add(
         scene.elements.push(label);
     }
     check_limits(scene)?;
-    Ok(Added { elements: added, warnings: Vec::new() })
+    Ok(Added {
+        elements: added,
+        warnings: Vec::new(),
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -269,7 +369,12 @@ fn check_named(
         Some(&i) => &planned[i].element,
         None => match scene.element(id) {
             Some(e) => e,
-            None => return Err(BoardError::NotFound { id: id.to_string(), known: known_ids(scene, id) }),
+            None => {
+                return Err(BoardError::NotFound {
+                    id: id.to_string(),
+                    known: known_ids(scene, id),
+                });
+            }
         },
     };
     if binding {
@@ -284,10 +389,16 @@ fn check_named(
         }
     } else {
         if element.kind() == ElementType::Frame {
-            return Err(at.invalid(field, format!("{id} is a frame: a frame cannot hold a frame")));
+            return Err(at.invalid(
+                field,
+                format!("{id} is a frame: a frame cannot hold a frame"),
+            ));
         }
         if element.container_id().is_some() {
-            return Err(at.invalid(field, format!("{id} is a label: name its container, and the label goes with it")));
+            return Err(at.invalid(
+                field,
+                format!("{id} is a label: name its container, and the label goes with it"),
+            ));
         }
     }
     Ok(())
@@ -298,7 +409,11 @@ fn describe(element: &Element) -> String {
         return "a label".to_string();
     }
     let kind = element.type_name();
-    let article = if kind.starts_with(['a', 'e', 'i', 'o', 'u']) { "an" } else { "a" };
+    let article = if kind.starts_with(['a', 'e', 'i', 'o', 'u']) {
+        "an"
+    } else {
+        "a"
+    };
     format!("{article} {kind}")
 }
 
@@ -315,7 +430,10 @@ fn plan(
         None => return Err(at.invalid("type", "every element needs a type")),
     };
     if NEVER_KEPT.contains(&kind.as_str()) || kind == "selection" {
-        return Err(at.invalid("type", format!("a whiteboard does not take elements of type {kind}")));
+        return Err(at.invalid(
+            "type",
+            format!("a whiteboard does not take elements of type {kind}"),
+        ));
     }
     let own = type_fields(&kind);
     if own.is_empty() {
@@ -330,15 +448,22 @@ fn plan(
             return Err(at.invalid(key, *why));
         }
         if kind == "text" && (key == "width" || key == "height") {
-            return Err(at.invalid(key, "a text has no width or height: they follow its text and its fontSize"));
+            return Err(at.invalid(
+                key,
+                "a text has no width or height: they follow its text and its fontSize",
+            ));
         }
-        if kind == "line" && ["start", "end", "startArrowhead", "endArrowhead", "label"].contains(&key.as_str()) {
+        if kind == "line"
+            && ["start", "end", "startArrowhead", "endArrowhead", "label"].contains(&key.as_str())
+        {
             return Err(at.invalid(key, format!("a line has no {key}; use an arrow")));
         }
         if kind == "image" && FILL_FIELDS.contains(&key.as_str()) {
             return Err(at.invalid(key, format!("{key} means nothing on a picture")));
         }
-        let known = COMMON.contains(&key.as_str()) || STYLE_FIELDS.contains(&key.as_str()) || own.contains(&key.as_str());
+        let known = COMMON.contains(&key.as_str())
+            || STYLE_FIELDS.contains(&key.as_str())
+            || own.contains(&key.as_str());
         if !known {
             return Err(at.invalid(key, format!("a {kind} has no field {key}")));
         }
@@ -349,8 +474,19 @@ fn plan(
     };
     let x = at.coordinate(map, "x")?;
     let y = at.coordinate(map, "y")?;
-    let width = at.size(map, "width")?;
-    let height = at.size(map, "height")?;
+    // A line's width and height are the extent of its points: 0 is a straight line, a
+    // negative one points left or up.
+    let linear = kind == "arrow" || kind == "line";
+    let width = if linear {
+        at.coordinate(map, "width")?
+    } else {
+        at.size(map, "width")?
+    };
+    let height = if linear {
+        at.coordinate(map, "height")?
+    } else {
+        at.size(map, "height")?
+    };
     let mut planned = Planned {
         at,
         kind: kind.clone(),
@@ -368,8 +504,16 @@ fn plan(
             let y = at.required(y, "y", &kind)?;
             let label = read_label(at, map)?;
             // A shape with a label and no size is made to fit the label, as Excalidraw does.
-            let w = width.unwrap_or(if label.is_some() { 0.0 } else { DEFAULT_DIMENSION });
-            let h = height.unwrap_or(if label.is_some() { 0.0 } else { DEFAULT_DIMENSION });
+            let w = width.unwrap_or(if label.is_some() {
+                0.0
+            } else {
+                DEFAULT_DIMENSION
+            });
+            let h = height.unwrap_or(if label.is_some() {
+                0.0
+            } else {
+                DEFAULT_DIMENSION
+            });
             planned.label = label;
             make::base(&kind, &id, x, y, w, h, making)
         }
@@ -381,9 +525,15 @@ fn plan(
                 None => return Err(at.invalid("text", "a text needs text")),
             };
             let style = TextStyle {
-                font_size: at.font_size(map, "fontSize")?.unwrap_or(metrics::DEFAULT_FONT_SIZE),
-                font_family: at.font_family(map, "fontFamily")?.unwrap_or(metrics::DEFAULT_FONT_FAMILY),
-                text_align: at.one_of(map, "textAlign", &["left", "center", "right"])?.unwrap_or_else(|| "left".into()),
+                font_size: at
+                    .font_size(map, "fontSize")?
+                    .unwrap_or(metrics::DEFAULT_FONT_SIZE),
+                font_family: at
+                    .font_family(map, "fontFamily")?
+                    .unwrap_or(metrics::DEFAULT_FONT_FAMILY),
+                text_align: at
+                    .one_of(map, "textAlign", &["left", "center", "right"])?
+                    .unwrap_or_else(|| "left".into()),
                 vertical_align: at
                     .one_of(map, "verticalAlign", &["top", "middle", "bottom"])?
                     .unwrap_or_else(|| "top".into()),
@@ -396,14 +546,28 @@ fn plan(
             let points = at.points(map, "points")?;
             let start = at.end(map, "start")?.flatten();
             let end = at.end(map, "end")?.flatten();
-            if points.is_none() && width.is_none() && height.is_none() && start.is_none() && end.is_none() {
-                return Err(at.invalid("points", format!("an {kind} needs points, or a width and height, or start and end")));
+            if points.is_none()
+                && width.is_none()
+                && height.is_none()
+                && start.is_none()
+                && end.is_none()
+            {
+                return Err(at.invalid(
+                    "points",
+                    format!("an {kind} needs points, or a width and height, or start and end"),
+                ));
             }
             if kind == "arrow" {
                 if let Some(Value::Bool(true)) = map.get("elbowed") {
-                    return Err(at.invalid("elbowed", "elbow arrows are not made by agents; leave elbowed out"));
+                    return Err(at.invalid(
+                        "elbowed",
+                        "elbow arrows are not made by agents; leave elbowed out",
+                    ));
                 }
-                if map.get("elbowed").is_some_and(|v| !matches!(v, Value::Bool(false))) {
+                if map
+                    .get("elbowed")
+                    .is_some_and(|v| !matches!(v, Value::Bool(false)))
+                {
                     return Err(at.invalid("elbowed", "elbowed must be false, or left out"));
                 }
             }
@@ -413,7 +577,12 @@ fn plan(
                 vec![(0.0, 0.0), (w, h)]
             });
             if invisibly_small_points(&points) {
-                return Err(at.invalid("points", format!("the {kind}'s points all lie within 1 px of each other: it cannot be seen")));
+                return Err(at.invalid(
+                    "points",
+                    format!(
+                        "the {kind}'s points all lie within 1 px of each other: it cannot be seen"
+                    ),
+                ));
             }
             let mut element = make::base(&kind, &id, x, y, 0.0, 0.0, making);
             make::set_points(&mut element, x, y, &points);
@@ -423,9 +592,13 @@ fn plan(
             if kind == "arrow" {
                 let read_head = |field: &str, default: Option<&str>| -> Result<Value, BoardError> {
                     match map.get(field) {
-                        None => Ok(default.map(|d| Value::String(d.into())).unwrap_or(Value::Null)),
+                        None => Ok(default
+                            .map(|d| Value::String(d.into()))
+                            .unwrap_or(Value::Null)),
                         Some(Value::Null) => Ok(Value::Null),
-                        Some(_) => Ok(Value::String(at.one_of(map, field, &ARROWHEADS)?.unwrap_or_default())),
+                        Some(_) => Ok(Value::String(
+                            at.one_of(map, field, &ARROWHEADS)?.unwrap_or_default(),
+                        )),
                     }
                 };
                 element.set("startArrowhead", read_head("startArrowhead", None)?);
@@ -443,9 +616,14 @@ fn plan(
         "freedraw" => {
             let x = at.required(x, "x", &kind)?;
             let y = at.required(y, "y", &kind)?;
-            let points = at.points(map, "points")?.ok_or_else(|| at.invalid("points", "a freedraw needs points"))?;
+            let points = at
+                .points(map, "points")?
+                .ok_or_else(|| at.invalid("points", "a freedraw needs points"))?;
             if invisibly_small_points(&points) {
-                return Err(at.invalid("points", "the freedraw's points all lie within 1 px of each other: it cannot be seen"));
+                return Err(at.invalid(
+                    "points",
+                    "the freedraw's points all lie within 1 px of each other: it cannot be seen",
+                ));
             }
             let mut element = make::base(&kind, &id, x, y, 0.0, 0.0, making);
             make::set_freedraw_points(&mut element, &points);
@@ -456,12 +634,25 @@ fn plan(
         }
         "frame" => {
             let children = read_children(at, map)?;
-            if children.is_none() && (x.is_none() || y.is_none() || width.is_none() || height.is_none()) {
-                return Err(at.invalid("children", "a frame needs children, or x, y, width and height"));
+            if children.is_none()
+                && (x.is_none() || y.is_none() || width.is_none() || height.is_none())
+            {
+                return Err(at.invalid(
+                    "children",
+                    "a frame needs children, or x, y, width and height",
+                ));
             }
             planned.frame_box = [x, y, width, height];
             planned.children = children;
-            let mut element = make::base(&kind, &id, x.unwrap_or(0.0), y.unwrap_or(0.0), width.unwrap_or(0.0), height.unwrap_or(0.0), making);
+            let mut element = make::base(
+                &kind,
+                &id,
+                x.unwrap_or(0.0),
+                y.unwrap_or(0.0),
+                width.unwrap_or(0.0),
+                height.unwrap_or(0.0),
+                making,
+            );
             let name = match at.string(map, "name")? {
                 Some(name) if !name.trim().is_empty() => Value::String(at.text(name, "name")?),
                 _ => Value::Null,
@@ -472,7 +663,12 @@ fn plan(
         "image" => {
             let x = at.required(x, "x", &kind)?;
             let y = at.required(y, "y", &kind)?;
-            let path = at.string(map, "path")?.ok_or_else(|| at.invalid("path", "a picture needs the path of a picture file on this Mac"))?;
+            let path = at.string(map, "path")?.ok_or_else(|| {
+                at.invalid(
+                    "path",
+                    "a picture needs the path of a picture file on this Mac",
+                )
+            })?;
             let picture = pictures
                 .get(path)
                 .ok_or_else(|| at.invalid("path", format!("the picture {path} was not read; give the path of a picture file on this Mac")))?;
@@ -497,7 +693,11 @@ fn unreachable_kind(at: At, kind: &str) -> Result<Element, BoardError> {
 }
 
 /// The common fields: angle, style, groups, link, locked.
-pub(super) fn apply_common(at: At, map: &Map<String, Value>, element: &mut Element) -> Result<(), BoardError> {
+pub(super) fn apply_common(
+    at: At,
+    map: &Map<String, Value>,
+    element: &mut Element,
+) -> Result<(), BoardError> {
     if let Some(angle) = at.number(map, "angle")? {
         element.set_f64("angle", normalize_angle(angle));
     }
@@ -512,7 +712,10 @@ pub(super) fn apply_common(at: At, map: &Map<String, Value>, element: &mut Eleme
     }
     if let Some(width) = at.number(map, "strokeWidth")? {
         if !(width > 0.0 && width <= 100.0) {
-            return Err(at.invalid("strokeWidth", "strokeWidth must be more than 0 and at most 100"));
+            return Err(at.invalid(
+                "strokeWidth",
+                "strokeWidth must be more than 0 and at most 100",
+            ));
         }
         element.set_f64("strokeWidth", width);
     }
@@ -535,7 +738,10 @@ pub(super) fn apply_common(at: At, map: &Map<String, Value>, element: &mut Eleme
         element.set("roundness", roundness);
     }
     if let Some(groups) = at.group_ids(map, "groupIds")? {
-        element.set("groupIds", Value::Array(groups.into_iter().map(Value::String).collect()));
+        element.set(
+            "groupIds",
+            Value::Array(groups.into_iter().map(Value::String).collect()),
+        );
     }
     if let Some(link) = at.link(map, "link")? {
         element.set("link", link.map(Value::String).unwrap_or(Value::Null));
@@ -546,8 +752,13 @@ pub(super) fn apply_common(at: At, map: &Map<String, Value>, element: &mut Eleme
     Ok(())
 }
 
-fn read_label(at: At, map: &Map<String, Value>) -> Result<Option<(TextStyle, String, Option<String>)>, BoardError> {
-    let Some(value) = map.get("label") else { return Ok(None) };
+fn read_label(
+    at: At,
+    map: &Map<String, Value>,
+) -> Result<Option<(TextStyle, String, Option<String>)>, BoardError> {
+    let Some(value) = map.get("label") else {
+        return Ok(None);
+    };
     let Value::Object(label) = value else {
         return Err(at.invalid("label", "label must be {\"text\": \"…\"}"));
     };
@@ -556,13 +767,22 @@ fn read_label(at: At, map: &Map<String, Value>) -> Result<Option<(TextStyle, Str
             return Err(at.invalid("label", format!("a label has no field {key}")));
         }
     }
-    let text = match at.string(label, "text").map_err(|_| at.invalid("label", "a label's text must be a string"))? {
+    let text = match at
+        .string(label, "text")
+        .map_err(|_| at.invalid("label", "a label's text must be a string"))?
+    {
         Some(text) => at.text(text, "label")?,
         None => return Err(at.invalid("label", "a label needs text")),
     };
     let style = TextStyle {
-        font_size: at.font_size(label, "fontSize").map_err(rename("label"))?.unwrap_or(metrics::DEFAULT_FONT_SIZE),
-        font_family: at.font_family(label, "fontFamily").map_err(rename("label"))?.unwrap_or(metrics::DEFAULT_FONT_FAMILY),
+        font_size: at
+            .font_size(label, "fontSize")
+            .map_err(rename("label"))?
+            .unwrap_or(metrics::DEFAULT_FONT_SIZE),
+        font_family: at
+            .font_family(label, "fontFamily")
+            .map_err(rename("label"))?
+            .unwrap_or(metrics::DEFAULT_FONT_FAMILY),
         text_align: at
             .one_of(label, "textAlign", &["left", "center", "right"])
             .map_err(rename("label"))?
@@ -579,7 +799,11 @@ fn read_label(at: At, map: &Map<String, Value>) -> Result<Option<(TextStyle, Str
 /// An error about a field of a label, named `label.<field>`.
 fn rename(prefix: &'static str) -> impl Fn(BoardError) -> BoardError {
     move |error| match error {
-        BoardError::Invalid { element, field, message } => BoardError::Invalid {
+        BoardError::Invalid {
+            element,
+            field,
+            message,
+        } => BoardError::Invalid {
             element,
             field: Some(match field {
                 Some(f) => format!("{prefix}.{f}"),
@@ -610,9 +834,20 @@ fn read_children(at: At, map: &Map<String, Value>) -> Result<Option<Vec<String>>
 
 /// The drawn size of a picture (section 7.2): its own size on the page, at most 1,440 on
 /// a side; with one of width and height, the other follows its proportions.
-pub(crate) fn picture_size(picture: &super::Picture, width: Option<f64>, height: Option<f64>) -> (f64, f64) {
-    let (px, py) = (picture.pixels.0.max(1) as f64, picture.pixels.1.max(1) as f64);
-    let density = if picture.density == 0 { 72.0 } else { picture.density as f64 };
+pub(crate) fn picture_size(
+    picture: &super::Picture,
+    width: Option<f64>,
+    height: Option<f64>,
+) -> (f64, f64) {
+    let (px, py) = (
+        picture.pixels.0.max(1) as f64,
+        picture.pixels.1.max(1) as f64,
+    );
+    let density = if picture.density == 0 {
+        72.0
+    } else {
+        picture.density as f64
+    };
     match (width, height) {
         (Some(w), Some(h)) => (w, h),
         (Some(w), None) => (w, (w * py / px).max(1.0)),

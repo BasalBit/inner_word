@@ -67,7 +67,9 @@ fn doctype_end(text: &str) -> Option<usize> {
 /// The start tag after its `<`: its name is `svg` (or `p:svg`) and an `xmlns` (or
 /// `xmlns:p`) attribute binds that name to the SVG namespace.
 fn root_is_svg(tag: &str) -> bool {
-    let name_end = tag.find(|c: char| c.is_whitespace() || c == '>' || c == '/').unwrap_or(tag.len());
+    let name_end = tag
+        .find(|c: char| c.is_whitespace() || c == '>' || c == '/')
+        .unwrap_or(tag.len());
     let name = &tag[..name_end];
     let (prefix, local) = match name.split_once(':') {
         Some((prefix, local)) => (Some(prefix), local),
@@ -96,7 +98,9 @@ fn attributes(mut text: &str) -> Vec<(&str, &str)> {
         if text.is_empty() || text.starts_with('>') || text.starts_with("/>") {
             return out;
         }
-        let key_end = text.find(|c: char| c == '=' || c.is_whitespace() || c == '>').unwrap_or(text.len());
+        let key_end = text
+            .find(|c: char| c == '=' || c.is_whitespace() || c == '>')
+            .unwrap_or(text.len());
         let key = &text[..key_end];
         text = text[key_end..].trim_start();
         let Some(after) = text.strip_prefix('=') else {
@@ -123,6 +127,9 @@ mod tests {
 
     #[test]
     fn attributes_are_read() {
-        assert_eq!(attributes(r#" a="1" b='2' >"#), vec![("a", "1"), ("b", "2")]);
+        assert_eq!(
+            attributes(r#" a="1" b='2' >"#),
+            vec![("a", "1"), ("b", "2")]
+        );
     }
 }

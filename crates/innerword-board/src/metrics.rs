@@ -41,7 +41,10 @@ pub fn family_by_name(name: &str) -> Option<u8> {
     if let Ok(number) = name.parse::<u8>() {
         return FAMILIES.iter().find(|(n, _)| *n == number).map(|(n, _)| *n);
     }
-    FAMILIES.iter().find(|(_, family)| family.eq_ignore_ascii_case(name)).map(|(n, _)| *n)
+    FAMILIES
+        .iter()
+        .find(|(_, family)| family.eq_ignore_ascii_case(name))
+        .map(|(n, _)| *n)
 }
 
 /// The family's name (`5` is "Excalifont"); a number Excalidraw does not know is written
@@ -72,8 +75,18 @@ pub fn line_height(font_family: u8) -> f64 {
 
 struct Family {
     units_per_em: f64,
-    /// Advance by character, in font units.
-    advances: HashMap<char, f64>,
+    /// The code point of the first advance.
+    first: u32,
+    /// Advance by character from `first` on, in font units; `None` where the font has no
+    /// glyph.
+    advances: Vec<Option<f64>>,
+}
+
+impl Family {
+    fn advance(&self, c: char) -> Option<f64> {
+        let n = (c as u32).checked_sub(self.first)? as usize;
+        self.advances.get(n).copied().flatten()
+    }
 }
 
 struct Table {
@@ -85,51 +98,49 @@ fn table() -> &'static Table {
     TABLE.get_or_init(|| parse(METRICS_JSON))
 }
 
-/// Reads the metrics file. Its form (written by `innerword-board-web`'s build): an object
-/// with `families`, each `{ "family": <number>, "unitsPerEm": <n>, "first": <code point>,
-/// "advances": [<advance of first>, <of first + 1>, …] }`; also accepted: `advances` as an
-/// object from a character (or its code point) to its advance. Anything it cannot read
-/// leaves that family to the fallback widths.
+/// Reads the metrics file, as `innerword-board-web`'s build writes it: `{"first": 32,
+/// "last": 591, "families": {"5": {"name": "Excalifont", "unitsPerEm": 1000, "advances":
+/// [<advance of first>, <of first + 1>, …]}, …}}`, an advance in font units and `null`
+/// where the family has no glyph (that character is measured by the fallback). A family
+/// it cannot read is left to the fallback widths.
 fn parse(json: &str) -> Table {
     let mut families = HashMap::new();
     let Ok(value) = serde_json::from_str::<Value>(json) else {
         return Table { families };
     };
-    let list: Vec<&Value> = match value.get("families") {
-        Some(Value::Array(items)) => items.iter().collect(),
-        Some(Value::Object(map)) => map.values().collect(),
-        _ => Vec::new(),
+    let first = value.get("first").and_then(Value::as_u64).unwrap_or(0x20) as u32;
+    let Some(Value::Object(list)) = value.get("families") else {
+        return Table { families };
     };
-    for item in list {
-        let Some(number) = item.get("family").and_then(Value::as_u64) else { continue };
-        let units_per_em = item.get("unitsPerEm").and_then(Value::as_f64).filter(|u| *u > 0.0).unwrap_or(1000.0);
-        let mut advances = HashMap::new();
-        match item.get("advances") {
-            Some(Value::Array(widths)) => {
-                let first = item.get("first").and_then(Value::as_u64).unwrap_or(0x20) as u32;
-                for (n, width) in widths.iter().enumerate() {
-                    if let (Some(c), Some(w)) = (char::from_u32(first + n as u32), width.as_f64()) {
-                        advances.insert(c, w);
-                    }
-                }
-            }
-            Some(Value::Object(map)) => {
-                for (key, width) in map {
-                    let c = if key.chars().count() == 1 {
-                        key.chars().next()
-                    } else {
-                        key.trim_start_matches("U+").parse::<u32>().ok().and_then(char::from_u32).or_else(|| {
-                            u32::from_str_radix(key.trim_start_matches("U+"), 16).ok().and_then(char::from_u32)
-                        })
-                    };
-                    if let (Some(c), Some(w)) = (c, width.as_f64()) {
-                        advances.insert(c, w);
-                    }
-                }
-            }
-            _ => {}
-        }
-        families.insert(number as u8, Family { units_per_em, advances });
+    for (key, item) in list {
+        let Ok(number) = key.parse::<u8>() else {
+            continue;
+        };
+        let units_per_em = item
+            .get("unitsPerEm")
+            .and_then(Value::as_f64)
+            .filter(|u| *u > 0.0)
+            .unwrap_or(1000.0);
+        let start = item
+            .get("first")
+            .and_then(Value::as_u64)
+            .map(|f| f as u32)
+            .unwrap_or(first);
+        let advances = match item.get("advances") {
+            Some(Value::Array(widths)) => widths
+                .iter()
+                .map(|w| w.as_f64().filter(|w| w.is_finite() && *w >= 0.0))
+                .collect(),
+            _ => Vec::new(),
+        };
+        families.insert(
+            number,
+            Family {
+                units_per_em,
+                first: start,
+                advances,
+            },
+        );
     }
     Table { families }
 }
@@ -151,9 +162,12 @@ pub(crate) fn char_width(c: char, font_family: u8, font_size: f64) -> f64 {
     if is_cjk(c) {
         return font_size;
     }
-    let family = table().families.get(&font_family).or_else(|| table().families.get(&DEFAULT_FONT_FAMILY));
+    let family = table()
+        .families
+        .get(&font_family)
+        .or_else(|| table().families.get(&DEFAULT_FONT_FAMILY));
     if let Some(family) = family
-        && let Some(advance) = family.advances.get(&c)
+        && let Some(advance) = family.advance(c)
     {
         return advance / family.units_per_em * font_size;
     }
@@ -169,12 +183,16 @@ fn is_zero_width(c: char) -> bool {
 
 /// The width of one line (no line breaks in it).
 pub(crate) fn line_width(line: &str, font_family: u8, font_size: f64) -> f64 {
-    line.chars().map(|c| char_width(c, font_family, font_size)).sum()
+    line.chars()
+        .map(|c| char_width(c, font_family, font_size))
+        .sum()
 }
 
 /// Excalidraw's `normalizeText`: line ends as `\n`, a tab as eight spaces.
 pub fn normalize_text(text: &str) -> String {
-    text.replace("\r\n", "\n").replace('\r', "\n").replace('\t', "        ")
+    text.replace("\r\n", "\n")
+        .replace('\r', "\n")
+        .replace('\t', "        ")
 }
 
 /// The size of a text (`measureText`): the widest line, and the lines times the size times
@@ -184,7 +202,13 @@ pub fn text_size(text: &str, font_family: u8, font_size: f64) -> (f64, f64) {
     let lines: Vec<&str> = text.split('\n').collect();
     let width = lines
         .iter()
-        .map(|line| if line.is_empty() { line_width(" ", font_family, font_size) } else { line_width(line, font_family, font_size) })
+        .map(|line| {
+            if line.is_empty() {
+                line_width(" ", font_family, font_size)
+            } else {
+                line_width(line, font_family, font_size)
+            }
+        })
         .fold(0.0, f64::max);
     let height = font_size * line_height(font_family) * lines.len() as f64;
     (width, height)
@@ -312,7 +336,10 @@ fn trim_line(line: &str, font_family: u8, font_size: f64, max_width: f64) -> Str
 
 /// Whether the metrics file had widths for this family.
 pub fn has_widths(font_family: u8) -> bool {
-    table().families.get(&font_family).is_some_and(|f| !f.advances.is_empty())
+    table()
+        .families
+        .get(&font_family)
+        .is_some_and(|f| f.advances.iter().any(Option::is_some))
 }
 
 #[cfg(test)]
@@ -331,7 +358,12 @@ mod tests {
         let one = line_width("word", 5, 20.0);
         let wrapped = wrap("word word word", 5, 20.0, one * 2.0);
         assert!(wrapped.lines().count() >= 2, "{wrapped:?}");
-        assert!(wrapped.lines().all(|l| line_width(l, 5, 20.0) <= one * 2.0 + 1e-9), "{wrapped:?}");
+        assert!(
+            wrapped
+                .lines()
+                .all(|l| line_width(l, 5, 20.0) <= one * 2.0 + 1e-9),
+            "{wrapped:?}"
+        );
         assert_eq!(wrap("short", 5, 20.0, -10.0), "short");
         let letters = wrap("abcdefghij", 5, 20.0, one / 2.0);
         assert!(letters.lines().count() > 2);
@@ -345,5 +377,29 @@ mod tests {
         assert_eq!(family_by_name("4"), None);
         assert_eq!(family_by_name("Comic Sans"), None);
         assert_eq!(family_name(3), "Cascadia");
+    }
+}
+
+#[cfg(test)]
+mod against_webkit {
+    use super::*;
+
+    /// Widths WebKit measured for these texts in the scout's run (Excalidraw 0.18.1, its
+    /// Excalifont): the sum of the advances is within a few tenths of a pixel.
+    #[test]
+    fn excalifont_widths_are_close_to_webkit_s() {
+        for (text, size, webkit) in [
+            ("Free text, hand-drawn font", 24.0, 322.82403564453125),
+            ("Draft chapter", 20.0, 137.27999877929688),
+            ("Review", 20.0, 65.44000244140625),
+            ("sends", 20.0, 55.08000183105469),
+        ] {
+            let ours = text_size(text, 5, size).0;
+            assert!(
+                (ours - webkit).abs() <= webkit * 0.01,
+                "{text}: {ours} against {webkit}"
+            );
+        }
+        assert!(has_widths(5));
     }
 }

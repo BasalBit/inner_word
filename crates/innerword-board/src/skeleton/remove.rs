@@ -9,13 +9,23 @@ use super::{BoardError, Removed, known_ids};
 use crate::limits::MAX_REQUEST_ELEMENTS;
 use crate::{ElementType, Making, Scene};
 
-pub(super) fn remove(scene: &mut Scene, ids: &[String], making: &mut dyn Making) -> Result<Removed, BoardError> {
+pub(super) fn remove(
+    scene: &mut Scene,
+    ids: &[String],
+    making: &mut dyn Making,
+) -> Result<Removed, BoardError> {
     if ids.len() > MAX_REQUEST_ELEMENTS {
-        return Err(BoardError::TooLarge { what: "request", limit: MAX_REQUEST_ELEMENTS });
+        return Err(BoardError::TooLarge {
+            what: "request",
+            limit: MAX_REQUEST_ELEMENTS,
+        });
     }
     for id in ids {
         if scene.element(id).is_none() {
-            return Err(BoardError::NotFound { id: id.clone(), known: known_ids(scene, id) });
+            return Err(BoardError::NotFound {
+                id: id.clone(),
+                known: known_ids(scene, id),
+            });
         }
     }
     // What goes: each id, and the label of each that is not a label.
@@ -47,7 +57,11 @@ pub(super) fn remove(scene: &mut Scene, ids: &[String], making: &mut dyn Making)
         // Arrows bound to what goes stay, unbound.
         if element.kind() == ElementType::Arrow {
             for key in ["startBinding", "endBinding"] {
-                let bound_to = element.json().get(key).and_then(|b| b.get("elementId")).and_then(Value::as_str);
+                let bound_to = element
+                    .json()
+                    .get(key)
+                    .and_then(|b| b.get("elementId"))
+                    .and_then(Value::as_str);
                 if bound_to.is_some_and(|b| gone.contains(b)) {
                     element.set(key, Value::Null);
                     touched = true;
@@ -58,7 +72,11 @@ pub(super) fn remove(scene: &mut Scene, ids: &[String], making: &mut dyn Making)
             }
         }
         // What goes leaves the boundElements of what stays.
-        let bound: Vec<String> = element.bound_elements().iter().map(|(b, _)| b.to_string()).collect();
+        let bound: Vec<String> = element
+            .bound_elements()
+            .iter()
+            .map(|(b, _)| b.to_string())
+            .collect();
         for b in bound {
             if gone.contains(b.as_str()) && remove_bound(element, &b) {
                 touched = true;
@@ -84,5 +102,8 @@ pub(super) fn remove(scene: &mut Scene, ids: &[String], making: &mut dyn Making)
     }
     scene.elements.retain(|e| !gone.contains(e.id()));
     scene.drop_unnamed_files();
-    Ok(Removed { removed: going, unbound })
+    Ok(Removed {
+        removed: going,
+        unbound,
+    })
 }

@@ -20,9 +20,17 @@ fn integer_length(head: u8) -> Option<usize> {
 /// Whether `key` is an order key `generateKeyBetween` accepts.
 pub(crate) fn is_valid(key: &str) -> bool {
     let bytes = key.as_bytes();
-    let Some(&head) = bytes.first() else { return false };
-    let Some(length) = integer_length(head) else { return false };
-    if length > bytes.len() || !bytes.iter().all(|b| digit_value(*b).is_some() || b.is_ascii_alphabetic()) {
+    let Some(&head) = bytes.first() else {
+        return false;
+    };
+    let Some(length) = integer_length(head) else {
+        return false;
+    };
+    if length > bytes.len()
+        || !bytes
+            .iter()
+            .all(|b| digit_value(*b).is_some() || b.is_ascii_alphabetic())
+    {
         return false;
     }
     if !bytes[1..].iter().all(|b| digit_value(*b).is_some()) {

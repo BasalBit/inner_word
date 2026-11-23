@@ -84,13 +84,18 @@ pub(crate) fn num(value: f64) -> Value {
         // -0.0 is written 0, as JavaScript writes it.
         return Value::Number(Number::from(value as i64));
     }
-    Number::from_f64(value).map(Value::Number).unwrap_or(Value::Null)
+    Number::from_f64(value)
+        .map(Value::Number)
+        .unwrap_or(Value::Null)
 }
 
 /// The value as an `f64`: a number, or 0 for anything else (`null` where Excalidraw wrote
 /// `NaN`, a string).
 pub(crate) fn as_f64(value: Option<&Value>) -> f64 {
-    value.and_then(Value::as_f64).filter(|v| v.is_finite()).unwrap_or(0.0)
+    value
+        .and_then(Value::as_f64)
+        .filter(|v| v.is_finite())
+        .unwrap_or(0.0)
 }
 
 /// Writes `value` with every object's keys sorted, so that the bytes do not depend on
@@ -152,15 +157,34 @@ mod tests {
 
     #[test]
     fn lone_halves_are_mended_and_pairs_kept() {
+        let u = |hex: &str| format!("\\u{hex}");
+        let q = |inner: String| format!("\"{inner}\"");
         assert_eq!(well_formed_json(r#"{"a":"x"}"#), r#"{"a":"x"}"#);
-        assert_eq!(well_formed_json(r#""\ud800""#), r#""�""#);
-        assert_eq!(well_formed_json(r#""\udc00x""#), r#""�x""#);
-        assert_eq!(well_formed_json(r#""😀""#), r#""😀""#);
-        assert_eq!(well_formed_json(r#""\ud83dA""#), r#""�A""#);
-        assert_eq!(well_formed_json(r#""\\ud800""#), r#""\\ud800""#);
-        assert_eq!(well_formed_json(r#""\\\ud800""#), r#""\\�""#);
-        assert_eq!(well_formed_json(r#""\ud800\ud800""#), r#""��""#);
-        assert_eq!(well_formed_json(r#""é\ud800é""#), r#""é�é""#);
+        assert_eq!(well_formed_json(&q(u("d800"))), q(u("fffd")));
+        assert_eq!(well_formed_json(&q(u("dc00") + "x")), q(u("fffd") + "x"));
+        let pair = q(u("d83d") + &u("de00"));
+        assert_eq!(well_formed_json(&pair), pair);
+        assert_eq!(
+            well_formed_json(&q(u("d83d") + &u("0041"))),
+            q(u("fffd") + &u("0041"))
+        );
+        let escaped = q(format!("\\\\{}", "ud800"));
+        assert_eq!(well_formed_json(&escaped), escaped);
+        assert_eq!(
+            well_formed_json(&q(format!("\\\\{}", u("d800")))),
+            q(format!("\\\\{}", u("fffd")))
+        );
+        assert_eq!(
+            well_formed_json(&q(u("d800") + &u("d800"))),
+            q(u("fffd") + &u("fffd"))
+        );
+        assert_eq!(
+            well_formed_json(&q(format!("é{}é", u("d800")))),
+            q(format!("é{}é", u("fffd")))
+        );
+        let value: serde_json::Value =
+            serde_json::from_str(&well_formed_json(&q(u("d800")))).unwrap();
+        assert_eq!(value.as_str(), Some("\u{fffd}"));
     }
 
     #[test]
@@ -174,7 +198,11 @@ mod tests {
 
     #[test]
     fn keys_are_sorted() {
-        let value: Value = serde_json::from_str(r#"{"b":1,"a":{"d":[1,{"z":2,"y":"\n"}],"c":null}}"#).unwrap();
-        assert_eq!(to_sorted_string(&value), r#"{"a":{"c":null,"d":[1,{"y":"\n","z":2}]},"b":1}"#);
+        let value: Value =
+            serde_json::from_str(r#"{"b":1,"a":{"d":[1,{"z":2,"y":"\n"}],"c":null}}"#).unwrap();
+        assert_eq!(
+            to_sorted_string(&value),
+            r#"{"a":{"c":null,"d":[1,{"y":"\n","z":2}]},"b":1}"#
+        );
     }
 }

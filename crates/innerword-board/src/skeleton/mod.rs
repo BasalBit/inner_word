@@ -15,7 +15,6 @@ use serde_json::{Map, Value};
 use crate::limits::{MAX_ELEMENTS, MAX_SCENE_BYTES};
 use crate::{FileHex, Making, Scene};
 
-
 /// An element as an agent writes it: a subset of Excalidraw's `ExcalidrawElementSkeleton`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -73,7 +72,11 @@ pub struct Removed {
 #[derive(Clone, Debug, PartialEq)]
 pub enum BoardError {
     /// Exit 2: the element's index in the request and the field, where there are.
-    Invalid { element: Option<usize>, field: Option<String>, message: String },
+    Invalid {
+        element: Option<usize>,
+        field: Option<String>,
+        message: String,
+    },
     /// Exit 3: an id the whiteboard does not have, with the ids it has (at most twenty,
     /// the nearest first).
     NotFound { id: String, known: Vec<String> },
@@ -83,13 +86,13 @@ pub enum BoardError {
 
 /// A limit in words: "16 MB", "2,000".
 pub(crate) fn limit_words(limit: usize) -> String {
-    if limit >= 1024 * 1024 && limit % (1024 * 1024) == 0 {
+    if limit >= 1024 * 1024 && limit.is_multiple_of(1024 * 1024) {
         format!("{} MB", limit / (1024 * 1024))
     } else {
         let digits = limit.to_string();
         let mut out = String::new();
         for (n, c) in digits.chars().enumerate() {
-            if n > 0 && (digits.len() - n) % 3 == 0 {
+            if n > 0 && (digits.len() - n).is_multiple_of(3) {
                 out.push(',');
             }
             out.push(c);
@@ -101,7 +104,11 @@ pub(crate) fn limit_words(limit: usize) -> String {
 impl std::fmt::Display for BoardError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            BoardError::Invalid { element, field, message } => {
+            BoardError::Invalid {
+                element,
+                field,
+                message,
+            } => {
                 match (element, field) {
                     (Some(n), Some(field)) => write!(f, "the element at index {n} ({field}): ")?,
                     (Some(n), None) => write!(f, "the element at index {n}: ")?,
@@ -118,9 +125,21 @@ impl std::fmt::Display for BoardError {
                 Ok(())
             }
             BoardError::TooLarge { what, limit } => match *what {
-                "request" => write!(f, "a request may hold at most {} elements", limit_words(*limit)),
-                "elements" => write!(f, "a whiteboard may hold at most {} elements", limit_words(*limit)),
-                "text" => write!(f, "a text may be at most {} characters long", limit_words(*limit)),
+                "request" => write!(
+                    f,
+                    "a request may hold at most {} elements",
+                    limit_words(*limit)
+                ),
+                "elements" => write!(
+                    f,
+                    "a whiteboard may hold at most {} elements",
+                    limit_words(*limit)
+                ),
+                "text" => write!(
+                    f,
+                    "a text may be at most {} characters long",
+                    limit_words(*limit)
+                ),
                 what => write!(f, "the {what} would be larger than {}", limit_words(*limit)),
             },
         }
@@ -133,7 +152,12 @@ impl std::error::Error for BoardError {}
 /// derived from `making`, every refusal before anything is changed (on an error the scene
 /// is as it was). An `image` skeleton whose path is not in `pictures` is refused (the
 /// caller prepares every path of [`picture_paths`] first).
-pub fn add(scene: &mut Scene, skeletons: &[Skeleton], pictures: &Pictures, making: &mut dyn Making) -> Result<Added, BoardError> {
+pub fn add(
+    scene: &mut Scene,
+    skeletons: &[Skeleton],
+    pictures: &Pictures,
+    making: &mut dyn Making,
+) -> Result<Added, BoardError> {
     let mut work = scene.clone();
     let added = add::add(&mut work, skeletons, pictures, making)?;
     *scene = work;
@@ -156,7 +180,11 @@ pub fn picture_paths(skeletons: &[Skeleton]) -> Vec<String> {
 
 /// Changes elements by id (section 7.3), with what follows them. On an error the scene is
 /// as it was.
-pub fn update(scene: &mut Scene, changes: &[ElementChange], making: &mut dyn Making) -> Result<Updated, BoardError> {
+pub fn update(
+    scene: &mut Scene,
+    changes: &[ElementChange],
+    making: &mut dyn Making,
+) -> Result<Updated, BoardError> {
     let mut work = scene.clone();
     let updated = update::update(&mut work, changes, making)?;
     *scene = work;
@@ -166,7 +194,11 @@ pub fn update(scene: &mut Scene, changes: &[ElementChange], making: &mut dyn Mak
 /// Removes elements by id (section 7.3): a shape with its label, an arrow with its label, a
 /// label alone; arrows bound to what goes stay, unbound; a frame's children stay; a
 /// picture's entry goes when nothing names it. On an error the scene is as it was.
-pub fn remove(scene: &mut Scene, ids: &[String], making: &mut dyn Making) -> Result<Removed, BoardError> {
+pub fn remove(
+    scene: &mut Scene,
+    ids: &[String],
+    making: &mut dyn Making,
+) -> Result<Removed, BoardError> {
     let mut work = scene.clone();
     let removed = remove::remove(&mut work, ids, making)?;
     *scene = work;
@@ -186,10 +218,16 @@ pub(crate) fn new_id(taken: &mut BTreeSet<String>, making: &mut dyn Making) -> S
 /// The limits for agents, on the scene after a change.
 pub(crate) fn check_limits(scene: &Scene) -> Result<(), BoardError> {
     if scene.elements().len() > MAX_ELEMENTS {
-        return Err(BoardError::TooLarge { what: "elements", limit: MAX_ELEMENTS });
+        return Err(BoardError::TooLarge {
+            what: "elements",
+            limit: MAX_ELEMENTS,
+        });
     }
     if scene.to_stored().len() > MAX_SCENE_BYTES {
-        return Err(BoardError::TooLarge { what: "whiteboard", limit: MAX_SCENE_BYTES });
+        return Err(BoardError::TooLarge {
+            what: "whiteboard",
+            limit: MAX_SCENE_BYTES,
+        });
     }
     Ok(())
 }
@@ -201,10 +239,20 @@ pub(crate) fn known_ids(scene: &Scene, wanted: &str) -> Vec<String> {
         .elements()
         .iter()
         .enumerate()
-        .map(|(n, e)| (e.container_id().is_some(), edit_distance(wanted, e.id()), n, e.id()))
+        .map(|(n, e)| {
+            (
+                e.container_id().is_some(),
+                edit_distance(wanted, e.id()),
+                n,
+                e.id(),
+            )
+        })
         .collect();
     ids.sort();
-    ids.into_iter().take(20).map(|(_, _, _, id)| id.to_string()).collect()
+    ids.into_iter()
+        .take(20)
+        .map(|(_, _, _, id)| id.to_string())
+        .collect()
 }
 
 fn edit_distance(a: &str, b: &str) -> usize {
@@ -216,7 +264,11 @@ fn edit_distance(a: &str, b: &str) -> usize {
         row[0] = i + 1;
         for (j, cb) in b.iter().enumerate() {
             let current = row[j + 1];
-            row[j + 1] = if ca == cb { previous } else { 1 + previous.min(row[j]).min(row[j + 1]) };
+            row[j + 1] = if ca == cb {
+                previous
+            } else {
+                1 + previous.min(row[j]).min(row[j + 1])
+            };
             previous = current;
         }
     }

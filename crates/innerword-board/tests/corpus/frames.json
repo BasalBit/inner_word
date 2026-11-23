@@ -1,0 +1,8 @@
+[
+  {"type": "rectangle", "id": "a", "x": 100, "y": 100, "width": 120, "height": 60, "label": {"text": "A"}},
+  {"type": "rectangle", "id": "b", "x": 320, "y": 100, "width": 120, "height": 60, "label": {"text": "B"}},
+  {"type": "arrow", "id": "ab", "x": 220, "y": 130, "width": 100, "height": 0, "start": {"id": "a"}, "end": {"id": "b"}},
+  {"type": "text", "id": "caption", "x": 100, "y": 180, "text": "Two boxes"},
+  {"type": "frame", "id": "pair", "children": ["a", "b", "caption"], "name": "Pair"},
+  {"type": "frame", "id": "empty", "x": 600, "y": 100, "width": 200, "height": 150, "name": "Room"}
+]

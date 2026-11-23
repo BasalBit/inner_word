@@ -101,7 +101,9 @@ impl Scene {
             match old.get(element.id()) {
                 None => upserted.push((element.clone(), None)),
                 Some(previous) => {
-                    if previous.version() != element.version() || previous.version_nonce() != element.version_nonce() {
+                    if previous.version() != element.version()
+                        || previous.version_nonce() != element.version_nonce()
+                    {
                         upserted.push((element.clone(), Some(previous.version())));
                     }
                 }
@@ -119,7 +121,11 @@ impl Scene {
             .filter(|(id, entry)| before.files.get(*id) != Some(*entry))
             .map(|(id, entry)| (id.clone(), entry.clone()))
             .collect();
-        Delta { upserted, removed, files }
+        Delta {
+            upserted,
+            removed,
+            files,
+        }
     }
 }
 
@@ -141,7 +147,11 @@ pub fn merge(base: &Scene, writer: &Scene, theirs: &Scene) -> Merged {
     let delta = theirs.delta_from(base);
     let mut elements: Vec<Element> = writer.elements.clone();
     let mut conflicts = Vec::new();
-    let position: HashMap<String, usize> = elements.iter().enumerate().map(|(n, e)| (e.id().to_string(), n)).collect();
+    let position: HashMap<String, usize> = elements
+        .iter()
+        .enumerate()
+        .map(|(n, e)| (e.id().to_string(), n))
+        .collect();
     let mut appended: Vec<Element> = Vec::new();
     let mut drop: BTreeSet<String> = BTreeSet::new();
     for (incoming, base_version) in &delta.upserted {
@@ -184,22 +194,32 @@ pub fn merge(base: &Scene, writer: &Scene, theirs: &Scene) -> Merged {
     for (id, entry) in &delta.files {
         files.entry(id.clone()).or_insert_with(|| entry.clone());
     }
-    let mut scene = Scene { elements, app_state, files };
+    let mut scene = Scene {
+        elements,
+        app_state,
+        files,
+    };
     scene.drop_unnamed_files();
     Merged { scene, conflicts }
 }
 
 /// Elements in the order of their fractional indices, as Excalidraw orders them; an
 /// element without a valid index keeps its place after the one before it.
-fn order_by_index(elements: &mut Vec<Element>) {
-    if elements.iter().all(|e| e.index().is_some_and(crate::fractional::is_valid)) {
+fn order_by_index(elements: &mut [Element]) {
+    if elements
+        .iter()
+        .all(|e| e.index().is_some_and(crate::fractional::is_valid))
+    {
         elements.sort_by(|a, b| a.index().cmp(&b.index()));
     }
     // Indices that do not grow are made to (as Excalidraw's `syncInvalidIndices` does on a
     // load): an element whose index is not above the one before it gets the next key.
     let mut last: Option<String> = None;
     for element in elements.iter_mut() {
-        let index = element.index().filter(|i| crate::fractional::is_valid(i)).map(str::to_string);
+        let index = element
+            .index()
+            .filter(|i| crate::fractional::is_valid(i))
+            .map(str::to_string);
         let fine = match (&index, &last) {
             (Some(i), Some(l)) => i > l,
             (Some(_), None) => true,

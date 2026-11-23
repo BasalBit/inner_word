@@ -22,7 +22,15 @@ pub(crate) const BINDING_GAP: f64 = 1.0;
 pub(crate) const DEFAULT_DIMENSION: f64 = 100.0;
 
 /// The fields every element has (`_newElementBase`, as `restoreElements` leaves them).
-pub(crate) fn base(kind: &str, id: &str, x: f64, y: f64, width: f64, height: f64, making: &mut dyn Making) -> Element {
+pub(crate) fn base(
+    kind: &str,
+    id: &str,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+    making: &mut dyn Making,
+) -> Element {
     let mut map = Map::new();
     map.insert("id".into(), Value::String(id.to_string()));
     map.insert("type".into(), Value::String(kind.to_string()));
@@ -32,7 +40,10 @@ pub(crate) fn base(kind: &str, id: &str, x: f64, y: f64, width: f64, height: f64
     map.insert("height".into(), num(height));
     map.insert("angle".into(), Value::from(0));
     map.insert("strokeColor".into(), Value::String("#1e1e1e".into()));
-    map.insert("backgroundColor".into(), Value::String("transparent".into()));
+    map.insert(
+        "backgroundColor".into(),
+        Value::String("transparent".into()),
+    );
     map.insert("fillStyle".into(), Value::String("solid".into()));
     map.insert("strokeWidth".into(), Value::from(2));
     map.insert("strokeStyle".into(), Value::String("solid".into()));
@@ -64,15 +75,34 @@ pub(crate) struct TextStyle {
 
 /// A text element (`newTextElement`): measured, placed by its alignment from `x`, `y`
 /// (a centred text is centred on `x`, a middle one on `y`).
-pub(crate) fn text_element(id: &str, x: f64, y: f64, text: &str, style: &TextStyle, making: &mut dyn Making) -> Element {
+pub(crate) fn text_element(
+    id: &str,
+    x: f64,
+    y: f64,
+    text: &str,
+    style: &TextStyle,
+    making: &mut dyn Making,
+) -> Element {
     let (width, height) = metrics::text_size(text, style.font_family, style.font_size);
     let offset_x = match style.text_align.as_str() {
         "center" => width / 2.0,
         "right" => width,
         _ => 0.0,
     };
-    let offset_y = if style.vertical_align == "middle" { height / 2.0 } else { 0.0 };
-    let mut element = base("text", id, x - offset_x, y - offset_y, width, height, making);
+    let offset_y = if style.vertical_align == "middle" {
+        height / 2.0
+    } else {
+        0.0
+    };
+    let mut element = base(
+        "text",
+        id,
+        x - offset_x,
+        y - offset_y,
+        width,
+        height,
+        making,
+    );
     set_text_fields(&mut element, text, style);
     element
 }
@@ -93,7 +123,9 @@ pub(crate) fn set_text_fields(element: &mut Element, text: &str, style: &TextSty
 
 pub(crate) fn text_style_of(element: &Element) -> TextStyle {
     TextStyle {
-        font_size: Some(element.f64_field("fontSize")).filter(|s| *s > 0.0).unwrap_or(metrics::DEFAULT_FONT_SIZE),
+        font_size: Some(element.f64_field("fontSize"))
+            .filter(|s| *s > 0.0)
+            .unwrap_or(metrics::DEFAULT_FONT_SIZE),
         font_family: element
             .json()
             .get("fontFamily")
@@ -101,7 +133,10 @@ pub(crate) fn text_style_of(element: &Element) -> TextStyle {
             .map(|f| f as u8)
             .unwrap_or(metrics::DEFAULT_FONT_FAMILY),
         text_align: element.str_field("textAlign").unwrap_or("left").to_string(),
-        vertical_align: element.str_field("verticalAlign").unwrap_or("top").to_string(),
+        vertical_align: element
+            .str_field("verticalAlign")
+            .unwrap_or("top")
+            .to_string(),
     }
 }
 
@@ -131,8 +166,11 @@ fn container_dimension_for_text(dimension: f64, kind: &ElementType) -> f64 {
 fn bound_text_max_width(container: &Element, font_size: f64) -> f64 {
     let width = container.width();
     match container.kind() {
-        ElementType::Arrow => (ARROW_LABEL_WIDTH_FRACTION * width).max(font_size * ARROW_LABEL_FONT_SIZE_TO_MIN_WIDTH_RATIO),
-        ElementType::Ellipse => (width / 2.0 * std::f64::consts::SQRT_2).round() - BOUND_TEXT_PADDING * 2.0,
+        ElementType::Arrow => (ARROW_LABEL_WIDTH_FRACTION * width)
+            .max(font_size * ARROW_LABEL_FONT_SIZE_TO_MIN_WIDTH_RATIO),
+        ElementType::Ellipse => {
+            (width / 2.0 * std::f64::consts::SQRT_2).round() - BOUND_TEXT_PADDING * 2.0
+        }
         ElementType::Diamond => (width / 2.0).round() - BOUND_TEXT_PADDING * 2.0,
         _ => width - BOUND_TEXT_PADDING * 2.0,
     }
@@ -143,9 +181,15 @@ fn bound_text_max_height(container: &Element, text_height: f64) -> f64 {
     let height = container.height();
     match container.kind() {
         ElementType::Arrow => {
-            if height - BOUND_TEXT_PADDING * 8.0 * 2.0 <= 0.0 { text_height } else { height }
+            if height - BOUND_TEXT_PADDING * 8.0 * 2.0 <= 0.0 {
+                text_height
+            } else {
+                height
+            }
         }
-        ElementType::Ellipse => (height / 2.0 * std::f64::consts::SQRT_2).round() - BOUND_TEXT_PADDING * 2.0,
+        ElementType::Ellipse => {
+            (height / 2.0 * std::f64::consts::SQRT_2).round() - BOUND_TEXT_PADDING * 2.0
+        }
         ElementType::Diamond => (height / 2.0).round() - BOUND_TEXT_PADDING * 2.0,
         _ => height - BOUND_TEXT_PADDING * 2.0,
     }
@@ -256,7 +300,11 @@ pub(crate) fn remeasure_free_text(element: &mut Element) {
         "right" => old_w - width,
         _ => 0.0,
     };
-    let dy = if style.vertical_align == "middle" && style.text_align == "center" { (old_h - height) / 2.0 } else { 0.0 };
+    let dy = if style.vertical_align == "middle" && style.text_align == "center" {
+        (old_h - height) / 2.0
+    } else {
+        0.0
+    };
     element.set("text", Value::String(text));
     element.set_f64("x", element.x() + dx);
     element.set_f64("y", element.y() + dy);
@@ -268,7 +316,10 @@ pub(crate) fn remeasure_free_text(element: &mut Element) {
 /// its width and height those of the points (`getNormalizedPoints`, `getSizeFromPoints`).
 pub(crate) fn set_points(element: &mut Element, x: f64, y: f64, points: &[Point]) {
     let first = points.first().copied().unwrap_or((0.0, 0.0));
-    let shifted: Vec<Point> = points.iter().map(|p| (p.0 - first.0, p.1 - first.1)).collect();
+    let shifted: Vec<Point> = points
+        .iter()
+        .map(|p| (p.0 - first.0, p.1 - first.1))
+        .collect();
     let (min_x, max_x, min_y, max_y) = extent(&shifted);
     element.set_f64("x", x + first.0);
     element.set_f64("y", y + first.1);
@@ -276,7 +327,12 @@ pub(crate) fn set_points(element: &mut Element, x: f64, y: f64, points: &[Point]
     element.set_f64("height", max_y - min_y);
     element.set(
         "points",
-        Value::Array(shifted.iter().map(|p| Value::Array(vec![num(p.0), num(p.1)])).collect()),
+        Value::Array(
+            shifted
+                .iter()
+                .map(|p| Value::Array(vec![num(p.0), num(p.1)]))
+                .collect(),
+        ),
     );
 }
 
@@ -288,7 +344,12 @@ pub(crate) fn set_freedraw_points(element: &mut Element, points: &[Point]) {
     element.set_f64("height", max_y - min_y);
     element.set(
         "points",
-        Value::Array(points.iter().map(|p| Value::Array(vec![num(p.0), num(p.1)])).collect()),
+        Value::Array(
+            points
+                .iter()
+                .map(|p| Value::Array(vec![num(p.0), num(p.1)]))
+                .collect(),
+        ),
     );
 }
 
@@ -297,26 +358,42 @@ fn extent(points: &[Point]) -> (f64, f64, f64, f64) {
     let max_x = points.iter().map(|p| p.0).fold(f64::NEG_INFINITY, f64::max);
     let min_y = points.iter().map(|p| p.1).fold(f64::INFINITY, f64::min);
     let max_y = points.iter().map(|p| p.1).fold(f64::NEG_INFINITY, f64::max);
-    if min_x.is_finite() { (min_x, max_x, min_y, max_y) } else { (0.0, 0.0, 0.0, 0.0) }
+    if min_x.is_finite() {
+        (min_x, max_x, min_y, max_y)
+    } else {
+        (0.0, 0.0, 0.0, 0.0)
+    }
 }
 
 /// Whether every point lies within 1 px of the first: a line that cannot be seen.
 pub(crate) fn invisibly_small_points(points: &[Point]) -> bool {
-    let Some(first) = points.first() else { return true };
-    points.iter().all(|p| (p.0 - first.0).abs() < 1.0 && (p.1 - first.1).abs() < 1.0)
+    let Some(first) = points.first() else {
+        return true;
+    };
+    points
+        .iter()
+        .all(|p| (p.0 - first.0).abs() < 1.0 && (p.1 - first.1).abs() < 1.0)
 }
 
 /// The global points of a linear element.
 pub(crate) fn global_points(element: &Element) -> Vec<Point> {
     let (x, y) = (element.x(), element.y());
-    element.points().into_iter().map(|p| (x + p.0, y + p.1)).collect()
+    element
+        .points()
+        .into_iter()
+        .map(|p| (x + p.0, y + p.1))
+        .collect()
 }
 
 /// Whether an element can have an arrow bound to it (`isBindableElement`: a shape, a
 /// free text, a picture, a frame).
 pub(crate) fn is_bindable(element: &Element) -> bool {
     match element.kind() {
-        ElementType::Rectangle | ElementType::Ellipse | ElementType::Diamond | ElementType::Image | ElementType::Frame => true,
+        ElementType::Rectangle
+        | ElementType::Ellipse
+        | ElementType::Diamond
+        | ElementType::Image
+        | ElementType::Frame => true,
         ElementType::Text => element.container_id().is_none(),
         _ => false,
     }
@@ -338,7 +415,12 @@ pub(crate) enum Snap {
 /// its element is aimed at the element's centre. Returns false when the ends cannot be
 /// put anywhere sensible (the two elements overlap so that no line leaves one for the
 /// other); the arrow is then left where it was, bound all the same.
-pub(crate) fn snap_arrow(arrow: &mut Element, start: Option<&Element>, end: Option<&Element>, snap: Snap) -> bool {
+pub(crate) fn snap_arrow(
+    arrow: &mut Element,
+    start: Option<&Element>,
+    end: Option<&Element>,
+    snap: Snap,
+) -> bool {
     let mut points = global_points(arrow);
     if points.len() < 2 {
         return false;
@@ -373,15 +455,28 @@ pub(crate) fn snap_arrow(arrow: &mut Element, start: Option<&Element>, end: Opti
             if let Some(e) = &end_shape {
                 // Where the line enters the end's element, coming from the start.
                 let entries: Vec<f64> = e.crossings(a, z);
-                let from = start_shape.as_ref().map(|s| exit_parameter(s, a, z, f64::INFINITY)).unwrap_or(0.0);
-                match entries.iter().copied().filter(|t| *t > from + 1e-9).reduce(f64::min) {
+                let from = start_shape
+                    .as_ref()
+                    .map(|s| exit_parameter(s, a, z, f64::INFINITY))
+                    .unwrap_or(0.0);
+                match entries
+                    .iter()
+                    .copied()
+                    .filter(|t| *t > from + 1e-9)
+                    .reduce(f64::min)
+                {
                     Some(t) => t_end = t,
                     None => placed = false,
                 }
             }
             if let Some(s) = &start_shape {
                 let exits: Vec<f64> = s.crossings(a, z);
-                match exits.iter().copied().filter(|t| *t < t_end - 1e-9).reduce(f64::max) {
+                match exits
+                    .iter()
+                    .copied()
+                    .filter(|t| *t < t_end - 1e-9)
+                    .reduce(f64::max)
+                {
                     Some(t) => t_start = t,
                     None => placed = false,
                 }
@@ -438,7 +533,12 @@ pub(crate) fn snap_arrow(arrow: &mut Element, start: Option<&Element>, end: Opti
 
 /// The largest crossing before `limit`: where the line leaves the shape.
 fn exit_parameter(shape: &Shape, a: Point, z: Point, limit: f64) -> f64 {
-    shape.crossings(a, z).into_iter().filter(|t| *t < limit).reduce(f64::max).unwrap_or(0.0)
+    shape
+        .crossings(a, z)
+        .into_iter()
+        .filter(|t| *t < limit)
+        .reduce(f64::max)
+        .unwrap_or(0.0)
 }
 
 /// The end of a segment from `adjacent` towards `end`, put where it meets the shape's
@@ -452,7 +552,11 @@ fn end_on_outline(shape: &Shape, adjacent: Point, end: Point) -> Option<Point> {
     if direction.0 == 0.0 && direction.1 == 0.0 {
         return None;
     }
-    let t = shape.crossings(adjacent, target).into_iter().filter(|t| *t > 1e-9).reduce(f64::min)?;
+    let t = shape
+        .crossings(adjacent, target)
+        .into_iter()
+        .filter(|t| *t > 1e-9)
+        .reduce(f64::min)?;
     Some((adjacent.0 + direction.0 * t, adjacent.1 + direction.1 * t))
 }
 
@@ -500,12 +604,17 @@ fn binding(element_id: &str, focus: f64) -> Value {
 
 /// Adds `{id, type}` to the element's `boundElements` when it is not there.
 pub(crate) fn add_bound(element: &mut Element, id: &str, kind: &str) {
-    let list = element.json_mut().entry("boundElements").or_insert_with(|| Value::Array(Vec::new()));
+    let list = element
+        .json_mut()
+        .entry("boundElements")
+        .or_insert_with(|| Value::Array(Vec::new()));
     if !list.is_array() {
         *list = Value::Array(Vec::new());
     }
     if let Value::Array(items) = list
-        && !items.iter().any(|item| item.get("id").and_then(Value::as_str) == Some(id))
+        && !items
+            .iter()
+            .any(|item| item.get("id").and_then(Value::as_str) == Some(id))
     {
         let mut entry = Map::new();
         entry.insert("id".into(), Value::String(id.to_string()));
@@ -526,7 +635,11 @@ pub(crate) fn remove_bound(element: &mut Element, id: &str) -> bool {
 
 /// The id of a container's label (its bound text).
 pub(crate) fn label_id(element: &Element) -> Option<String> {
-    element.bound_elements().into_iter().find(|(_, kind)| *kind == "text").map(|(id, _)| id.to_string())
+    element
+        .bound_elements()
+        .into_iter()
+        .find(|(_, kind)| *kind == "text")
+        .map(|(id, _)| id.to_string())
 }
 
 /// A new version of a changed element: `version` + 1, a new `versionNonce`, `updated` now.

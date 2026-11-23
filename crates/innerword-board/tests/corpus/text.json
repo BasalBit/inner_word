@@ -1,0 +1,11 @@
+[
+  {"type": "text", "id": "title", "x": 0, "y": 0, "text": "System overview", "fontSize": 28},
+  {"type": "text", "id": "lines", "x": 0, "y": 60, "text": "First line\nSecond, longer line\nthird"},
+  {"type": "text", "id": "nunito", "x": 300, "y": 60, "text": "Nunito text", "fontFamily": 6, "fontSize": 24},
+  {"type": "text", "id": "lilita", "x": 300, "y": 120, "text": "Lilita One", "fontFamily": "Lilita One"},
+  {"type": "text", "id": "code", "x": 300, "y": 180, "text": "let x = 1;", "fontFamily": "Comic Shanns", "fontSize": 18},
+  {"type": "text", "id": "sans", "x": 300, "y": 240, "text": "Liberation Sans", "fontFamily": 9},
+  {"type": "text", "id": "virgil", "x": 300, "y": 300, "text": "Virgil, the old hand", "fontFamily": "Virgil"},
+  {"type": "text", "id": "centred", "x": 700, "y": 100, "text": "Centred here", "textAlign": "center", "verticalAlign": "middle"},
+  {"type": "text", "id": "right", "x": 700, "y": 200, "text": "Right aligned", "textAlign": "right", "strokeColor": "#2f9e44", "opacity": 80}
+]

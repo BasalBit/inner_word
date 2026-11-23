@@ -40,7 +40,11 @@ impl HashedMaking {
             hasher.update((part.len() as u64).to_le_bytes());
             hasher.update(part);
         }
-        HashedMaking { key: hasher.finalize().into(), counter: 0, now_ms }
+        HashedMaking {
+            key: hasher.finalize().into(),
+            counter: 0,
+            now_ms,
+        }
     }
 
     fn next(&mut self, what: &[u8]) -> [u8; 32] {
@@ -61,7 +65,10 @@ impl HashedMaking {
 impl Making for HashedMaking {
     fn id(&mut self) -> String {
         let bytes = self.next(b"id");
-        bytes[..21].iter().map(|b| ALPHABET[(b & 63) as usize] as char).collect()
+        bytes[..21]
+            .iter()
+            .map(|b| ALPHABET[(b & 63) as usize] as char)
+            .collect()
     }
 
     fn seed(&mut self) -> i64 {

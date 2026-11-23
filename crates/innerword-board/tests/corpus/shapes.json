@@ -1,0 +1,8 @@
+[
+  {"type": "rectangle", "id": "plain", "x": 0, "y": 0},
+  {"type": "rectangle", "id": "styled", "x": 150, "y": 0, "width": 160, "height": 80, "strokeColor": "#1971c2", "backgroundColor": "#a5d8ff", "fillStyle": "hachure", "strokeWidth": 4, "strokeStyle": "dashed", "roughness": 2, "opacity": 70, "roundness": {"type": 3}, "angle": 0.25, "groupIds": ["g1"], "link": "https://example.com", "locked": true},
+  {"type": "ellipse", "id": "oval", "x": 350, "y": 0, "width": 180, "height": 100, "label": {"text": "Review"}},
+  {"type": "diamond", "id": "choice", "x": 560, "y": 0, "width": 160, "height": 120, "backgroundColor": "#ffec99", "fillStyle": "solid", "label": {"text": "Yes?", "fontSize": 16}},
+  {"type": "rectangle", "id": "corner", "x": 0, "y": 200, "width": 220, "height": 110, "label": {"text": "Top left", "textAlign": "left", "verticalAlign": "top", "strokeColor": "#e03131"}},
+  {"type": "rectangle", "id": "bottom", "x": 250, "y": 200, "width": 220, "height": 110, "label": {"text": "Bottom right", "textAlign": "right", "verticalAlign": "bottom", "fontFamily": "Nunito"}}
+]

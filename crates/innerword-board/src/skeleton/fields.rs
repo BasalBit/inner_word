@@ -43,13 +43,22 @@ pub(crate) const STYLE_FIELDS: [&str; 9] = [
 ];
 
 /// The fields that mean nothing on a picture.
-pub(crate) const FILL_FIELDS: [&str; 6] =
-    ["strokeColor", "backgroundColor", "fillStyle", "strokeWidth", "strokeStyle", "roughness"];
+pub(crate) const FILL_FIELDS: [&str; 6] = [
+    "strokeColor",
+    "backgroundColor",
+    "fillStyle",
+    "strokeWidth",
+    "strokeStyle",
+    "roughness",
+];
 
 /// Fields that are Excalidraw's own and never an agent's.
 pub(crate) const NEVER_FROM_AGENTS: [(&str, &str); 7] = [
     ("customData", "customData is not taken from agents"),
-    ("fileId", "a picture is named by its path; fileId is the library's"),
+    (
+        "fileId",
+        "a picture is named by its path; fileId is the library's",
+    ),
     ("status", "status is the library's"),
     ("scale", "scale is not taken from agents"),
     ("crop", "a picture cannot be cropped here"),
@@ -65,12 +74,20 @@ impl At {
     pub(crate) fn invalid(self, field: &str, message: impl Into<String>) -> BoardError {
         BoardError::Invalid {
             element: self.0,
-            field: if field.is_empty() { None } else { Some(field.to_string()) },
+            field: if field.is_empty() {
+                None
+            } else {
+                Some(field.to_string())
+            },
             message: message.into(),
         }
     }
 
-    pub(crate) fn number(self, map: &Map<String, Value>, field: &str) -> Result<Option<f64>, BoardError> {
+    pub(crate) fn number(
+        self,
+        map: &Map<String, Value>,
+        field: &str,
+    ) -> Result<Option<f64>, BoardError> {
         match map.get(field) {
             None => Ok(None),
             Some(Value::Number(n)) => match n.as_f64() {
@@ -81,18 +98,29 @@ impl At {
         }
     }
 
-    pub(crate) fn coordinate(self, map: &Map<String, Value>, field: &str) -> Result<Option<f64>, BoardError> {
+    pub(crate) fn coordinate(
+        self,
+        map: &Map<String, Value>,
+        field: &str,
+    ) -> Result<Option<f64>, BoardError> {
         let value = self.number(map, field)?;
         if let Some(v) = value
             && v.abs() > MAX_COORDINATE
         {
-            return Err(self.invalid(field, format!("{field} must be between -1,000,000 and 1,000,000")));
+            return Err(self.invalid(
+                field,
+                format!("{field} must be between -1,000,000 and 1,000,000"),
+            ));
         }
         Ok(value)
     }
 
     /// A width or a height: at least 1 (anything less would be invisibly small).
-    pub(crate) fn size(self, map: &Map<String, Value>, field: &str) -> Result<Option<f64>, BoardError> {
+    pub(crate) fn size(
+        self,
+        map: &Map<String, Value>,
+        field: &str,
+    ) -> Result<Option<f64>, BoardError> {
         let value = self.number(map, field)?;
         if let Some(v) = value
             && !(1.0..=MAX_COORDINATE).contains(&v)
@@ -105,11 +133,20 @@ impl At {
         Ok(value)
     }
 
-    pub(crate) fn required(self, value: Option<f64>, field: &str, kind: &str) -> Result<f64, BoardError> {
+    pub(crate) fn required(
+        self,
+        value: Option<f64>,
+        field: &str,
+        kind: &str,
+    ) -> Result<f64, BoardError> {
         value.ok_or_else(|| self.invalid(field, format!("a {kind} needs {field}")))
     }
 
-    pub(crate) fn string<'m>(self, map: &'m Map<String, Value>, field: &str) -> Result<Option<&'m str>, BoardError> {
+    pub(crate) fn string<'m>(
+        self,
+        map: &'m Map<String, Value>,
+        field: &str,
+    ) -> Result<Option<&'m str>, BoardError> {
         match map.get(field) {
             None => Ok(None),
             Some(Value::String(s)) => Ok(Some(s)),
@@ -117,7 +154,11 @@ impl At {
         }
     }
 
-    pub(crate) fn boolean(self, map: &Map<String, Value>, field: &str) -> Result<Option<bool>, BoardError> {
+    pub(crate) fn boolean(
+        self,
+        map: &Map<String, Value>,
+        field: &str,
+    ) -> Result<Option<bool>, BoardError> {
         match map.get(field) {
             None => Ok(None),
             Some(Value::Bool(b)) => Ok(Some(*b)),
@@ -130,10 +171,16 @@ impl At {
     pub(crate) fn text(self, value: &str, field: &str) -> Result<String, BoardError> {
         let text = metrics::normalize_text(value);
         if text.trim().is_empty() {
-            return Err(self.invalid(field, format!("{field} is empty: a text without characters cannot be seen")));
+            return Err(self.invalid(
+                field,
+                format!("{field} is empty: a text without characters cannot be seen"),
+            ));
         }
         if text.chars().count() > MAX_TEXT_CHARS {
-            return Err(BoardError::TooLarge { what: "text", limit: MAX_TEXT_CHARS });
+            return Err(BoardError::TooLarge {
+                what: "text",
+                limit: MAX_TEXT_CHARS,
+            });
         }
         Ok(text)
     }
@@ -145,23 +192,35 @@ impl At {
         if !is_id(text) {
             return Err(self.invalid(
                 field,
-                format!("{field} must be 1 to {MAX_ID_CHARS} characters of letters, digits, _ and -"),
+                format!(
+                    "{field} must be 1 to {MAX_ID_CHARS} characters of letters, digits, _ and -"
+                ),
             ));
         }
         Ok(text.to_string())
     }
 
-    pub(crate) fn color(self, map: &Map<String, Value>, field: &str) -> Result<Option<String>, BoardError> {
-        let Some(text) = self.string(map, field)? else { return Ok(None) };
+    pub(crate) fn color(
+        self,
+        map: &Map<String, Value>,
+        field: &str,
+    ) -> Result<Option<String>, BoardError> {
+        let Some(text) = self.string(map, field)? else {
+            return Ok(None);
+        };
         let text = text.trim();
         let hex = text.strip_prefix('#').is_some_and(|h| {
             matches!(h.len(), 3 | 4 | 6 | 8) && h.bytes().all(|b| b.is_ascii_hexdigit())
         });
-        let named = !text.is_empty() && text.len() <= 30 && text.bytes().all(|b| b.is_ascii_alphabetic());
+        let named =
+            !text.is_empty() && text.len() <= 30 && text.bytes().all(|b| b.is_ascii_alphabetic());
         if hex || named {
             Ok(Some(text.to_string()))
         } else {
-            Err(self.invalid(field, format!("{field} must be a colour such as #1e1e1e or transparent")))
+            Err(self.invalid(
+                field,
+                format!("{field} must be a colour such as #1e1e1e or transparent"),
+            ))
         }
     }
 
@@ -171,15 +230,24 @@ impl At {
         field: &str,
         allowed: &[&str],
     ) -> Result<Option<String>, BoardError> {
-        let Some(text) = self.string(map, field)? else { return Ok(None) };
+        let Some(text) = self.string(map, field)? else {
+            return Ok(None);
+        };
         if allowed.contains(&text) {
             Ok(Some(text.to_string()))
         } else {
-            Err(self.invalid(field, format!("{field} must be one of {}", allowed.join(", "))))
+            Err(self.invalid(
+                field,
+                format!("{field} must be one of {}", allowed.join(", ")),
+            ))
         }
     }
 
-    pub(crate) fn font_size(self, map: &Map<String, Value>, field: &str) -> Result<Option<f64>, BoardError> {
+    pub(crate) fn font_size(
+        self,
+        map: &Map<String, Value>,
+        field: &str,
+    ) -> Result<Option<f64>, BoardError> {
         let value = self.number(map, field)?;
         if let Some(v) = value
             && !(1.0..=MAX_FONT_SIZE).contains(&v)
@@ -189,32 +257,57 @@ impl At {
         Ok(value)
     }
 
-    pub(crate) fn font_family(self, map: &Map<String, Value>, field: &str) -> Result<Option<u8>, BoardError> {
+    pub(crate) fn font_family(
+        self,
+        map: &Map<String, Value>,
+        field: &str,
+    ) -> Result<Option<u8>, BoardError> {
         let wrong = || {
-            let names: Vec<String> = metrics::FAMILIES.iter().map(|(n, name)| format!("{n} {name}")).collect();
-            self.invalid(field, format!("{field} must be one of Excalidraw's fonts: {}", names.join(", ")))
+            let names: Vec<String> = metrics::FAMILIES
+                .iter()
+                .map(|(n, name)| format!("{n} {name}"))
+                .collect();
+            self.invalid(
+                field,
+                format!(
+                    "{field} must be one of Excalidraw's fonts: {}",
+                    names.join(", ")
+                ),
+            )
         };
         match map.get(field) {
             None => Ok(None),
             Some(Value::Number(n)) => {
                 let number = n.as_u64().filter(|v| *v < 256).ok_or_else(wrong)?;
-                metrics::family_by_name(&number.to_string()).map(Some).ok_or_else(wrong)
+                metrics::family_by_name(&number.to_string())
+                    .map(Some)
+                    .ok_or_else(wrong)
             }
             Some(Value::String(name)) => metrics::family_by_name(name).map(Some).ok_or_else(wrong),
             Some(_) => Err(wrong()),
         }
     }
 
-    pub(crate) fn link(self, map: &Map<String, Value>, field: &str) -> Result<Option<Option<String>>, BoardError> {
+    pub(crate) fn link(
+        self,
+        map: &Map<String, Value>,
+        field: &str,
+    ) -> Result<Option<Option<String>>, BoardError> {
         match map.get(field) {
             None => Ok(None),
             Some(Value::Null) => Ok(Some(None)),
             Some(Value::String(text)) => {
                 let text = text.trim();
                 let lower = text.to_ascii_lowercase();
-                let allowed = ["http://", "https://", "mailto:"].iter().any(|p| lower.starts_with(p));
-                if !allowed || text.len() > 2048 || text.chars().any(|c| c.is_control() || c == '"') {
-                    return Err(self.invalid(field, "a link must be an address that starts with http://, https:// or mailto:"));
+                let allowed = ["http://", "https://", "mailto:"]
+                    .iter()
+                    .any(|p| lower.starts_with(p));
+                if !allowed || text.len() > 2048 || text.chars().any(|c| c.is_control() || c == '"')
+                {
+                    return Err(self.invalid(
+                        field,
+                        "a link must be an address that starts with http://, https:// or mailto:",
+                    ));
                 }
                 Ok(Some(Some(text.to_string())))
             }
@@ -222,7 +315,11 @@ impl At {
         }
     }
 
-    pub(crate) fn roundness(self, map: &Map<String, Value>, field: &str) -> Result<Option<Value>, BoardError> {
+    pub(crate) fn roundness(
+        self,
+        map: &Map<String, Value>,
+        field: &str,
+    ) -> Result<Option<Value>, BoardError> {
         match map.get(field) {
             None => Ok(None),
             Some(Value::Null) => Ok(Some(Value::Null)),
@@ -233,14 +330,21 @@ impl At {
                     out.insert("type".into(), Value::from(kind.unwrap_or(3)));
                     Ok(Some(Value::Object(out)))
                 } else {
-                    Err(self.invalid(field, "roundness must be {\"type\": 3} (or 1 or 2), or null"))
+                    Err(self.invalid(
+                        field,
+                        "roundness must be {\"type\": 3} (or 1 or 2), or null",
+                    ))
                 }
             }
             Some(_) => Err(self.invalid(field, "roundness must be {\"type\": 3}, or null")),
         }
     }
 
-    pub(crate) fn group_ids(self, map: &Map<String, Value>, field: &str) -> Result<Option<Vec<String>>, BoardError> {
+    pub(crate) fn group_ids(
+        self,
+        map: &Map<String, Value>,
+        field: &str,
+    ) -> Result<Option<Vec<String>>, BoardError> {
         match map.get(field) {
             None => Ok(None),
             Some(Value::Array(items)) => {
@@ -255,10 +359,18 @@ impl At {
     }
 
     /// Points `[[x, y], …]`, at least two, relative to the element's `x` and `y`.
-    pub(crate) fn points(self, map: &Map<String, Value>, field: &str) -> Result<Option<Vec<(f64, f64)>>, BoardError> {
-        let Some(value) = map.get(field) else { return Ok(None) };
+    pub(crate) fn points(
+        self,
+        map: &Map<String, Value>,
+        field: &str,
+    ) -> Result<Option<Vec<(f64, f64)>>, BoardError> {
+        let Some(value) = map.get(field) else {
+            return Ok(None);
+        };
         let wrong = || self.invalid(field, "points must be a list of at least two [x, y] pairs");
-        let Value::Array(items) = value else { return Err(wrong()) };
+        let Value::Array(items) = value else {
+            return Err(wrong());
+        };
         if items.len() < 2 {
             return Err(wrong());
         }
@@ -268,8 +380,14 @@ impl At {
         let mut out = Vec::with_capacity(items.len());
         for item in items {
             let pair = item.as_array().filter(|p| p.len() == 2).ok_or_else(wrong)?;
-            let x = pair[0].as_f64().filter(|v| v.is_finite() && v.abs() <= MAX_COORDINATE).ok_or_else(wrong)?;
-            let y = pair[1].as_f64().filter(|v| v.is_finite() && v.abs() <= MAX_COORDINATE).ok_or_else(wrong)?;
+            let x = pair[0]
+                .as_f64()
+                .filter(|v| v.is_finite() && v.abs() <= MAX_COORDINATE)
+                .ok_or_else(wrong)?;
+            let y = pair[1]
+                .as_f64()
+                .filter(|v| v.is_finite() && v.abs() <= MAX_COORDINATE)
+                .ok_or_else(wrong)?;
             out.push((x, y));
         }
         Ok(Some(out))
@@ -277,7 +395,11 @@ impl At {
 
     /// `{"id": "<element>"}`: the element an arrow's end is bound to. `Some(None)` for
     /// `null` (unbound, in a change).
-    pub(crate) fn end(self, map: &Map<String, Value>, field: &str) -> Result<Option<Option<String>>, BoardError> {
+    pub(crate) fn end(
+        self,
+        map: &Map<String, Value>,
+        field: &str,
+    ) -> Result<Option<Option<String>>, BoardError> {
         match map.get(field) {
             None => Ok(None),
             Some(Value::Null) => Ok(Some(None)),
@@ -288,10 +410,15 @@ impl At {
                         format!("{field} names an element by id only ({{\"id\": \"api\"}}); give a new shape its own entry"),
                     ));
                 }
-                let id = end.get("id").ok_or_else(|| self.invalid(field, format!("{field} needs an id")))?;
+                let id = end
+                    .get("id")
+                    .ok_or_else(|| self.invalid(field, format!("{field} needs an id")))?;
                 Ok(Some(Some(self.id(id, field)?)))
             }
-            Some(_) => Err(self.invalid(field, format!("{field} must be {{\"id\": \"<an element>\"}}"))),
+            Some(_) => Err(self.invalid(
+                field,
+                format!("{field} must be {{\"id\": \"<an element>\"}}"),
+            )),
         }
     }
 }
@@ -308,5 +435,7 @@ pub(crate) fn normalize_angle(angle: f64) -> f64 {
 pub(crate) fn is_id(text: &str) -> bool {
     !text.is_empty()
         && text.len() <= MAX_ID_CHARS
-        && text.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+        && text
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
 }

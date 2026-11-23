@@ -7,8 +7,9 @@
 //! calls one after another, in the order the app made them.
 //!
 //! The calls of the live view (`index.html`) wait until the page posted `ready`, except
-//! [`STATE`]. [`EXPORT_LAYOUT`] and [`CONVERT_SKELETONS`] are the export page's
-//! (`export.html`).
+//! [`STATE`], which is answered at once, outside the order of the others (it reads and
+//! changes nothing, and must answer when the page could not start). [`EXPORT_LAYOUT`] and
+//! [`CONVERT_SKELETONS`] are the export page's (`export.html`).
 
 use serde::de::{self, Deserializer};
 use serde::Deserialize;
@@ -47,7 +48,8 @@ pub const INSERT_PICTURES: &str = body!("insertPictures");
 /// [`insert_elements_argument`] -> [`Inserted`]: elements `innerword_board` made (the Add
 /// commands, the scripted `board:draw:`), one step of the undo, selected.
 pub const INSERT_ELEMENTS: &str = body!("insertElements");
-/// `{}` -> the page's [`crate::bridge::Status`] (the scripted `state` line).
+/// `{}` -> the page's [`crate::bridge::Status`] (the scripted `state` line). Answered at
+/// once, also before `ready` and behind a call that waits for it.
 pub const STATE: &str = body!("state");
 /// [`mermaid_argument`] -> `{}` (the dialog opened) or [`Inserted`] (a definition converted).
 pub const MERMAID: &str = body!("mermaid");
@@ -277,9 +279,13 @@ pub struct FilesPosted {
 pub struct Adopted {
     /// The rev of the merged canvas.
     pub rev: u64,
-    /// The canvas holds exactly the outside write: no conflict, every version is the
-    /// incoming one, and nothing was unposted before the merge. Otherwise the page posts
-    /// the merge as a change of the writer's.
+    /// The canvas holds exactly the outside write: no conflict, every element of the delta
+    /// at the version the delta gave it, and the canvas was at the delta's `baseRev` itself
+    /// when it was merged (nothing of the writer's since the scene the change was made on,
+    /// posted or not: a post that left the page after the app wrote is one the app drops
+    /// while it adopts). Then this rev counts as saved. Otherwise the page posts the merge
+    /// as a change of the writer's, at this rev or above (a new rev when this one was
+    /// posted before), once no gesture is under way.
     pub same: bool,
     /// The ids of the incoming elements that were not taken (the writer changed them).
     pub conflicts: Vec<String>,

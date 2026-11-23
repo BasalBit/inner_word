@@ -1301,8 +1301,15 @@ fn mermaid(report: &mut Report, assets: &Assets, server: &Server, rules: &Path) 
     let (_, _) = insert(&format!(
         "flowchart LR\n  A@{{ img: \"{image}\", label: \"Picture\", w: 60, h: 60 }} --> B[Next]"
     ));
-    wait(Duration::from_millis(800));
-    let violations = reports(&view);
+    let (violations, _) = read_until(
+        HAPPENS_WITHIN,
+        || reports(&view),
+        |violations| {
+            violations
+                .iter()
+                .any(|v| v.starts_with("img-src") && v.contains("127.0.0.1"))
+        },
+    );
     report.check(
         violations
             .iter()
@@ -1895,12 +1902,17 @@ fn adopt_while_a_font_loads(report: &mut Report, assets: &Assets, rules: &Path) 
         x1 == 1000. && t7,
         &format!("{case}: the agent's change is on the canvas (r1.x {x1}, t7 {t7})"),
     );
-    wait(Duration::from_millis(400));
     let rev = adopted.as_ref().map(|a| a.rev).unwrap_or(u64::MAX);
-    let after: Vec<Value> = posted(&events, "scene")
-        .into_iter()
-        .filter(|post| post["rev"].as_u64().is_some_and(|r| r >= rev))
-        .collect();
+    let (after, _) = read_until(
+        HAPPENS_WITHIN,
+        || -> Vec<Value> {
+            posted(&events, "scene")
+                .into_iter()
+                .filter(|post| post["rev"].as_u64().is_some_and(|r| r >= rev))
+                .collect()
+        },
+        |after| after.last().and_then(|post| x_in_post(post, "r2")) == Some(x2_before + 37.),
+    );
     let posted_r2 = after.last().and_then(|post| x_in_post(post, "r2"));
     report.check(
         posted_r2 == Some(x2_before + 37.),
@@ -2199,7 +2211,23 @@ fn a_library_longer_than_one_message(report: &mut Report, assets: &Assets, rules
         ),
         "{}",
     );
-    wait(Duration::from_millis(800));
+    read_until(
+        HAPPENS_WITHIN,
+        || {
+            (
+                posted(&events, "library")
+                    .last()
+                    .cloned()
+                    .unwrap_or_default(),
+                posted(&events, "status")
+                    .last()
+                    .map(|s| s["libraryWaiting"].clone()),
+            )
+        },
+        |(last, waiting)| {
+            last["tooLarge"] == true && last["items"].is_null() && *waiting == Some(json!(true))
+        },
+    );
     let posts = posted(&events, "library");
     let last = posts.last().cloned().unwrap_or_default();
     report.check(
@@ -2346,7 +2374,24 @@ fn a_library_change_waiting_its_post(report: &mut Report, assets: &Assets, rules
     // Without collect: the post comes 300 ms later, and a status that says false after it.
     let _ = call(&view, &format!("{}\nreturn '1';", change("second")), "{}");
     let waiting = page_json(&view, calls::STATE);
-    wait(Duration::from_millis(700));
+    read_until(
+        HAPPENS_WITHIN,
+        || {
+            (
+                posted(&events, "library"),
+                posted(&events, "status")
+                    .last()
+                    .cloned()
+                    .unwrap_or_default(),
+            )
+        },
+        |(library_posts, last_status)| {
+            library_posts
+                .last()
+                .is_some_and(|p| p["items"][0]["id"] == "second")
+                && last_status["libraryWaiting"] == false
+        },
+    );
     let library_posts = posted(&events, "library");
     let after = page_json(&view, calls::STATE);
     let last_status = posted(&events, "status")
@@ -2397,11 +2442,20 @@ fn a_picture_longer_than_one_message(report: &mut Report, assets: &Assets, rules
         ),
         "{}",
     );
-    wait(Duration::from_millis(800));
+    // The scene that names the picture is waited for; a file posted meanwhile (which must
+    // not be) is given at least the 800 ms it had before.
+    let started = Instant::now();
+    let (names_it, _) = read_until(
+        HAPPENS_WITHIN,
+        || {
+            messages(&events, from).iter().any(|m| {
+                matches!(m, Ok(Message::Scene { scene, .. }) if scene.get().contains("\"big\"") && scene.get().contains(id))
+            })
+        },
+        |&names_it| names_it,
+    );
+    wait(Duration::from_millis(800).saturating_sub(started.elapsed()));
     let files_posted = posted(&events, "file");
-    let names_it = messages(&events, from).iter().any(|m| {
-        matches!(m, Ok(Message::Scene { scene, .. }) if scene.get().contains("\"big\"") && scene.get().contains(id))
-    });
     report.check(
         added.is_ok() && files_posted.is_empty() && names_it,
         &format!(
@@ -2478,16 +2532,21 @@ fn what_a_paste_brings_is_kept_within_bounds(report: &mut Report, assets: &Asset
            return '';"#,
         &text,
     );
-    wait(Duration::from_millis(700));
     // The canvas's elements are not read whole here: the deep one is beyond serde_json.
-    let pasted_links: Vec<Value> = page_json(
-        &view,
-        "return JSON.stringify(window.innerwordBoard.api.getSceneElements()
+    let (pasted_links, _) = read_until(
+        HAPPENS_WITHIN,
+        || -> Vec<Value> {
+            page_json(
+                &view,
+                "return JSON.stringify(window.innerwordBoard.api.getSceneElements()
            .filter((e) => !['r1', 'r2', 'r3'].includes(e.id)).map((e) => e.link ?? null));",
-    )
-    .as_array()
-    .cloned()
-    .unwrap_or_default();
+            )
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+        },
+        |links| links.len() == 3,
+    );
     report.check(
         pasted.is_ok()
             && pasted_links.len() == 3
@@ -2495,13 +2554,21 @@ fn what_a_paste_brings_is_kept_within_bounds(report: &mut Report, assets: &Asset
             && !pasted_links.iter().any(|l| l.as_str().is_some_and(|l| l.starts_with("smb:"))),
         &format!("{case}: an smb link comes without it, a web link with it ({pasted:?}, {pasted_links:?})"),
     );
-    let scene = messages(&events, from)
-        .into_iter()
-        .rev()
-        .find_map(|m| match m {
-            Ok(Message::Scene { scene, .. }) => Some(scene.get().to_string()),
-            _ => None,
-        });
+    let last_scene = || {
+        messages(&events, from)
+            .into_iter()
+            .rev()
+            .find_map(|m| match m {
+                Ok(Message::Scene { scene, .. }) => Some(scene.get().to_string()),
+                _ => None,
+            })
+    };
+    let (scene, _) = read_until(HAPPENS_WITHIN, last_scene, |scene| {
+        scene.as_deref().is_some_and(|scene| {
+            innerword_board::Scene::from_view(scene, &|_: &str| None)
+                .is_ok_and(|parsed| parsed.scene.elements().len() == 6)
+        })
+    });
     let read = scene
         .as_deref()
         .map(|scene| innerword_board::Scene::from_view(scene, &|_: &str| None));

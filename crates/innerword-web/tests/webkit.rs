@@ -282,6 +282,29 @@ fn wait(duration: Duration) {
     testing::run_until(duration, || false);
 }
 
+/// How long a check that something happens waits for it before it fails: long, because a
+/// slow runner (GitHub's macos-15) can take many times what a Mac on a desk takes, and a
+/// check that holds returns as soon as it does.
+const HAPPENS_WITHIN: Duration = Duration::from_secs(10);
+
+/// Reads `read` every 50 ms, letting the run loop work in between, until `done` holds of
+/// the reading or `limit` has passed; the last reading and how long it took. For checks
+/// that something happens: they read once it has, and fail only at the limit.
+fn read_until<T>(
+    limit: Duration,
+    mut read: impl FnMut() -> T,
+    done: impl Fn(&T) -> bool,
+) -> (T, Duration) {
+    let start = Instant::now();
+    loop {
+        let reading = read();
+        if done(&reading) || start.elapsed() >= limit {
+            return (reading, start.elapsed());
+        }
+        wait(Duration::from_millis(50));
+    }
+}
+
 // ---------------------------------------------------------------------------
 // A stand-in for GPUI's view: takes the keys handed to it, beeps for nothing.
 

@@ -316,15 +316,39 @@ setTimeout(() => { const f = document.getElementById('file'); f.removeAttribute(
             },
         ),
     ];
-    for (n, (what, extras)) in cases.into_iter().enumerate() {
+    const EVERY_KIND: [&str; 7] = [
+        "data",
+        "file",
+        "inline",
+        "srcdoc",
+        "made",
+        "sandboxed",
+        "later",
+    ];
+    // The control first: it waits until every frame has run, and the cases where nothing
+    // may run then wait at least as long as that took on this machine, and a margin.
+    let mut cases: Vec<(usize, (&str, ViewExtras))> = cases.into_iter().enumerate().collect();
+    cases.rotate_right(1);
+    let mut quiet_for = Duration::from_millis(1500);
+    for (n, (what, extras)) in cases {
         let (view, events) = host.board(
             &format!("board-{}-1700000000000", 30 + n),
             files(),
             extras,
             rules,
         );
-        wait(Duration::from_millis(1500));
-        let ran = ran(&view);
+        let ran = if n == 3 {
+            let (ran, took) = read_until(
+                HAPPENS_WITHIN,
+                || ran(&view),
+                |ran| EVERY_KIND.iter().all(|kind| ran.iter().any(|r| r == kind)),
+            );
+            quiet_for = quiet_for.max(took + Duration::from_millis(1000));
+            ran
+        } else {
+            wait(quiet_for);
+            ran(&view)
+        };
         let stats = view.stats();
         match n {
             0 | 1 => report.check(
@@ -341,17 +365,9 @@ setTimeout(() => { const f = document.getElementById('file'); f.removeAttribute(
                 ),
             ),
             _ => report.check(
-                [
-                    "data",
-                    "file",
-                    "inline",
-                    "srcdoc",
-                    "made",
-                    "sandboxed",
-                    "later",
-                ]
-                .iter()
-                .all(|kind| ran.iter().any(|r| r == kind)),
+                EVERY_KIND
+                    .iter()
+                    .all(|kind| ran.iter().any(|r| r == kind)),
                 &format!("{what}: every frame runs (ran {ran:?})"),
             ),
         }
@@ -573,19 +589,29 @@ pub(super) fn the_board_policy(report: &mut Report, server: &Server, rules: &Pat
         board_extras(4096, Some(innerword_web::CONTENT_SECURITY_POLICY)),
         rules,
     );
-    wait(Duration::from_millis(1500));
-    let mut seen = kinds(&control_events);
-    seen.sort();
+    // The control waits until every way has posted; the whiteboard's view, where nothing
+    // but the bundle's own file may post, then waits at least as long as that took here.
+    const EVERY_WAY: [&str; 7] = [
+        "eval",
+        "function",
+        "handler",
+        "inline",
+        "own",
+        "string timer",
+        "wasm",
+    ];
+    let (seen, took) = read_until(
+        HAPPENS_WITHIN,
+        || {
+            let mut seen = kinds(&control_events);
+            seen.sort();
+            seen
+        },
+        |seen| EVERY_WAY.iter().all(|way| seen.iter().any(|s| s == way)),
+    );
+    let quiet_for = Duration::from_millis(1500).max(took + Duration::from_millis(1000));
     report.check(
-        seen == [
-            "eval",
-            "function",
-            "handler",
-            "inline",
-            "own",
-            "string timer",
-            "wasm",
-        ] && control.stats().messages_dropped == 0,
+        seen == EVERY_WAY && control.stats().messages_dropped == 0,
         &format!(
             "under a page's policy every way but a frame runs (the control: {seen:?}, {:?})",
             control.stats()
@@ -599,7 +625,7 @@ pub(super) fn the_board_policy(report: &mut Report, server: &Server, rules: &Pat
         board_extras(4096, None),
         rules,
     );
-    wait(Duration::from_millis(1500));
+    wait(quiet_for);
     report.check(
         kinds(&events) == ["own"] && board.stats().messages_dropped == 0,
         &format!(
@@ -702,8 +728,7 @@ pub(super) fn park(report: &mut Report, rules: &Path) {
             .unwrap_or(0)
     };
     let first = count(&view);
-    wait(Duration::from_millis(500));
-    let second = count(&view);
+    let (second, _) = read_until(HAPPENS_WITHIN, || count(&view), |&n| n > first + 5);
     report.check(
         second > first + 5,
         &format!("a parked view still runs requestAnimationFrame ({first} -> {second})"),
@@ -737,7 +762,7 @@ pub(super) fn park(report: &mut Report, rules: &Path) {
     view.park();
     let third = count(&view);
     wait(Duration::from_millis(500));
-    let fourth = count(&view);
+    let (fourth, _) = read_until(HAPPENS_WITHIN, || count(&view), |&n| n > third + 5);
     let changes = call(&view, "return String(window.changes_seen);", "{}");
     report.check(
         changes.as_deref() == Ok("0") && fourth > third + 5,
@@ -807,8 +832,7 @@ pub(super) fn park(report: &mut Report, rules: &Path) {
     view.set_hidden(true);
     view.park();
     let first = count(&view);
-    wait(Duration::from_millis(500));
-    let second = count(&view);
+    let (second, _) = read_until(HAPPENS_WITHIN, || count(&view), |&n| n > first + 5);
     report.check(
         view.is_parked() && !hidden() && occlusion() == Some(false) && second > first + 5,
         &format!(
@@ -863,8 +887,11 @@ pub(super) fn park(report: &mut Report, rules: &Path) {
     wait(Duration::from_millis(200));
     let while_parked = call(&view, "return document.visibilityState;", "{}");
     view.set_frame(shown);
-    wait(Duration::from_millis(500));
-    let back = call(&view, "return document.visibilityState;", "{}");
+    let (back, _) = read_until(
+        HAPPENS_WITHIN,
+        || call(&view, "return document.visibilityState;", "{}"),
+        |state| state.as_deref() == Ok("hidden"),
+    );
     report.check(
         while_parked.as_deref() == Ok("visible") && back.as_deref() == Ok("hidden"),
         &format!(

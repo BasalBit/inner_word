@@ -39,6 +39,11 @@ pub(crate) trait Host {
     fn main_frame_may_load(&self, _url: &str) -> bool {
         true
     }
+    /// Whether a frame inside the page may load `url`, which the policy allows: false
+    /// cancels it, as a navigation the policy cancelled.
+    fn subframe_may_load(&self, _url: &str) -> bool {
+        true
+    }
     fn finished(&self, navigation: Id);
     fn failed(&self, navigation: Id, message: String);
     fn terminated(&self);
@@ -261,6 +266,7 @@ extern "C" fn decide_action(
             reader,
         }) {
             Decision::Allow if main_frame && !host.main_frame_may_load(&url) => Decision::Cancel,
+            Decision::Allow if !main_frame && !host.subframe_may_load(&url) => Decision::Cancel,
             decision => decision,
         };
         match decision {

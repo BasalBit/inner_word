@@ -28,9 +28,13 @@
 //!   (the check has both, in a content world of its own). A whiteboard's view
 //!   ([`ViewExtras`]) has one handler ([`Bridge`]), checked for every message: its name,
 //!   the main frame, the view's own origin, a string under the size cap; whatever fails is
-//!   dropped and counted, and what passes only reaches [`PageEvents::message`]. It also
-//!   loads no other document after its entry and has a stricter policy
-//!   ([`BOARD_CONTENT_SECURITY_POLICY`]).
+//!   dropped and counted, and what passes only reaches [`PageEvents::message`]. The main
+//!   frame check cannot tell a frame of the view's own origin that posts through `top`
+//!   from the main frame, so a view with the bridge loads no frame at all (every
+//!   subframe navigation is cancelled, `srcdoc` included: the whiteboard's policies
+//!   refuse a frame of a file and an inline script, not a `srcdoc` frame's script of the
+//!   view's own origin). It also loads no other document after its entry and has a stricter
+//!   policy ([`BOARD_CONTENT_SECURITY_POLICY`]).
 //!
 //! Everything runs on the main thread, except [`PageSource::file`], which is called on
 //! a background queue. Every callback from WebKit or AppKit reaches the owner on the
@@ -80,6 +84,12 @@ pub const CONTENT_SECURITY_POLICY: &str = "default-src 'self' data: blob: 'unsaf
 /// any frame (an `iframe` element of a pasted scene renders its `srcdoc` as a frame,
 /// which inherits this policy and could run nothing even before the glue deletes it).
 pub const BOARD_CONTENT_SECURITY_POLICY: &str = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' data: blob:; worker-src 'self' blob:; frame-src 'none'; child-src 'none'; object-src 'none'; form-action 'none'; base-uri 'self'";
+
+/// The longest side of a PDF [`run_script`] makes, in points: Acrobat's limit, and the
+/// whiteboard's export scales its drawing down to it (`docs/whiteboard-design.md`,
+/// section 5; threat 12 of section 8). The rectangle is capped here too, whatever the page
+/// answers, so a broken or forged export page cannot have WebKit draw a page of any size.
+pub const MAX_PDF_SIDE: f64 = 14_400.0;
 
 /// The policy of the whiteboard's export page: the board's, with WebAssembly allowed
 /// for Excalidraw's font subsetter (`'wasm-unsafe-eval'`, which allows WebAssembly and
@@ -298,7 +308,8 @@ pub struct ViewConfig {
 
 /// A whiteboard's view: its one script message handler (`docs/whiteboard-design.md`,
 /// section 4.2), under `name`, in the page world, for the main frame of the view's own
-/// origin only, for a string of at most `max_bytes` UTF-8 bytes.
+/// origin only, for a string of at most `max_bytes` UTF-8 bytes (a lone surrogate in it
+/// made U+FFFD). A view with a bridge loads no frame inside its page.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Bridge {
     pub name: &'static str,
@@ -443,7 +454,8 @@ pub struct ScriptInput {
     pub script: String,
     pub argument_json: String,
     /// The script answers `{"width": w, "height": h}` (CSS pixels): after the fonts and
-    /// two animation frames, a one-page PDF of `(0, 0, ceil(w), ceil(h))` is made.
+    /// two animation frames, a one-page PDF of `(0, 0, ceil(w), ceil(h))` is made, each
+    /// side at most [`MAX_PDF_SIDE`] whatever the page answered.
     pub pdf: bool,
     pub csp: &'static str,
     /// For everything together: the load, the script, the PDF.

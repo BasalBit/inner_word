@@ -64,23 +64,23 @@ pub(super) fn the_bridge(report: &mut Report, rules: &Path) {
         (
             "index.html",
             html(
-                r#"<!doctype html><title>Board</title><iframe id="inner" src="inner.html"></iframe><script src="app.js"></script>"#,
+                r#"<!doctype html><title>Board</title><body><script src="app.js"></script></body>"#,
             ),
         ),
-        ("app.js", js(&format!("{POST}post('ready');"))),
         (
-            "inner.html",
-            html(r#"<!doctype html><script src="inner.js"></script>"#),
-        ),
-        (
-            "inner.js",
-            js(
-                "window.webkit.messageHandlers.innerwordBoard.postMessage(JSON.stringify({ kind: 'from a frame' }));",
-            ),
+            "app.js",
+            js(&format!(
+                "{POST}post('ready');\n\
+                 // A frame the page makes itself: about:blank, of the view's origin, loaded\n\
+                 // without a navigation. A message it posts through its own handlers is a\n\
+                 // subframe's.\n\
+                 const frame = document.createElement('iframe');\n\
+                 document.body.append(frame);\n\
+                 frame.contentWindow.eval(\"window.webkit.messageHandlers.innerwordBoard.postMessage(JSON.stringify({{ kind: 'from a frame' }}))\");"
+            )),
         ),
     ];
-    // Frames are refused by the whiteboard's policy; a page's lets the frame load, so
-    // that its message is what is refused.
+    // A page's policy, so that eval runs in the frame and its message is what is refused.
     let extras = board_extras(1024, Some(innerword_web::CONTENT_SECURITY_POLICY));
     let (view, events) = host.board("board-1-1700000000000", files, extras, rules);
     testing::run_until(Duration::from_secs(5), || {
@@ -136,6 +136,25 @@ pub(super) fn the_bridge(report: &mut Report, rules: &Path) {
     report.check(
         after.messages_received == 2,
         &format!("the messages that arrived are counted ({after:?})"),
+    );
+
+    // Half of a character pair (which UTF-8 cannot hold) is never a reason to refuse a
+    // message: it arrives as U+FFFD, as the glue and innerword_board mend it (4.4).
+    let _ = eval(
+        &view,
+        "window.webkit.messageHandlers.innerwordBoard.postMessage('{\"kind\":\"half\",\"text\":\"a\\ud800b\\udc00\"}'); 1",
+    );
+    testing::run_until(Duration::from_secs(3), || {
+        events.messages.borrow().len() >= 3
+    });
+    let half = events.messages.borrow().get(2).cloned().unwrap_or_default();
+    report.check(
+        half == "{\"kind\":\"half\",\"text\":\"a\u{FFFD}b\u{FFFD}\"}"
+            && view.stats().messages_dropped == after.messages_dropped,
+        &format!(
+            "a message with a lone surrogate arrives, mended to U+FFFD ({half:?}, {:?})",
+            view.stats()
+        ),
     );
 
     // A main frame of another origin: a sandboxed document has an opaque one.
@@ -212,6 +231,123 @@ pub(super) fn the_bridge(report: &mut Report, rules: &Path) {
     );
 }
 
+/// A frame inside a whiteboard's view never reaches the bridge. The main-frame check
+/// cannot see one of the view's own origin that posts through `top` (WebKit reports such a
+/// message as the main frame's), so a view with the bridge loads no frame at all, whatever
+/// its policy; and the whiteboard's policy itself lets no frame of a file and no inline
+/// script in a frame run. The control (no bridge, a page's policy) shows each frame would
+/// run and post otherwise.
+pub(super) fn frames_never_reach_the_bridge(report: &mut Report, rules: &Path) {
+    let files = || {
+        vec![
+            (
+                "index.html",
+                html(
+                    r#"<!doctype html><title>Frames</title><body>
+<iframe id="file" src="inner.html"></iframe>
+<iframe id="srcdoc" srcdoc="<script src=&quot;inner.js&quot;></script>"></iframe>
+<iframe id="inline" srcdoc="<script>top.__ran = (top.__ran || []).concat(['inline']); top.webkit.messageHandlers.innerwordBoard.postMessage(JSON.stringify({ kind: 'inline' }));</script>"></iframe>
+<iframe id="data" src="data:text/html,%3Cscript%3Eparent.postMessage('data', '*')%3C/script%3E"></iframe>
+<script src="app.js"></script></body>"#,
+                ),
+            ),
+            (
+                "app.js",
+                js(
+                    "window.__ran = window.__ran || []; window.addEventListener('message', (e) => { window.__ran = window.__ran.concat([String(e.data)]); }); if (window.webkit && window.webkit.messageHandlers.innerwordBoard) window.webkit.messageHandlers.innerwordBoard.postMessage(JSON.stringify({ kind: 'ready' }));",
+                ),
+            ),
+            (
+                "inner.html",
+                html(r#"<!doctype html><script src="inner.js"></script>"#),
+            ),
+            (
+                "inner.js",
+                js(
+                    "top.__ran = (top.__ran || []).concat([String(location.href).startsWith('about:srcdoc') ? 'srcdoc' : 'file']); top.webkit.messageHandlers.innerwordBoard.postMessage(JSON.stringify({ kind: 'through top' }));",
+                ),
+            ),
+        ]
+    };
+    let host = Host::new();
+    let ran = |view: &WebPage| -> Vec<String> {
+        let mut list: Vec<String> = eval(view, "JSON.stringify(window.__ran || [])")
+            .ok()
+            .and_then(|text| serde_json::from_str(&text).ok())
+            .unwrap_or_default();
+        list.sort();
+        list
+    };
+    let cases: [(&str, ViewExtras); 4] = [
+        (
+            "a view with the bridge under a page's policy",
+            board_extras(4096, Some(innerword_web::CONTENT_SECURITY_POLICY)),
+        ),
+        (
+            "a view with the bridge under the whiteboard's policy",
+            board_extras(4096, None),
+        ),
+        (
+            "a view without the bridge under the whiteboard's policy",
+            ViewExtras {
+                bridge: None,
+                one_document: true,
+                csp: Some(BOARD_CONTENT_SECURITY_POLICY),
+            },
+        ),
+        (
+            "the control: no bridge, a page's policy",
+            ViewExtras {
+                bridge: None,
+                one_document: true,
+                csp: Some(innerword_web::CONTENT_SECURITY_POLICY),
+            },
+        ),
+    ];
+    for (n, (what, extras)) in cases.into_iter().enumerate() {
+        let (view, events) = host.board(
+            &format!("board-{}-1700000000000", 30 + n),
+            files(),
+            extras,
+            rules,
+        );
+        wait(Duration::from_millis(1500));
+        let ran = ran(&view);
+        let stats = view.stats();
+        match n {
+            0 | 1 => report.check(
+                kinds(&events) == ["ready"] && ran.is_empty() && stats.messages_dropped == 0,
+                &format!(
+                    "{what}: no frame loads, none posts (ran {ran:?}, messages {:?}, {stats:?})",
+                    kinds(&events)
+                ),
+            ),
+            2 => report.check(
+                !ran.iter().any(|r| r == "file" || r == "inline" || r == "data"),
+                &format!(
+                    "{what}: no frame of a file, no inline script in a frame and no data: frame runs (ran {ran:?})"
+                ),
+            ),
+            _ => report.check(
+                ["data", "file", "inline", "srcdoc"]
+                    .iter()
+                    .all(|kind| ran.iter().any(|r| r == kind)),
+                &format!("{what}: every frame runs (ran {ran:?})"),
+            ),
+        }
+        if n == 2 {
+            report.note(&format!(
+                "{what}: a srcdoc frame that names a script of the view's own origin {}",
+                if ran.iter().any(|r| r == "srcdoc") {
+                    "runs it (the policy alone does not stop it: the bridge's view loads no frame)"
+                } else {
+                    "does not run it"
+                }
+            ));
+        }
+    }
+}
+
 pub(super) fn call_async(report: &mut Report, rules: &Path) {
     let host = Host::new();
     let (view, _events) = host.board(
@@ -262,6 +398,11 @@ pub(super) fn call_async(report: &mut Report, rules: &Path) {
         "text": "quotes \" and ' and `, a back\\slash,\na line break, a tab\t, </script>, \u{1F600}"
     })
     .to_string();
+    let half = call(&view, "return 'a\\ud800b';", "{}");
+    report.check(
+        half.as_deref() == Ok("a\u{FFFD}b"),
+        &format!("an answer with a lone surrogate is read, mended to U+FFFD ({half:?})"),
+    );
     let echoed = call(&view, "return arg;", &argument);
     report.check(
         echoed.as_deref() == Ok(argument.as_str()),
@@ -380,8 +521,9 @@ pub(super) fn one_document(report: &mut Report, rules: &Path) {
 }
 
 pub(super) fn the_board_policy(report: &mut Report, server: &Server, rules: &Path) {
-    // Each way would post a message. Under a page's policy (the control) they do; under
-    // the whiteboard's nothing runs but the bundle's own file.
+    // Each way would post a message. Under a page's policy (the control) they do, but the
+    // two frames, which a view with the bridge never loads (`frames_never_reach_the_bridge`);
+    // under the whiteboard's nothing runs but the bundle's own file.
     let image = server.url("pixel.png");
     let index = format!(
         r#"<!doctype html><title>Policy</title>
@@ -411,21 +553,17 @@ pub(super) fn the_board_policy(report: &mut Report, server: &Server, rules: &Pat
     let mut seen = kinds(&control_events);
     seen.sort();
     report.check(
-        [
+        seen == [
             "eval",
             "function",
             "handler",
             "inline",
             "own",
-            "srcdoc",
             "string timer",
             "wasm",
-        ]
-        .iter()
-        .all(|kind| seen.iter().any(|seen| seen == kind))
-            && control.stats().messages_dropped >= 1,
+        ] && control.stats().messages_dropped == 0,
         &format!(
-            "under a page's policy every way runs (the control: {seen:?}, {:?})",
+            "under a page's policy every way but a frame runs (the control: {seen:?}, {:?})",
             control.stats()
         ),
     );
@@ -561,6 +699,15 @@ pub(super) fn park(report: &mut Report, rules: &Path) {
         width: 1280.,
         height: host.content_height(),
     });
+    // Brought back, the view has its occlusion detection on again, as it was found, and
+    // the test's window is far off screen: shown "as in the app's window" means drawn as a
+    // view in a visible window is, which is a view with occlusion detection off here.
+    unsafe {
+        let native = view.native_view() as Id;
+        let _: () = msg_send![native, _setWindowOcclusionDetectionEnabled: NO];
+        let _: () = msg_send![native, setHidden: YES];
+        let _: () = msg_send![native, setHidden: NO];
+    }
     wait(Duration::from_millis(200));
     let _ = call(&view, "window.changes_seen = 0; return '';", "{}");
     view.park();
@@ -584,6 +731,121 @@ pub(super) fn park(report: &mut Report, rules: &Path) {
     report.check(
         answered.as_deref() == Ok("from a hidden view"),
         &format!("a call answers from a hidden view ({answered:?})"),
+    );
+    drop(view);
+
+    // What park found comes back with set_frame: the hidden state (the app hides a view
+    // under the snapshot of an overlay) and the window occlusion detection.
+    let (view, _events) = host.board(
+        "board-8-1700000000000",
+        vec![
+            ("index.html", html("<!doctype html><script src=\"frames.js\"></script>")),
+            (
+                "frames.js",
+                js("window.frames_drawn = 0; const tick = () => { window.frames_drawn += 1; requestAnimationFrame(tick); }; requestAnimationFrame(tick);"),
+            ),
+        ],
+        board_extras(1024, None),
+        rules,
+    );
+    let native = view.native_view() as Id;
+    let shown = Rect {
+        x: 0.,
+        y: 0.,
+        width: 1280.,
+        height: host.content_height(),
+    };
+    let hidden = || unsafe {
+        let hidden: BOOL = msg_send![native, isHidden];
+        hidden != NO
+    };
+    let occlusion = || unsafe {
+        let answers: BOOL =
+            msg_send![native, respondsToSelector: sel!(_windowOcclusionDetectionEnabled)];
+        (answers != NO).then(|| {
+            let on: BOOL = msg_send![native, _windowOcclusionDetectionEnabled];
+            on != NO
+        })
+    };
+    let set_occlusion = |on: bool| unsafe {
+        let _: () =
+            msg_send![native, _setWindowOcclusionDetectionEnabled: if on { YES } else { NO }];
+    };
+    view.set_frame(shown);
+    set_occlusion(true);
+    report.check(
+        occlusion() == Some(true),
+        &format!(
+            "this macOS answers whether a view's occlusion detection is on ({:?})",
+            occlusion()
+        ),
+    );
+    view.set_hidden(true);
+    view.park();
+    let first = count(&view);
+    wait(Duration::from_millis(500));
+    let second = count(&view);
+    report.check(
+        view.is_parked() && !hidden() && occlusion() == Some(false) && second > first + 5,
+        &format!(
+            "a hidden view that is parked is drawn, out of sight ({}, hidden {}, occlusion {:?}, {first} -> {second})",
+            view.is_parked(),
+            hidden(),
+            occlusion()
+        ),
+    );
+    view.set_frame(shown);
+    report.check(
+        !view.is_parked() && hidden() && occlusion() == Some(true),
+        &format!(
+            "brought back, it is hidden again and its occlusion detection on again, as park found them (hidden {}, occlusion {:?})",
+            hidden(),
+            occlusion()
+        ),
+    );
+    // A view drawn although covered (a scripted run's, occlusion detection off) and shown.
+    view.set_hidden(false);
+    set_occlusion(false);
+    view.park();
+    view.park();
+    view.set_frame(shown);
+    report.check(
+        !hidden() && occlusion() == Some(false),
+        &format!(
+            "a view shown with occlusion detection off comes back so, parked twice (hidden {}, occlusion {:?})",
+            hidden(),
+            occlusion()
+        ),
+    );
+    // Hidden while it was parked: hidden at once, and when it is brought back.
+    view.park();
+    view.set_hidden(true);
+    let parked_hidden = hidden();
+    view.set_frame(shown);
+    report.check(
+        parked_hidden && hidden(),
+        &format!(
+            "a parked view hidden meanwhile is hidden, and stays so when it is brought back ({parked_hidden}, {})",
+            hidden()
+        ),
+    );
+    // Shown with occlusion detection on in a covered window (the test's is far off
+    // screen): parked it is drawn; brought back WebKit sees the window covered again and
+    // stops drawing it, as before it was parked (a whiteboard opened again in a covered
+    // window does not go on drawing).
+    view.set_hidden(false);
+    set_occlusion(true);
+    view.park();
+    wait(Duration::from_millis(200));
+    let while_parked = call(&view, "return document.visibilityState;", "{}");
+    view.set_frame(shown);
+    wait(Duration::from_millis(500));
+    let back = call(&view, "return document.visibilityState;", "{}");
+    report.check(
+        while_parked.as_deref() == Ok("visible") && back.as_deref() == Ok("hidden"),
+        &format!(
+            "brought back into a covered window with its occlusion detection on, it stops being drawn again ({while_parked:?} -> {back:?})"
+        ),
     );
 }
 
@@ -705,5 +967,26 @@ body { width: 3000px; height: 2001px; position: relative; font: 24px Helvetica, 
     report.check(
         matches!(&no_size, Err(why) if why.contains("not a size")),
         &format!("an answer that is no size makes no PDF ({no_size:?})"),
+    );
+    // A page that answers a side far past the limit (a broken or forged export page): the
+    // PDF's side is the limit, whatever it said.
+    let huge = run_script_blocking(ScriptInput {
+        pdf: true,
+        ..base(
+            "index.html",
+            "return JSON.stringify({ width: 1e7, height: 200.5 });",
+            Duration::from_secs(30),
+        )
+    });
+    report.check(
+        matches!(&huge, Ok(ScriptOutput { pdf: Some(pdf), .. })
+            if pdf.pages == 1
+                && (pdf.paper.0 - innerword_web::MAX_PDF_SIDE).abs() < 0.01
+                && (pdf.paper.1 - 201.).abs() < 0.01),
+        &format!(
+            "a side the page answers past {} pt is cut to it ({:?})",
+            innerword_web::MAX_PDF_SIDE,
+            huge.as_ref().map(|o| o.pdf.as_ref().map(|p| p.paper))
+        ),
     );
 }

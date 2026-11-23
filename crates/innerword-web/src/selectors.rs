@@ -19,8 +19,8 @@ use crate::ns::{Id, OsVersion};
 /// is the data store's `allowsServerPreconnect` (without it a link a script clicks
 /// makes WebKit connect to its host before the policy is asked). Optional ones, asked
 /// with `respondsToSelector:` where they are sent: `setInspectable:`, `_setPageMuted:`,
-/// `_setWindowOcclusionDetectionEnabled:`, `_isUserInitiated`, `absoluteLinkURL`,
-/// `_setDNSPrefetchingEnabled:`.
+/// `_setWindowOcclusionDetectionEnabled:` and its getter `_windowOcclusionDetectionEnabled`,
+/// `_isUserInitiated`, `absoluteLinkURL`, `_setDNSPrefetchingEnabled:`.
 const USED: &[(&str, bool, &str)] = &[
     // Foundation
     ("NSString", true, "alloc"),
@@ -29,6 +29,7 @@ const USED: &[(&str, bool, &str)] = &[
     ("NSString", false, "UTF8String"),
     ("NSString", false, "length"),
     ("NSString", false, "dataUsingEncoding:allowLossyConversion:"),
+    ("NSString", false, "getCharacters:range:"),
     ("NSObject", false, "isKindOfClass:"),
     ("NSObject", false, "respondsToSelector:"),
     ("NSObject", false, "description"),
@@ -355,8 +356,8 @@ unsafe extern "C" {
 /// Asks the runtime for every class and selector this crate sends (a wrong one is an
 /// exception, not a compile error), as `innerword_print::check_selectors` does: the
 /// required ones, the private WebRTC switches among them. The optional ones
-/// (`_setWindowOcclusionDetectionEnabled:`, `_isUserInitiated`, `_setPageMuted:`,
-/// `inspectable`) are asked with `respondsToSelector:` where they are sent, not here.
+/// (`_setWindowOcclusionDetectionEnabled:`, `_windowOcclusionDetectionEnabled`,
+/// `_isUserInitiated`, `_setPageMuted:`, `inspectable`) are asked with `respondsToSelector:` where they are sent, not here.
 /// `Err` names what is missing, comma separated (`_setPeerConnectionEnabled:`,
 /// `WKContentWorld`).
 pub fn check_selectors() -> Result<(), String> {

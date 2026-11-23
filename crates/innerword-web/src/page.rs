@@ -48,6 +48,20 @@ pub struct WebPage {
     gpui_view: Id,
     delegate: Id,
     shared: Rc<ViewShared>,
+    /// While the view is parked ([`WebPage::park`]): what it was before, which
+    /// [`WebPage::set_frame`] gives back.
+    parked: std::cell::Cell<Option<Parked>>,
+}
+
+/// What [`WebPage::park`] found and changed, given back when the view is brought back.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Parked {
+    /// The view was hidden (the app hides it under a snapshot of an overlay); a view
+    /// hidden while it is parked counts as found hidden.
+    hidden: bool,
+    /// Its window occlusion detection was on (`Some(true)`), off (a scripted run's view,
+    /// `pages::draw_when_covered`), or cannot be read on this macOS (`None`: left off).
+    occlusion: Option<bool>,
 }
 
 impl WebPage {
@@ -103,6 +117,7 @@ impl WebPage {
             let configuration = config::configuration(handler, config::view_data_store());
             release(handler);
             if let Some(bridge) = extras.bridge {
+                shared.bridged.set(true);
                 bridge::install(configuration, bridge, &shared);
             }
             let web_view =
@@ -118,6 +133,7 @@ impl WebPage {
                 gpui_view,
                 delegate,
                 shared: shared.clone(),
+                parked: std::cell::Cell::new(None),
             };
             page.set_appearance(config.appearance, config.background);
             let superview: Id = msg_send![gpui_view, superview];
@@ -159,7 +175,8 @@ impl WebPage {
 
     /// Puts the view on `frame`, in points from the top left of its superview (the
     /// window's content view, where GPUI's view lies). The same frame again sends
-    /// nothing to AppKit.
+    /// nothing to AppKit. A parked view is brought back: hidden again when it was hidden,
+    /// and its occlusion detection as [`WebPage::park`] found it.
     pub fn set_frame(&self, frame: Rect) {
         // SAFETY: AppKit's own selectors on live views.
         unsafe {
@@ -176,9 +193,17 @@ impl WebPage {
                 self.apply_holes();
             }
         }
+        if let Some(parked) = self.parked.take() {
+            self.unpark(parked);
+        }
     }
 
+    /// Hides or shows the view. On a parked view it acts at once too, and is also what
+    /// the view is when it is brought back.
     pub fn set_hidden(&self, hidden: bool) {
+        if let Some(parked) = self.parked.get() {
+            self.parked.set(Some(Parked { hidden, ..parked }));
+        }
         // SAFETY: NSView's own.
         unsafe {
             let _: () = msg_send![self.web_view, setHidden: ns::yes_no(hidden)];
@@ -515,12 +540,29 @@ impl WebPage {
     /// content (x = -100,000, its size kept) and its window occlusion detection is
     /// turned off, so that its timers and animation frames run on. It is not hidden (a
     /// hidden view stops animation frames, throttles timers and tells the page
-    /// `visibilitychange`). The first responder goes to GPUI's view, when the web view
-    /// has it. [`WebPage::set_frame`] brings it back.
+    /// `visibilitychange`): a view the app had hidden is shown, out of sight. The first
+    /// responder goes to GPUI's view, when the web view has it. [`WebPage::set_frame`]
+    /// brings it back, and gives back what parking changed: hidden again when it was (or
+    /// was hidden meanwhile, [`WebPage::set_hidden`]), its occlusion detection on again
+    /// when it was on. Parking a parked view changes nothing more.
     pub fn park(&self) {
-        // SAFETY: AppKit's own selectors on a live view; the private switch only where
-        // it answers.
+        // SAFETY: AppKit's own selectors on a live view; the private switch and its
+        // getter only where they answer.
         unsafe {
+            if self.parked.get().is_none() {
+                let hidden: BOOL = msg_send![self.web_view, isHidden];
+                let occlusion =
+                    if ns::responds(self.web_view, sel!(_windowOcclusionDetectionEnabled)) {
+                        let on: BOOL = msg_send![self.web_view, _windowOcclusionDetectionEnabled];
+                        Some(on != NO)
+                    } else {
+                        None
+                    };
+                self.parked.set(Some(Parked {
+                    hidden: hidden != NO,
+                    occlusion,
+                }));
+            }
             if ns::responds(self.web_view, sel!(_setWindowOcclusionDetectionEnabled:)) {
                 let _: () = msg_send![self.web_view, _setWindowOcclusionDetectionEnabled: NO];
             }
@@ -539,6 +581,31 @@ impl WebPage {
             let _: () = msg_send![self.web_view, setHidden: NO];
         }
         self.unfocus();
+    }
+
+    /// Whether the view is parked ([`WebPage::park`]) and not brought back yet.
+    pub fn is_parked(&self) -> bool {
+        self.parked.get().is_some()
+    }
+
+    /// Gives back what [`WebPage::park`] found: occlusion detection, then the hidden
+    /// state (shown views are hidden and shown again in one turn, so that WebKit asks
+    /// again whether the view can be seen, with the switch as it is now).
+    fn unpark(&self, parked: Parked) {
+        // SAFETY: AppKit's own selectors on a live view; the private switch only where it
+        // answers.
+        unsafe {
+            if let Some(on) = parked.occlusion
+                && ns::responds(self.web_view, sel!(_setWindowOcclusionDetectionEnabled:))
+            {
+                let _: () =
+                    msg_send![self.web_view, _setWindowOcclusionDetectionEnabled: ns::yes_no(on)];
+            }
+            let _: () = msg_send![self.web_view, setHidden: YES];
+            if !parked.hidden {
+                let _: () = msg_send![self.web_view, setHidden: NO];
+            }
+        }
     }
 
     /// The web view itself (an `NSView *`), for tests that hit-test it or send it
@@ -625,7 +692,7 @@ unsafe fn answer_text(value: Id) -> String {
     // SAFETY: questions every NSObject answers, then the class's own.
     unsafe {
         if is_kind(value, "NSString") {
-            return bridge::utf8_of(value, true).unwrap_or_default();
+            return bridge::utf8_of(value).unwrap_or_default();
         }
         js_text(value)
     }

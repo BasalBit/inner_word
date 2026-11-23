@@ -688,6 +688,7 @@ fn main() -> ExitCode {
     // A whiteboard's view and its export page (`docs/whiteboard-design.md`, 4.2).
     if wanted("bridge") {
         board::the_bridge(&mut report, &rules);
+        board::frames_never_reach_the_bridge(&mut report, &rules);
     }
     if wanted("call") {
         board::call_async(&mut report, &rules);

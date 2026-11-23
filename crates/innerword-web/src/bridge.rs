@@ -7,6 +7,26 @@
 //! origin is `innerword-page://<the view's own host>`; the body is a string of at most
 //! `max_bytes` UTF-8 bytes. What passes reaches `PageEvents::message`, which only posts.
 //!
+//! **A body is never refused for a lone surrogate** (half of a UTF-16 pair, which UTF-8
+//! cannot hold): it becomes U+FFFD, as the glue makes every message well formed before it
+//! posts and `innerword_board::well_formed_json` mends an escape it still meets (section
+//! 4.4: the transport never refuses a writer's drawing). The cap is of the text as it
+//! arrives, after that. The answers of `call_async` are read the same way ([`utf8_of`]).
+//!
+//! **The main-frame check does not tell a same-origin subframe apart**: a frame of the
+//! view's own origin (a `srcdoc` frame inherits it) can call
+//! `top.webkit.messageHandlers.<name>.postMessage`, and WebKit reports that message as the
+//! main frame's, since the handler object it used is the main frame's. What keeps such a
+//! frame from the bridge is that it never runs: a view with a bridge loads no subframe at
+//! all (the navigation delegate cancels every subframe navigation of such a view,
+//! `view::ViewHost::subframe_may_load`: a file, `srcdoc`, `data:`, `about:blank` with a
+//! source). The whiteboard's policies alone would not be enough: they refuse a frame of a
+//! file (`frame-src 'none'`) and every inline script, but a `srcdoc` frame inherits the
+//! view's origin and may load a script of it (`script-src 'self'`; seen in the WebKit
+//! program, `frames_never_reach_the_bridge`). A frame the page makes itself without a
+//! source (an empty `about:blank`) has only what the page's own script puts in it, and a
+//! message it posts through its own handlers is a subframe's and dropped.
+//!
 //! The handler holds a `Weak` of the view's shared state: the controller retains its
 //! handlers, and a strong reference would keep the view's state alive with it.
 
@@ -34,7 +54,7 @@ use crate::{
 };
 
 const CLASS: &str = "InnerWordWebBoardMessages";
-const STATE: &str = "writerBridge";
+const STATE: &str = "innerwordBridge";
 
 /// What the handler object holds.
 struct BridgeState {
@@ -174,35 +194,56 @@ unsafe fn checked_body(message: Id, bridge: &Bridge, own_host: &str) -> Option<S
         if units > bridge.max_bytes {
             return None;
         }
-        utf8_of(body, false).filter(|text| text.len() <= bridge.max_bytes)
+        utf8_of(body).filter(|text| text.len() <= bridge.max_bytes)
     }
 }
 
-/// The exact UTF-8 text of an `NSString` (a NUL in it included, which `UTF8String`
-/// would end at). With `lossy` false, a string that has a lone surrogate is None; with
-/// `lossy` true, Foundation replaces it.
-pub(crate) unsafe fn utf8_of(string: Id, lossy: bool) -> Option<String> {
+/// The exact text of an `NSString` (a NUL in it included, which `UTF8String` would end
+/// at), a lone surrogate in it made U+FFFD (the module's notes say why). Strict UTF-8 first,
+/// which every well-formed string passes at Foundation's speed; a string it refuses is read
+/// as its UTF-16 units and decoded with replacement. None only for nil.
+pub(crate) unsafe fn utf8_of(string: Id) -> Option<String> {
     if string.is_null() {
         return None;
     }
     // SAFETY: Foundation's own selectors on a string; the data is autoreleased and read
-    // before this returns.
+    // before this returns; the buffer has room for every unit the string has.
     unsafe {
         let data: Id = msg_send![string,
             dataUsingEncoding: 4usize
-            allowLossyConversion: ns::yes_no(lossy)];
-        if data == NIL {
-            return None;
+            allowLossyConversion: NO];
+        if data != NIL {
+            let length: usize = msg_send![data, length];
+            if length == 0 {
+                return Some(String::new());
+            }
+            let bytes: *const u8 = msg_send![data, bytes];
+            if !bytes.is_null() {
+                let slice = std::slice::from_raw_parts(bytes, length);
+                return Some(String::from_utf8_lossy(slice).into_owned());
+            }
         }
-        let length: usize = msg_send![data, length];
-        if length == 0 {
-            return Some(String::new());
-        }
-        let bytes: *const u8 = msg_send![data, bytes];
-        if bytes.is_null() {
-            return None;
-        }
-        let slice = std::slice::from_raw_parts(bytes, length);
-        Some(String::from_utf8_lossy(slice).into_owned())
+        let units: usize = msg_send![string, length];
+        let mut buffer: Vec<u16> = vec![0; units];
+        let _: () = msg_send![string,
+            getCharacters: buffer.as_mut_ptr()
+            range: NSRange { location: 0, length: units }];
+        Some(String::from_utf16_lossy(&buffer))
+    }
+}
+
+/// `NSRange`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+struct NSRange {
+    location: usize,
+    length: usize,
+}
+
+// SAFETY: the layout and encoding of NSRange on 64-bit Apple platforms.
+unsafe impl objc::Encode for NSRange {
+    fn encode() -> objc::Encoding {
+        // SAFETY: the type's own layout.
+        unsafe { objc::Encoding::from_str("{_NSRange=QQ}") }
     }
 }

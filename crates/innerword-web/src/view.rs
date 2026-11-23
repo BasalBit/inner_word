@@ -89,6 +89,10 @@ pub(crate) struct ViewShared {
     /// The view itself asked for its entry (`load_entry`) and the policy has not been
     /// asked about that navigation yet.
     pub own_load: Cell<bool>,
+    /// The view has the bridge (`ViewExtras::bridge`): no frame inside it ever loads
+    /// (`bridge.rs`, its notes: a frame of the view's own origin could post as the main
+    /// frame).
+    pub bridged: Cell<bool>,
     /// Messages of the bridge handed on, and dropped.
     pub messages_received: Cell<u64>,
     pub messages_dropped: Cell<u64>,
@@ -123,6 +127,7 @@ impl ViewShared {
             last_alert: Cell::new(None),
             one_document: Cell::new(false),
             own_load: Cell::new(false),
+            bridged: Cell::new(false),
             messages_received: Cell::new(0),
             messages_dropped: Cell::new(0),
         }
@@ -186,6 +191,13 @@ impl Host for ViewHost {
         let entry =
             crate::http::split_url(url) == Some((self.0.host.clone(), self.0.entry.clone()));
         entry && self.0.own_load.replace(false)
+    }
+
+    fn subframe_may_load(&self, _url: &str) -> bool {
+        // A view with the bridge shows no frame: neither a file of its own nor `srcdoc`,
+        // `about:blank` with a source, `data:` or `blob:` (a frame of the view's origin
+        // could reach the bridge through `top`). A page's view keeps its frames.
+        !self.0.bridged.get()
     }
 
     fn alert(&self, message: String) {

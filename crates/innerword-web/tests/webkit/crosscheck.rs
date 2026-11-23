@@ -310,7 +310,9 @@ fn compare(ours: &[Value], theirs: &[Value]) -> Comparison {
                     Some(apart) => out
                         .differences
                         .push(differ(&format!("a point {apart:.3} px from Excalidraw's"))),
-                    None => out.differences.push(differ("not the same number of points")),
+                    None => out
+                        .differences
+                        .push(differ("not the same number of points")),
                 }
                 continue;
             }
@@ -405,7 +407,10 @@ pub(super) fn the_converter_against_excalidraw(report: &mut Report, rules: &Path
         let mut scene = Scene::empty();
         let mut making = HashedMaking::new(&[b"crosscheck", name.as_bytes()], 1_795_432_196_771);
         if let Err(why) = add(&mut scene, &skeletons, &Pictures::new(), &mut making) {
-            report.check(false, &format!("{name}: innerword_board::add takes it ({why})"));
+            report.check(
+                false,
+                &format!("{name}: innerword_board::add takes it ({why})"),
+            );
             continue;
         }
         let ours: Vec<Value> = scene

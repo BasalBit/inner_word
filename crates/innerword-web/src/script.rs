@@ -25,7 +25,7 @@ use block::ConcreteBlock;
 use objc::{class, msg_send, sel, sel_impl};
 
 use crate::{
-    PrintedPdf, ScriptInput, ScriptOutput, check, config, delegate, http,
+    MAX_PDF_SIDE, PrintedPdf, ScriptInput, ScriptOutput, check, config, delegate, http,
     ns::{self, Id, NIL, release, retain},
     page, pixels, rules,
     scheme::{self, RequestLog, SchemeState},
@@ -377,13 +377,19 @@ fn answered(run: &Run, answer: Result<String, String>) {
 }
 
 /// The rectangle of a PDF from the script's answer: `{"width": w, "height": h}`, both
-/// finite and above nothing, rounded up (WebKit drops a fraction).
+/// finite and above nothing, rounded up (WebKit drops a fraction), each side at most
+/// [`MAX_PDF_SIDE`] (a larger answer is cut to it: the page is broken or not ours, and
+/// WebKit is never asked for a larger page).
 fn size_of(value: &str) -> Option<(f64, f64)> {
     let value: serde_json::Value = serde_json::from_str(value).ok()?;
     let width = value.get("width")?.as_f64()?;
     let height = value.get("height")?.as_f64()?;
-    (width.is_finite() && height.is_finite() && width > 0. && height > 0.)
-        .then(|| (width.ceil(), height.ceil()))
+    (width.is_finite() && height.is_finite() && width > 0. && height > 0.).then(|| {
+        (
+            width.ceil().min(MAX_PDF_SIDE),
+            height.ceil().min(MAX_PDF_SIDE),
+        )
+    })
 }
 
 fn excerpt(text: &str) -> String {
@@ -547,6 +553,22 @@ mod tests {
         assert_eq!(size_of(r#"{"width":"3","height":20}"#), None);
         assert_eq!(size_of(r#"{"height":20}"#), None);
         assert_eq!(size_of("not json"), None);
+    }
+
+    #[test]
+    fn a_side_of_a_pdf_is_never_longer_than_its_limit() {
+        assert_eq!(
+            size_of(r#"{"width":1e7,"height":200}"#),
+            Some((14_400., 200.))
+        );
+        assert_eq!(
+            size_of(r#"{"width":300,"height":14400.2}"#),
+            Some((300., 14_400.))
+        );
+        assert_eq!(
+            size_of(r#"{"width":14400,"height":14399.5}"#),
+            Some((14_400., 14_400.))
+        );
     }
 
     #[test]

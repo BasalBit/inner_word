@@ -290,6 +290,9 @@ pub(super) fn the_bundle(report: &mut Report, server: &Server, rules: &Path) {
 /// The bundle loaded through the check, under the whiteboard's policies: nothing blocked,
 /// nothing missing, no script error.
 fn loaded_offline(report: &mut Report, assets: &Assets, scene: &Value, rules: &Path) {
+    // Xiaolai's 404s are tolerated only when the build could not apply its patch 2 (the
+    // faces left registered, section 3), which BUILD-INFO.json says.
+    let xiaolai_left_registered = xiaolai_left_registered(assets);
     let source = BundleSource::new(assets);
     source.set_json(
         BOARD_PATH,
@@ -318,7 +321,7 @@ fn loaded_offline(report: &mut Report, assets: &Assets, scene: &Value, rules: &P
             .map(|l| {
                 l.missing
                     .iter()
-                    .filter(|p| !p.starts_with("fonts/Xiaolai/"))
+                    .filter(|p| !(xiaolai_left_registered && p.starts_with("fonts/Xiaolai/")))
                     .collect()
             })
             .unwrap_or_default();
@@ -339,14 +342,32 @@ fn loaded_offline(report: &mut Report, assets: &Assets, scene: &Value, rules: &P
                 ))
             ),
         );
-        if let Some(load) = load
+        if xiaolai_left_registered
+            && let Some(load) = load
             && load.missing.iter().any(|p| p.starts_with("fonts/Xiaolai/"))
         {
             report.note(&format!(
-                "{entry}: Xiaolai's faces were asked for and answered 404"
+                "{entry}: Xiaolai's faces were asked for and answered 404 (the build left them registered)"
             ));
         }
     }
+}
+
+/// Whether the bundle's build left Xiaolai's faces registered (patch 2 "no Xiaolai" not
+/// applied, `BUILD-INFO.json`'s `patches`): only then may its faces be asked for and
+/// answered 404.
+fn xiaolai_left_registered(assets: &Assets) -> bool {
+    let info: Value = std::fs::read_to_string(assets.root().join("BUILD-INFO.json"))
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_default();
+    let applied = info["patches"].as_array().and_then(|patches| {
+        patches
+            .iter()
+            .find(|p| p["name"].as_str().is_some_and(|n| n.contains("Xiaolai")))
+            .and_then(|p| p["applied"].as_u64())
+    });
+    applied == Some(0)
 }
 
 /// The export page makes the PDF of the scout's scene.
@@ -730,7 +751,9 @@ fn adopted(report: &mut Report, assets: &Assets, rules: &Path) {
         rectangle("r3", 400., "a2"),
         rectangle("r4", 600., "a3"),
         rectangle("r5", 800., "a4"),
-        rust_text("t1", "Measured again", "a5"),
+        // A Rust-made text Excalidraw measures again, whose index it must also repair (out
+        // of order after "a4"): its load raises the text's version past the stored one.
+        rust_text("t1", "Measured again", "a0"),
     ]));
     let source = BundleSource::new(assets);
     source.set_json(
@@ -755,10 +778,18 @@ fn adopted(report: &mut Report, assets: &Assets, rules: &Path) {
     }
     let loaded = canvas(&view);
     let t1_loaded = element(&loaded, "t1").cloned().unwrap_or_default();
-    report.note(&format!(
-        "a Rust-made text after the load: width {} version {}",
-        t1_loaded["width"], t1_loaded["version"]
-    ));
+    // Risk 12: the glue judges "untouched" by its own record of the versions on the canvas
+    // at the base, not by the stored version an agent's delta carries, which Excalidraw can
+    // have raised at the load. This one it did, so a glue that judged by baseVersion would
+    // call the text a conflict.
+    report.check(
+        t1_loaded["version"].as_u64().unwrap_or(0) > 1
+            && t1_loaded["width"].as_f64().unwrap_or(10.) != 10.,
+        &format!(
+            "a Rust-made text is measured again at the load, its version raised past the stored 1 (width {} version {})",
+            t1_loaded["width"], t1_loaded["version"]
+        ),
+    );
 
     // The writer moves r2 and r4 after the base.
     let _ = eval(
@@ -777,9 +808,9 @@ fn adopted(report: &mut Report, assets: &Assets, rules: &Path) {
         e["versionNonce"] = json!(1000 + version);
         e
     };
-    let mut t1_new = t1_loaded.clone();
-    t1_new["text"] = json!("Changed by an agent");
-    t1_new["originalText"] = json!("Changed by an agent");
+    // The agent's copy, as Rust makes it from the stored scene (S1, where the text is at
+    // version 1, which is its baseVersion below), at S2's version 2.
+    let mut t1_new = rust_text("t1", "Changed by an agent", "a5");
     t1_new["version"] = json!(2);
     t1_new["versionNonce"] = json!(4242);
     let delta = json!({
@@ -855,9 +886,13 @@ fn adopted(report: &mut Report, assets: &Assets, rules: &Path) {
         "an incoming element with no base whose id the canvas has stays the writer's",
     );
     report.check(
-        element(&after, "t1").is_some_and(|e| e["text"] == "Changed by an agent"),
+        element(&after, "t1").is_some_and(|e| {
+            e["text"] == "Changed by an agent"
+                && e["version"].as_u64().unwrap_or(0)
+                    > t1_loaded["version"].as_u64().unwrap_or(u64::MAX)
+        }) && answer.as_ref().is_ok_and(|a| !a.conflicts.iter().any(|c| c == "t1")),
         &format!(
-            "a Rust-made text Excalidraw measured again counts as untouched ({:?})",
+            "a Rust-made text whose version the load raised past its baseVersion counts as untouched: the agent's copy is taken, at a version above the canvas's ({:?})",
             element(&after, "t1").map(|e| (&e["text"], &e["version"]))
         ),
     );

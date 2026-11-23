@@ -154,6 +154,9 @@ pub(crate) struct AssistantState {
     open: Rc<RefCell<Option<OpenRef>>>,
     /// What the side chat was last told can be done with an answer.
     apply_state: (bool, bool),
+    /// Whether the keyboard was in the side chat when the last frame was
+    /// built ([`Workspace::collect_as_the_side_chat_takes_the_keyboard`]).
+    side_had_keyboard: bool,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -177,6 +180,7 @@ impl AssistantState {
                 side: None,
                 open,
                 apply_state: (false, false),
+                side_had_keyboard: false,
                 _subscriptions: Vec::new(),
             };
         };
@@ -251,6 +255,7 @@ impl AssistantState {
             side: Some(side),
             open,
             apply_state: (false, false),
+            side_had_keyboard: false,
             _subscriptions: subscriptions,
         }
     }
@@ -886,6 +891,35 @@ impl Workspace {
         if let Some(side) = self.assistant.side.clone() {
             side.update(cx, |side, cx| side.focus(window, cx));
         }
+    }
+
+    /// The keyboard came into the side chat, by whatever way (`cmd-3`, a
+    /// click in the composer, `tab`, a command), over a whiteboard whose
+    /// page holds more than it posted (a gesture, a text being edited):
+    /// the page is asked for it now, as `cmd-3` asks, so that the listing
+    /// the next message is sent with has it (section 6.6). Called as a
+    /// frame is built; the collect starts after the frame. A collect that
+    /// is already on its way (the one `cmd-3` started) is not asked twice.
+    pub(crate) fn collect_as_the_side_chat_takes_the_keyboard(
+        &mut self,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) {
+        let has = self.assistant_panel_has_focus(window, cx);
+        let came = has && !self.assistant.side_had_keyboard;
+        self.assistant.side_had_keyboard = has;
+        if !came || self.open_board_id().is_none() {
+            return;
+        }
+        cx.defer_in(window, |this, _, cx| {
+            let Some(id) = this.open_board_id() else {
+                return;
+            };
+            let asked = this.board().is_some_and(|board| board.collecting > 0);
+            if this.board_holds_more() && !asked {
+                this.collect_board(id, cx).detach();
+            }
+        });
     }
 
     /// Shows the side chat (with the keyboard in it) or hides it.

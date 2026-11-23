@@ -459,10 +459,12 @@ its buttons is pressed. Every message spends the user's own plan in the engine.
   `kind="board"` in the tag (`OpenKind::Board`). The listing is made when the message is
   sent, from the scene the app holds then (the side chat's source reads a shared copy the
   workspace keeps current, `Workspace::feed_the_side_chat`, as a frame is built and as the
-  page posts; a pointer is compared, the scene is parsed only at the send); `cmd-3` (going
-  to the side chat) asks the page for a gesture it has not posted. The side chat has no
-  hook before a message leaves, so a send does not wait for the page itself (the spec's
-  collect before each message is the one part of 6.6 left out). Too long a listing goes as
+  page posts; a pointer is compared, the scene is parsed only at the send); the keyboard
+  coming into the side chat by any way (`cmd-3`, a click in the composer, `tab`) asks the
+  page for a gesture it has not posted
+  (`Workspace::collect_as_the_side_chat_takes_the_keyboard`, as a frame is built). The
+  side chat has no hook before a message leaves, so a send does not wait for the page
+  itself (the spec's collect before each message is the one part of 6.6 left out). Too long a listing goes as
   its beginning and its end. Insert at Caret and Replace Selection are off, Copy works; the
   conversation is the whiteboard's own; the assistant reads other whiteboards with the
   same read-only tools (`read_document` gives the listing). The quick chat does not open
@@ -607,7 +609,10 @@ open" below).
     those elements meanwhile: api, reads.", at most five ids and "and 3 more"); its
     **Undo** is the whiteboard's own undo with as many steps as the run adopted, while the
     canvas is at the rev the last adopt answered (the writer has not drawn since; a failed
-    adopt, which reloads the view, offers none). A rename changes the title only.
+    adopt, which reloads the view, offers none), and only when every change of the run is
+    one of those steps: a run that began with a trash or another document, or that the
+    writer drew into before its last change, offers no Undo (one step would leave some of
+    what the note counts). A rename changes the title only.
   - **Vim mode keeps what the writer is in the middle of.** The editor reports a change
     it took over as any edit, and Vim mode takes an edit it did not make for the writer's
     own doing elsewhere in the app, which cancels a half-typed command and closes the
@@ -643,7 +648,7 @@ open" below).
     lock file names a channel, at once and without trying the lock; otherwise it takes the
     lock and writes. `live::execute` runs the same function on the store the app hands in.
     One request and one answer per connection, each one line of JSON with a version
-    (`{"version":3,"wait_ms":10000,"op":"edit","request":{...}}`); the answer is the
+    (`{"version":4,"wait_ms":10000,"op":"edit","request":{...}}`); the answer is the
     result as the direct write gives it, the error as it was (`WireError`), or a
     `Refusal`. **The protocol is version 4** (`live::PROTOCOL_VERSION`): version 2 since
     requests bring image files with them ("Images" below), version 3 since an `add_page`

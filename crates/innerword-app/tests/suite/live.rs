@@ -3623,6 +3623,76 @@ fn two_drawings_in_a_row_are_one_note_until_the_writer_draws(cx: &mut TestAppCon
     );
     let ids = stored_ids(&desk, board, cx);
     assert_eq!(ids, ["mine", "one", "two"]);
+
+    // The agent draws again while the note is up: the note counts three
+    // changes, and one step of the whiteboard's undo would take out only
+    // the last of them, so it offers no Undo.
+    let tool = desk.tool();
+    let request = draw_on(
+        board,
+        json!([{"type": "ellipse", "id": "three", "x": 900, "y": 0}]),
+    );
+    ask(cx, move || tool.add_to_board(&request)).expect("the app drew");
+    settle_board(cx);
+    assert_eq!(
+        last_note(&desk, cx),
+        (format!("Claude made 3 changes to {}", q("Plan")), None)
+    );
+    assert!(
+        desk.workspace
+            .read_with(cx, |workspace, _| workspace.last_agent_changes().cloned())
+            .is_some_and(|last| last.count == 3 && last.undo.is_none())
+    );
+    assert!(
+        !fake
+            .board_calls()
+            .iter()
+            .any(|call| call.starts_with("undo")),
+        "{:?}",
+        fake.board_calls()
+    );
+}
+
+/// A run that began with something else than a drawing on the open
+/// whiteboard (here a document moved to the trash) is not undone by the
+/// whiteboard's undo: the note offers no Undo for it.
+#[gpui::test]
+fn a_trash_then_a_drawing_is_one_note_without_an_undo(cx: &mut TestAppContext) {
+    let (desk, fake, board, text, cx) = desk_with_a_board(cx);
+    let tool = desk.tool();
+    ask(cx, move || {
+        tool.trash_document(&TrashDocumentRequest {
+            document: text.into(),
+            write: claude(),
+        })
+    })
+    .unwrap();
+    assert_eq!(
+        last_note(&desk, cx),
+        (
+            format!("Claude moved {} to the trash", q("Notes")),
+            Some("Undo".to_string())
+        )
+    );
+
+    let tool = desk.tool();
+    let request = draw_on(
+        board,
+        json!([{"type": "ellipse", "id": "one", "x": 0, "y": 0}]),
+    );
+    ask(cx, move || tool.add_to_board(&request)).expect("the app drew");
+    settle_board(cx);
+    assert_eq!(fake.adopted().len(), 1);
+    assert_eq!(
+        last_note(&desk, cx),
+        ("Claude made 2 changes in the library".to_string(), None)
+    );
+    assert!(
+        desk.workspace
+            .read_with(cx, |workspace, _| workspace.last_agent_changes().cloned())
+            .is_some_and(|last| last.count == 2 && last.undo.is_none())
+    );
+    assert!(!in_tree(&desk, text, cx), "the document stays in the trash");
 }
 
 /// The writer moved a shape and the page has not posted it when an agent
@@ -3688,11 +3758,16 @@ fn a_write_goes_on_after_a_second_and_keeps_the_writers_unposted_stroke(cx: &mut
             q("Plan")
         )
     );
+    // The collect that was held answers late: what it hands over is not
+    // saved over the agent's change, and nothing of the writer's is lost.
     fake.release_collects();
     settle_board(cx);
-    assert_eq!(
-        stored_board(&desk, board, cx).element("api").unwrap().x(),
-        40.0
+    let scene = stored_board(&desk, board, cx);
+    assert_eq!(scene.element("api").unwrap().x(), 40.0);
+    assert!(scene.element("late").is_some(), "the unposted stroke stays");
+    assert!(
+        scene.to_stored().contains("#ffc9c9"),
+        "the agent's change of db stays"
     );
 }
 

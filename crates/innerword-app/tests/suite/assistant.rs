@@ -2887,4 +2887,27 @@ fn the_side_chat_over_a_whiteboard_sends_its_listing(cx: &mut TestAppContext) {
             .read_with(vcx, |library, _| conversations::load(library, text))
             .is_empty()
     );
+
+    // The keyboard goes back to the whiteboard, the writer draws, and comes
+    // back into the composer the way a click in it does (not by cmd-3): the
+    // page is asked as well, and the next message has the new text.
+    workspace.update_in(vcx, |w, window, cx| w.focus_editor(window, cx));
+    vcx.run_until_parked();
+    assert!(!side_has_keyboard(&workspace, vcx));
+    pages.draw_unposted(&board_scene(&[
+        board_text("title", "System overview", 0.0),
+        board_text("late", "Written just now", 60.0),
+        board_text("later", "Drawn after the answer", 120.0),
+    ]));
+    vcx.run_until_parked();
+    let asked = pages.collects_asked();
+    panel.update_in(vcx, |panel, window, cx| panel.focus(window, cx));
+    vcx.run_until_parked();
+    assert!(side_has_keyboard(&workspace, vcx));
+    assert_eq!(pages.collects_asked(), asked + 1, "the page was asked once");
+    fake.reply("Three texts now.");
+    panel.update_in(vcx, |panel, window, cx| panel.send("And now?", window, cx));
+    vcx.run_until_parked();
+    let sent = fake.last_sent().expect("a message was sent");
+    assert!(sent.contains("Drawn after the answer"), "{sent}");
 }

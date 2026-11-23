@@ -871,11 +871,14 @@ impl Workspace {
         };
         last.conflicts.extend(conflicts.iter().cloned());
         last.message = with_conflicts(&last.said, &last.conflicts);
-        last.undo = (!drawn_since && open).then_some(Undo::Board {
-            board,
-            steps: pending.steps_before + 1,
-            rev,
-        });
+        // One step of the whiteboard's undo per change of the run, or the
+        // Undo would leave some of what the note counts: a run that began
+        // with something else (a trash, another document) or that the
+        // writer drew into before this change offers no Undo.
+        let steps = pending.steps_before + 1;
+        let whole_run = steps == last.count;
+        last.undo =
+            (!drawn_since && open && whole_run).then_some(Undo::Board { board, steps, rev });
         if self.agent_note_is_up(cx) {
             self.show_agent_note(cx);
         }

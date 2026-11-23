@@ -867,6 +867,7 @@ impl Render for Workspace {
         let colors = theme.colors;
         let ui_font: SharedString = theme.fonts.ui.clone();
         self.note_right_panel_focus(window, cx);
+        self.collect_as_the_side_chat_takes_the_keyboard(window, cx);
         self.follow_the_text(cx);
         self.close_a_hidden_quick_chat(window, cx);
         self.refresh_a_stale_shortcuts_list(window, cx);

@@ -54,6 +54,7 @@ use crate::backend::{
     AssistantEvent, Backend, Conversation, ConversationOptions, Mode, Selection, ToolServer, TurnId,
 };
 use crate::context::{HISTORY_LIMIT, OpenDocument, SideContext, quick_prompt};
+use crate::drawing::DrawingTarget;
 use crate::events::{EventSink, EventStream, event_channel};
 use crate::prompts;
 use crate::tools::{LIBRARY_SERVER_NAME, NameBook, library_describer, library_observer};
@@ -64,6 +65,8 @@ struct Running {
     conversation: Conversation,
     selection: Selection,
     generation: u64,
+    /// The drawings its system prompt offers.
+    target: DrawingTarget,
 }
 
 /// One chat: a transcript and the conversation with the agent behind it.
@@ -88,6 +91,8 @@ pub struct ChatSession {
     stream: EventStream,
     model_in_use: Option<String>,
     notice: Option<String>,
+    /// What drawings the side chat offers: its system prompt follows.
+    drawing_target: DrawingTarget,
 }
 
 impl ChatSession {
@@ -115,6 +120,7 @@ impl ChatSession {
             stream,
             model_in_use: None,
             notice: None,
+            drawing_target: DrawingTarget::None,
         }
     }
 
@@ -161,6 +167,12 @@ impl ChatSession {
     /// The same chat with another system prompt than the mode's own.
     pub fn with_system_prompt(mut self, prompt: impl Into<String>) -> Self {
         self.system_prompt = Some(prompt.into());
+        self
+    }
+
+    /// The same chat offering the drawings of `target` (its system prompt follows).
+    pub fn with_drawing_target(mut self, target: DrawingTarget) -> Self {
+        self.set_drawing_target(target);
         self
     }
 
@@ -219,6 +231,21 @@ impl ChatSession {
         &self.transcript.attachments
     }
 
+    /// What the chat offers ([`DrawingTarget::None`] unless told).
+    pub fn drawing_target(&self) -> DrawingTarget {
+        self.drawing_target
+    }
+
+    /// The target the system prompt is made for: the chat's own in a side chat that has
+    /// the mode's prompt; none in a quick chat or with a prompt of the caller's.
+    fn prompt_target(&self) -> DrawingTarget {
+        if self.mode == Mode::Side && self.system_prompt.is_none() {
+            self.drawing_target
+        } else {
+            DrawingTarget::None
+        }
+    }
+
     /// Whether the chat has the tools of the library.
     pub fn has_tools(&self) -> bool {
         self.tools.is_some()
@@ -257,6 +284,31 @@ impl ChatSession {
             // The next message starts a conversation that has them.
             self.retire_running();
         }
+    }
+
+    /// Offers the drawings of `target` from the next message on: a running conversation
+    /// started for another target is retired, and the next message starts one with the
+    /// conversation so far, as a change of tools does.
+    pub fn set_drawing_target(&mut self, target: DrawingTarget) {
+        if self.drawing_target == target {
+            return;
+        }
+        self.drawing_target = target;
+        let target = self.prompt_target();
+        if self
+            .running
+            .as_ref()
+            .is_some_and(|running| running.target != target)
+        {
+            self.retire_running();
+        }
+    }
+
+    /// Records that answer `id` was drawn at `at` (milliseconds since 1970):
+    /// [`Message::drawn_at`](crate::Message::drawn_at). Returns whether there was such an
+    /// answer.
+    pub fn mark_drawn(&mut self, id: MessageId, at: i64) -> bool {
+        self.transcript.mark_drawn(id, at)
     }
 
     /// Attaches a library item. Returns `false` when it was attached already or the
@@ -340,8 +392,11 @@ impl ChatSession {
     /// Makes sure a conversation is running that fits the chat as it is now: alive, with
     /// the chosen model and effort. A new one is told what was said so far.
     fn ensure_running(&mut self) {
+        let target = self.prompt_target();
         let fits = self.running.as_ref().is_some_and(|running| {
-            running.conversation.is_alive() && running.selection == self.selection
+            running.conversation.is_alive()
+                && running.selection == self.selection
+                && running.target == target
         });
         if fits {
             return;
@@ -352,7 +407,7 @@ impl ChatSession {
             .clone()
             .unwrap_or_else(|| match self.mode {
                 Mode::Quick => prompts::QUICK_SYSTEM_PROMPT.to_string(),
-                Mode::Side => prompts::side_system_prompt(self.tools.is_some()),
+                Mode::Side => prompts::side_system_prompt(self.tools.is_some(), target),
             });
         let mut options = ConversationOptions::new(system_prompt)
             .with_selection(self.selection.clone())
@@ -365,6 +420,7 @@ impl ChatSession {
             conversation: self.backend.start(options, self.sink.clone()),
             selection: self.selection.clone(),
             generation: self.generation,
+            target,
         });
     }
 

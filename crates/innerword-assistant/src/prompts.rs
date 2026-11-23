@@ -6,6 +6,7 @@
 //! under an answer put its text into the document, the assistant never does.
 
 use crate::backend::Mode;
+use crate::drawing::DrawingTarget;
 
 /// The quick chat: a concise helper for a word, a sentence or a paragraph.
 pub const QUICK_SYSTEM_PROMPT: &str = "\
@@ -119,14 +120,25 @@ pub const SIDE_WITHOUT_TOOLS_NOTE: &str = "\n\nIn this conversation you have no 
 cannot read the library. You see the open document as it is sent to you and nothing else. \
 If the user attaches other documents or asks about them, say that you cannot read them now.";
 
-/// The system prompt of the side chat, for a conversation with or without the tools of
-/// the library.
-pub fn side_system_prompt(tools: bool) -> String {
-    if tools {
-        SIDE_SYSTEM_PROMPT.to_string()
-    } else {
-        format!("{SIDE_SYSTEM_PROMPT}{SIDE_WITHOUT_TOOLS_NOTE}")
+/// The section of the side prompt for `target`, `None` for [`DrawingTarget::None`].
+pub fn drawing_prompt(target: DrawingTarget) -> Option<String> {
+    let _ = target;
+    None
+}
+
+/// The system prompt of the side chat, with or without the tools of the library, and with
+/// the drawing section of `target`. For [`DrawingTarget::None`] exactly
+/// [`SIDE_SYSTEM_PROMPT`] (and the note without tools).
+pub fn side_system_prompt(tools: bool, target: DrawingTarget) -> String {
+    let mut prompt = SIDE_SYSTEM_PROMPT.to_string();
+    if let Some(section) = drawing_prompt(target) {
+        prompt.push_str("\n\n");
+        prompt.push_str(&section);
     }
+    if !tools {
+        prompt.push_str(SIDE_WITHOUT_TOOLS_NOTE);
+    }
+    prompt
 }
 
 #[cfg(test)]
@@ -142,8 +154,8 @@ mod tests {
 document: you cannot see it; keep the line unchanged where the image should stay, and never \
 invent such a line or a path to a file.";
         assert!(SIDE_SYSTEM_PROMPT.contains(SENTENCE));
-        assert!(side_system_prompt(true).contains(SENTENCE));
-        assert!(side_system_prompt(false).contains(SENTENCE));
+        assert!(side_system_prompt(true, DrawingTarget::None).contains(SENTENCE));
+        assert!(side_system_prompt(false, DrawingTarget::None).contains(SENTENCE));
         assert_eq!(system_prompt(Mode::Side), SIDE_SYSTEM_PROMPT);
         assert!(!QUICK_SYSTEM_PROMPT.contains("image:"));
     }
@@ -156,7 +168,7 @@ invent such a line or a path to a file.";
 web page saved in the library as it was made, whose tag says kind=\"page\". It cannot be \
 changed";
         assert!(SIDE_SYSTEM_PROMPT.contains(SENTENCE));
-        assert!(side_system_prompt(false).contains(SENTENCE));
+        assert!(side_system_prompt(false, DrawingTarget::None).contains(SENTENCE));
         assert!(!QUICK_SYSTEM_PROMPT.contains("page:"));
     }
 
@@ -170,8 +182,8 @@ arrows, text and pictures, whose tag says kind=\"board\". You are given its elem
 per line, with their ids, positions, sizes and text; you cannot see the drawing itself, nor \
 the pictures on it. It cannot be changed by you: only its owner draws on it, in the app.";
         assert!(SIDE_SYSTEM_PROMPT.contains(SENTENCE));
-        assert!(side_system_prompt(true).contains(SENTENCE));
-        assert!(side_system_prompt(false).contains(SENTENCE));
+        assert!(side_system_prompt(true, DrawingTarget::None).contains(SENTENCE));
+        assert!(side_system_prompt(false, DrawingTarget::None).contains(SENTENCE));
         assert!(!QUICK_SYSTEM_PROMPT.contains("whiteboard"));
     }
 }

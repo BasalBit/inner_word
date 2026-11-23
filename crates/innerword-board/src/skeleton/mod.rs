@@ -7,6 +7,8 @@ pub(crate) mod make;
 mod remove;
 mod update;
 
+pub use fields::is_id;
+
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use serde::{Deserialize, Serialize};

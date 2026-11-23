@@ -4,6 +4,7 @@ mod support;
 // context of a message.
 mod chat;
 mod context;
+mod drawing;
 mod events;
 mod fake;
 mod tools;

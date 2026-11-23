@@ -122,6 +122,10 @@ pub struct Message {
     /// When it was sent or begun, in milliseconds since 1970.
     #[serde(default)]
     pub at: i64,
+    /// An answer whose drawing was applied: when it was last applied, in milliseconds
+    /// since 1970. Kept in the stored conversation, so "Draw Again" outlasts a relaunch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drawn_at: Option<i64>,
     /// An answer in this run of the app: the turn whose events fill it.
     #[serde(skip)]
     pub turn: Option<TurnId>,
@@ -268,6 +272,7 @@ impl Transcript {
             activity: Vec::new(),
             usage: None,
             at: now_millis(),
+            drawn_at: None,
             turn: None,
             status: None,
         });
@@ -290,6 +295,7 @@ impl Transcript {
             activity: Vec::new(),
             usage: None,
             at: now_millis(),
+            drawn_at: None,
             turn: Some(turn),
             status: None,
         });
@@ -441,6 +447,22 @@ impl Transcript {
             history.remove(0);
         }
         history
+    }
+
+    /// Records that answer `id`'s drawing was applied at `at` (milliseconds since 1970).
+    /// Returns whether there was such an answer.
+    pub fn mark_drawn(&mut self, id: MessageId, at: i64) -> bool {
+        match self
+            .messages
+            .iter_mut()
+            .find(|message| message.id == id && message.role == Role::Assistant)
+        {
+            Some(message) => {
+                message.drawn_at = Some(at);
+                true
+            }
+            None => false,
+        }
     }
 
     /// Removes every message; the attachments stay.

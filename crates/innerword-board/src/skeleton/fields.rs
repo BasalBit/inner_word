@@ -442,8 +442,9 @@ pub(crate) fn normalize_angle(angle: f64) -> f64 {
     if (a - full).abs() < 1e-12 { 0.0 } else { a }
 }
 
-/// 1 to 64 characters of `[A-Za-z0-9_-]`.
-pub(crate) fn is_id(text: &str) -> bool {
+/// Whether `text` is an id the converter takes: 1 to [`MAX_ID_CHARS`] (64) characters of
+/// `[A-Za-z0-9_-]`.
+pub fn is_id(text: &str) -> bool {
     !text.is_empty()
         && text.len() <= MAX_ID_CHARS
         && text

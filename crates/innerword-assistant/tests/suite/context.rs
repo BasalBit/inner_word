@@ -2,8 +2,8 @@
 //! outline of a long document, the carried-over conversation, and the system prompts.
 
 use innerword_assistant::{
-    AttachedPart, Attachment, DocumentPart, HistoryMessage, Mode, OpenDocument, OpenKind,
-    QUICK_SYSTEM_PROMPT, Role, SELECTION_LIMIT, SIDE_SYSTEM_PROMPT, SideContext,
+    AttachedPart, Attachment, DocumentPart, DrawingTarget, HistoryMessage, Mode, OpenDocument,
+    OpenKind, QUICK_SYSTEM_PROMPT, Role, SELECTION_LIMIT, SIDE_SYSTEM_PROMPT, SideContext,
     WHOLE_DOCUMENT_LIMIT, bounded_history, outline, quick_prompt, side_prompt, side_system_prompt,
     system_prompt, with_history,
 };
@@ -460,8 +460,8 @@ fn the_side_prompt_is_a_collaborator_who_reads_and_advises() {
         );
     }
     // Without tools it says so.
-    assert_eq!(side_system_prompt(true), prompt);
-    assert!(side_system_prompt(false).contains("you have no tools"));
+    assert_eq!(side_system_prompt(true, DrawingTarget::None), prompt);
+    assert!(side_system_prompt(false, DrawingTarget::None).contains("you have no tools"));
 }
 
 #[test]

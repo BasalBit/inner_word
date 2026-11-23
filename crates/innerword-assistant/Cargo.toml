@@ -29,6 +29,8 @@ path = "tests/main.rs"
 innerword-mcp.workspace = true
 # The folders agents are installed in: the same list the Agents panel detects them with.
 innerword-agent-setup.workspace = true
+# The format of an answer's drawing, read with the converter's own types (`Drawing`).
+innerword-board.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

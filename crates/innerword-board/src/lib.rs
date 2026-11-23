@@ -17,6 +17,8 @@
 //!   from the input ([`HashedMaking`]), never random.
 //! - The delta between two stored scenes ([`Scene::delta_from`], what the view's `adopt`
 //!   takes) and the merge by the base rule ([`merge`], section 4.5).
+//! - What the assistant proposes: a drawing ([`Drawing`]) read from an answer and checked
+//!   before any whiteboard is looked at.
 //! - Excalidraw's shape library as the library keeps it ([`ShapeLibrary`]).
 //! - [`sniff_svg`] (which bytes are kept as an SVG), [`well_formed_json`] (lone surrogates
 //!   mended), [`export_dir`] (what the tool hands its PDF child).
@@ -30,6 +32,7 @@ pub mod limits;
 pub mod metrics;
 
 mod delta;
+mod drawing;
 mod file_hex;
 mod fractional;
 mod frames;
@@ -43,6 +46,7 @@ mod skeleton;
 mod svg;
 
 pub use delta::{Delta, Merged, merge};
+pub use drawing::{DRAWABLE_TYPES, Drawing, DrawingError, MAX_TITLE_CHARS};
 pub use file_hex::FileHex;
 pub use json::well_formed_json;
 pub use library::{LibraryItem, ParsedLibrary, ShapeLibrary};
@@ -51,7 +55,7 @@ pub use making::{HashedMaking, Making};
 pub use scene::{Element, ElementType, FileEntry, Parsed, Scene, SceneError};
 pub use skeleton::{
     Added, AddedElement, BoardError, ElementChange, Picture, Pictures, Removed, Skeleton, Updated,
-    add, picture_paths, remove, update,
+    add, is_id, picture_paths, remove, update,
 };
 pub use svg::sniff_svg;
 

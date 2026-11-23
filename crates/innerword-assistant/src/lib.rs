@@ -14,6 +14,9 @@
 //!   which a view owns: transcript, conversation and the rules between them.
 //! * The context of a message ([`quick_prompt`], [`side_prompt`], [`SideContext`]) and
 //!   the system prompts ([`prompts`]).
+//! * The drawings of answers ([`drawing`]): the fenced `whiteboard` block of an answer,
+//!   found and read with `innerword_board::Drawing`, what it can be applied to
+//!   ([`DrawingTarget`]) and the line the side chat shows in its place.
 //! * The tools of the side chat ([`library_tools`]): the app's own MCP server, read-only.
 //!
 //! # Driving a conversation
@@ -54,6 +57,7 @@
 pub mod backend;
 pub mod claude;
 pub mod context;
+pub mod drawing;
 pub mod events;
 pub mod fake;
 pub mod prompts;
@@ -74,9 +78,16 @@ pub use context::{
     PAGE_PREFACE, SELECTION_LIMIT, SideContext, WHOLE_DOCUMENT_LIMIT, bounded_history, outline,
     quick_prompt, side_prompt, with_history,
 };
+pub use drawing::{
+    DRAWING_INFO, Drawing, DrawingBlock, DrawingError, DrawingProblem, DrawingTarget, ElementName,
+    ElementNames, answer_drawing, drawing_blocks, drawing_fits, drawing_history_note,
+    drawing_sentence, escape_markdown, shown_markdown, without_drawings,
+};
 pub use events::{EventSink, EventStream, event_channel};
 pub use fake::{FakeBackend, FakeReply, FakeSent, fake_catalog, fake_info};
-pub use prompts::{QUICK_SYSTEM_PROMPT, SIDE_SYSTEM_PROMPT, side_system_prompt, system_prompt};
+pub use prompts::{
+    QUICK_SYSTEM_PROMPT, SIDE_SYSTEM_PROMPT, drawing_prompt, side_system_prompt, system_prompt,
+};
 pub use session::{ChatSession, privacy_notice};
 pub use tools::{
     LIBRARY_SERVER_NAME, NameBook, describe_library_tool, describe_unknown_tool, library_describer,

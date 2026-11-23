@@ -696,6 +696,30 @@ fn in_the_view(report: &mut Report, assets: &Assets, scene: &Value, rules: &Path
             page_errors(&events)
         ),
     );
+
+    // collect answers from a parked view and from a hidden one.
+    view.park();
+    for (nonce, how, hide) in [(41, "parked", false), (42, "hidden", true)] {
+        view.set_hidden(hide);
+        let collected = call(
+            &view,
+            &format!(
+                r#"const api = window.innerwordBoard.api;
+                   api.updateScene({{ elements: api.getSceneElementsIncludingDeleted().map((e) => e.id === 'oval' ? {{ ...e, y: e.y + 2, version: e.version + 1, versionNonce: {nonce} }} : e), captureUpdate: 'IMMEDIATELY' }});
+                   {}"#,
+                calls::COLLECT
+            ),
+            "{}",
+        )
+        .and_then(|text| calls::answer::<calls::Collected>(&text));
+        report.check(
+            matches!(&collected, Ok(c) if matches!(c.scene, calls::CollectedScene::Whole(_))),
+            &format!(
+                "collect answers from a {how} view ({:?})",
+                collected.as_ref().map(|c| c.rev)
+            ),
+        );
+    }
 }
 
 /// `adopt` by the base rule, every row of section 4.5's table, then `undo` and `redo`.
@@ -890,6 +914,34 @@ fn adopted(report: &mut Report, assets: &Assets, rules: &Path) {
         &format!(
             "an adopt without conflicts and without unposted changes is the same scene ({answer:?})"
         ),
+    );
+
+    // A change of the writer's not posted yet: the canvas holds more than the stored scene.
+    let collected =
+        call(&view, calls::COLLECT, "{}").and_then(|text| calls::answer::<calls::Collected>(&text));
+    let rev = collected.as_ref().map(|c| c.rev).unwrap_or(0);
+    let now = canvas(&view);
+    let r1 = element(&now, "r1").cloned().unwrap_or_default();
+    let mut r1_next = r1.clone();
+    r1_next["y"] = json!(r1["y"].as_f64().unwrap_or(0.) + 30.);
+    r1_next["version"] = json!(r1["version"].as_u64().unwrap_or(0) + 1);
+    r1_next["versionNonce"] = json!(777);
+    let delta = json!({
+        "baseRev": rev,
+        "upserted": [{"element": r1_next, "baseVersion": r1["version"]}],
+        "removed": [], "files": {}, "undoable": true
+    });
+    let answer = call(
+        &view,
+        r#"const api = window.innerwordBoard.api;
+           api.updateScene({ elements: api.getSceneElementsIncludingDeleted().map((e) => e.id === 'n1' ? { ...e, x: e.x + 9, version: e.version + 1, versionNonce: 31 } : e), captureUpdate: 'IMMEDIATELY' });
+           return await window.innerwordBoard.call('adopt', arg);"#,
+        &delta.to_string(),
+    )
+    .and_then(|text| calls::answer::<calls::Adopted>(&text));
+    report.check(
+        matches!(&answer, Ok(a) if !a.same && a.conflicts.is_empty()),
+        &format!("with a change of the writer's not posted yet, same is false ({answer:?})"),
     );
     report.check(
         page_errors(&events).is_empty(),
@@ -1173,6 +1225,8 @@ fn shape_library(report: &mut Report, assets: &Assets, elements: &Value, rules: 
         &view,
         "(() => { window.innerwordBoard.api.updateScene({ appState: { selectedElementIds: { oval: true } }, captureUpdate: 'NEVER' }); return 1; })()",
     );
+    // Excalidraw takes a change of its state in React's next render.
+    wait(Duration::from_millis(250));
     let added = call(
         &view,
         calls::LIBRARY,
@@ -1223,6 +1277,8 @@ fn shape_library(report: &mut Report, assets: &Assets, elements: &Value, rules: 
         &view,
         "(() => { window.innerwordBoard.api.updateScene({ appState: { selectedElementIds: { box: true, pic: true } }, captureUpdate: 'NEVER' }); return 1; })()",
     );
+    // Excalidraw takes a change of its state in React's next render.
+    wait(Duration::from_millis(250));
     let refused = call(
         &view,
         calls::LIBRARY,
@@ -1231,7 +1287,8 @@ fn shape_library(report: &mut Report, assets: &Assets, elements: &Value, rules: 
     .and_then(|text| calls::answer::<calls::LibraryAnswered>(&text));
     report.check(
         matches!(&refused, Ok(a) if a.added.is_none() && a.refused.as_deref().is_some_and(|r| !r.is_empty())),
-        &format!("a selection with a picture is refused with a sentence ({refused:?})"),
+        &format!("a selection with a picture is refused with a sentence ({refused:?}; {:?})",
+            canvas(&view).iter().filter(|e| e["type"] == "image").map(|e| (e["id"].clone(), e["isDeleted"].clone())).collect::<Vec<_>>()),
     );
 
     // collect brings a change of the library not posted yet.
@@ -1239,6 +1296,8 @@ fn shape_library(report: &mut Report, assets: &Assets, elements: &Value, rules: 
         &view,
         "(() => { window.innerwordBoard.api.updateScene({ appState: { selectedElementIds: { note: true } }, captureUpdate: 'NEVER' }); return 1; })()",
     );
+    // Excalidraw takes a change of its state in React's next render.
+    wait(Duration::from_millis(250));
     let collected = call(
         &view,
         &format!("await window.innerwordBoard.call('library', JSON.stringify({{ addSelection: true }}));\n{}", calls::COLLECT),

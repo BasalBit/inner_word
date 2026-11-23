@@ -2390,9 +2390,10 @@ the shape library, closing and quitting), `workspace/board_pdf.rs` (its PDF),
   38 ms]`, the tool 401 ms; **the autosave** of a gesture on it `last_save=[main 0.00 ms,
   background 59 ms, 3012568 bytes]` (only the message's head is read on the main thread);
   **its PDF** (13,302 x 8,444 pt) 1.37 s with `board:pdf:`; **a folder's PDF** with a
-  document and three whiteboards of 400 elements, 4 pages, 0.66 s. In the debug build an
-  agent's change to a small whiteboard (six elements and a picture) is `change 4 ms,
-  window 1 ms`, the whole page to `ready` 90 to 440 ms. The scripts are the design's 9.4;
+  document and three whiteboards of 400 elements, 4 pages, 0.66 s. An agent's change to
+  a small whiteboard (the design's 9.4: six elements and a picture) is `change 1.4 ms,
+  window 0.2 ms`, the tool 32 ms, its load 318 ms (release; in the debug build 4 ms, 1 ms
+  and 90 to 440 ms). The scripts are the design's 9.4;
   the way to take the window's part off the main thread, should it grow too long, is in
   its risk 8 (the delta on a background task, the adopt in a later turn).
 - **Not in this version**: text to diagram and the AI tools, web embeds, collaboration,

@@ -10,6 +10,22 @@ use super::harness::Sandbox;
 
 const CHAPTER: &str = "# Chapter 1\n\nThe keeper could not swim. The *Maren* left at dawn.\n\n## The harbour\n\nGulls, rope, tar. The keeper watched.\n";
 
+/// A whiteboard's first elements: two shapes with labels and an arrow between them.
+const SHAPES: &str = r#"[{"type":"rectangle","id":"api","x":100,"y":80,"width":200,"height":90,"label":{"text":"API"}},
+ {"type":"ellipse","id":"db","x":420,"y":80,"width":160,"height":90,"label":{"text":"Postgres"}},
+ {"type":"arrow","id":"reads","x":300,"y":125,"start":{"id":"api"},"end":{"id":"db"}}]"#;
+
+/// The id the library stores the bytes of a file under, as hex: the first 16 bytes of
+/// their SHA-256 (a picture that is stored as it came).
+fn file_id(path: &std::path::Path) -> String {
+    use sha2::Digest;
+    let digest = sha2::Sha256::digest(std::fs::read(path).unwrap());
+    digest[..16]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
 /// A library with something for every command to work on, made while no app is open:
 /// `doc:1` "The Salt Road/Chapter 1", `doc:2` "Ideas", `doc:3` "Gone" in the trash, and
 /// the folder "Attic" (with `doc:4`) in the trash.
@@ -87,6 +103,15 @@ fn every_command_that_changes_the_library_is_carried_out_by_the_app_while_it_is_
     app.served();
 
     sandbox.picture("harbour.png", (64, 40), [30, 90, 160]);
+    // A picture of a whiteboard, named by a path relative to the folder of the file of
+    // the elements: the tool reads it, and the app's listener stores it before the
+    // request is queued.
+    let lighthouse = sandbox.picture("drawings/lighthouse.png", (48, 30), [200, 60, 40]);
+    std::fs::write(
+        sandbox.work().join("drawings/photo.json"),
+        r#"[{"type":"image","id":"photo","x":640,"y":80,"path":"lighthouse.png"}]"#,
+    )
+    .unwrap();
     // A page: the tool reads it, checks it (the fake check) and hands the app its files.
     std::fs::create_dir_all(sandbox.work().join("site")).unwrap();
     std::fs::write(
@@ -208,6 +233,41 @@ fn every_command_that_changes_the_library_is_carried_out_by_the_app_while_it_is_
             "add_page",
         ),
         (
+            "board new",
+            vec![
+                "board",
+                "new",
+                "Plan",
+                "--in",
+                "Sketches",
+                "--create-folders",
+                "--content",
+                SHAPES,
+            ],
+            "create_board",
+        ),
+        (
+            "board add",
+            vec!["board", "add", "Plan", "--file", "drawings/photo.json"],
+            "add_to_board",
+        ),
+        (
+            "board update",
+            vec![
+                "board",
+                "update",
+                "Plan",
+                "--content",
+                r#"[{"id":"api","dx":40}]"#,
+            ],
+            "update_board",
+        ),
+        (
+            "board remove",
+            vec!["board", "remove", "Plan", "db"],
+            "remove_from_board",
+        ),
+        (
             "duplicate",
             vec!["duplicate", "doc:2"],
             "duplicate_document",
@@ -292,6 +352,18 @@ fn every_command_that_changes_the_library_is_carried_out_by_the_app_while_it_is_
     }
     // The app is still the one that has the library.
     assert_eq!(sandbox.json(&["status"])["app_is_open"], true);
+    // The picture the app was handed is stored, and the scene names it.
+    let picture = file_id(&lighthouse);
+    assert!(app.has_file(&picture), "the listener stored the picture");
+    let scene = sandbox.json(&["get", "Plan", "--format", "json"]);
+    assert!(
+        scene["content"].as_str().unwrap().contains(&picture),
+        "{scene}"
+    );
+    let listing = sandbox.ok(&["get", "Plan"]);
+    assert!(listing.contains("image      photo"), "{listing}");
+    assert!(!listing.contains("Postgres"), "db went: {listing}");
+    app.served();
 
     // Every command whose help says that it changes the library was among them, and
     // none of them is a command that says it does not.
@@ -402,6 +474,7 @@ fn every_tool_of_the_server_that_changes_the_library_is_carried_out_by_the_app_w
     app.served();
 
     let picture = sandbox.picture("harbour.png", (64, 40), [30, 90, 160]);
+    let shapes: Value = serde_json::from_str(SHAPES).unwrap();
     let site = sandbox.work().join("site");
     std::fs::create_dir_all(&site).unwrap();
     std::fs::write(
@@ -482,6 +555,30 @@ fn every_tool_of_the_server_that_changes_the_library_is_carried_out_by_the_app_w
             "create_document",
             json!({ "title": "New", "folder": "Drafts/Deep", "create_folders": true, "markdown": "x" }),
             "create_document",
+        ),
+        (
+            "create_board",
+            json!({ "title": "Plan", "folder": "Sketches", "create_folders": true, "elements": shapes }),
+            "create_board",
+        ),
+        (
+            // The server reads the picture (it is given its whole path); the app is handed
+            // the bytes.
+            "add_to_board",
+            json!({ "board": "Plan", "elements": [
+                { "type": "image", "id": "photo", "x": 640, "y": 80, "path": picture.to_str().unwrap() }
+            ] }),
+            "add_to_board",
+        ),
+        (
+            "update_board",
+            json!({ "board": "Plan", "changes": [{ "id": "api", "dx": 40 }] }),
+            "update_board",
+        ),
+        (
+            "remove_from_board",
+            json!({ "board": "Plan", "ids": ["db"] }),
+            "remove_from_board",
         ),
         (
             "duplicate_document",
@@ -793,6 +890,38 @@ fn with_the_switch_off_every_change_is_refused_and_says_where_the_switch_is() {
         ),
         "{dry}"
     );
+
+    // A whiteboard's picture is refused by the listener at once, and nothing is stored.
+    let lighthouse = sandbox.picture("lighthouse.png", (48, 30), [200, 60, 40]);
+    app.set_switch(true);
+    sandbox.ok(&["board", "new", "Plan"]);
+    app.set_switch(false);
+    app.served();
+    let refused = sandbox.fail(
+        &[
+            "board",
+            "add",
+            "Plan",
+            "--content",
+            r#"[{"type":"image","id":"photo","x":0,"y":0,"path":"lighthouse.png"}]"#,
+        ],
+        5,
+    );
+    assert!(refused.contains("switched off there"), "{refused}");
+    assert!(refused.contains("nothing was changed"), "{refused}");
+    let served = app.served();
+    assert!(
+        served
+            .iter()
+            .any(|served| served.name == "add_to_board" && !served.done),
+        "{served:?}"
+    );
+    assert!(
+        !app.has_file(&file_id(&lighthouse)),
+        "a refused request stores nothing"
+    );
+    assert!(!sandbox.ok(&["get", "Plan"]).contains("photo"));
+    app.served();
 
     // Nothing of all that changed the library, and reading went on.
     assert_eq!(sandbox.ok(&["get", "doc:1"]), before);

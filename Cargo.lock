@@ -2949,12 +2949,16 @@ version = "0.10.1"
 dependencies = [
  "innerword-agent",
  "innerword-agent-setup",
+ "innerword-board",
+ "innerword-board-web",
  "innerword-mcp",
  "innerword-page",
  "innerword-store",
  "innerword-web",
  "libc",
+ "objc",
  "serde_json",
+ "sha2 0.10.9",
  "tempfile",
 ]
 

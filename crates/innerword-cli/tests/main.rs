@@ -5,6 +5,7 @@ mod suite {
     pub mod harness;
 
     mod agents;
+    mod boards;
     mod documents;
     mod guard;
     mod images;

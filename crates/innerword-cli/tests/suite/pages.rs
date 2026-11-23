@@ -429,7 +429,7 @@ fn a_page_cannot_be_edited_and_the_codes_say_so() {
         "{help}"
     );
     assert!(
-        help.contains("15 a page where a document is needed"),
+        help.contains("15 a page or a whiteboard where a document is needed"),
         "{help}"
     );
 }
@@ -561,7 +561,7 @@ fn a_page_is_added_through_the_mcp_server_one_per_call() {
     client.initialize("2025-11-25", "Test Agent");
     let listed = client.request("tools/list", json!({}));
     let tools = listed["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 37);
+    assert_eq!(tools.len(), 41);
     assert_eq!(
         tools
             .iter()

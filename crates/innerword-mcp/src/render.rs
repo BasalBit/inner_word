@@ -581,9 +581,19 @@ pub fn pages(list: &PagesList) -> String {
 /// A whiteboard's name in a line about it: `board:12 “Architecture”`, or `a new whiteboard
 /// “Architecture”` in a dry run.
 fn board_name(board: &DocumentSummary) -> String {
+    let title = board_title(board);
     match board.id.0 {
-        0 => format!("a new whiteboard \u{201c}{}\u{201d}", board.title),
-        id => format!("board:{id} \u{201c}{}\u{201d}", board.title),
+        0 => format!("a new whiteboard \u{201c}{title}\u{201d}"),
+        id => format!("board:{id} \u{201c}{title}\u{201d}"),
+    }
+}
+
+/// The title of a whiteboard as it is shown: "Untitled" for one that was given none.
+fn board_title(board: &DocumentSummary) -> &str {
+    if board.title.trim().is_empty() {
+        "Untitled"
+    } else {
+        &board.title
     }
 }
 
@@ -603,7 +613,10 @@ fn board_info(info: &DocumentInfo, board: &BoardInfo) -> String {
     let summary = &board.summary;
     let mut out = String::new();
     out.push_str(&format!("{}  {}\n", reference(document), document.path));
-    out.push_str(&format!("title:     {} (its name)\n", document.title));
+    out.push_str(&format!(
+        "title:     {} (its name)\n",
+        board_title(document)
+    ));
     out.push_str(
         "kind:      a whiteboard: a drawing of shapes, arrows, text, frames and pictures; it \
          is changed element by element, never as a text\n",
@@ -724,14 +737,14 @@ fn added_elements(changed: &BoardChanged) -> String {
 }
 
 /// `innerword board new|add|update|remove`: what was done to the whiteboard, the version kept
-/// of it before, and the warnings. `named`: the ids a removal was asked for (the others it
-/// removed are their labels).
+/// of it before, and the warnings. `named`: the ids a change or a removal was asked for
+/// (the others it changed followed them; the others it removed are their labels).
 ///
 /// ```text
 /// made board:12 “Architecture” in Sketches (empty)
 /// added to board:12 “Architecture”: rectangle api (label), ellipse db (label), arrow reads (label)
 /// kept the drawing as it was: version 34 “Before a drawing by Claude”; "innerword history restore 34" brings it back
-/// changed on board:12 “Architecture”: api, api-label, reads
+/// changed on board:12 “Architecture”: api; 2 followed (labels, the ends of joined arrows, what a frame holds)
 /// removed from board:12 “Architecture”: db and 1 label; unbound: reads
 /// ```
 pub fn board_changed(did: BoardDid, changed: &BoardChanged, named: &[String]) -> String {
@@ -766,7 +779,24 @@ pub fn board_changed(did: BoardDid, changed: &BoardChanged, named: &[String]) ->
             out.push_str(&format!("added to {name}: {}\n", added_elements(changed)));
         }
         BoardDid::Updated => {
-            out.push_str(&format!("changed on {name}: {}\n", ids(&changed.updated)));
+            // The ids that were asked for by name, and how many followed them (a label is
+            // named by an id nobody chose).
+            let asked: Vec<String> = changed
+                .updated
+                .iter()
+                .filter(|id| named.contains(id))
+                .cloned()
+                .collect();
+            let followed = changed.updated.len() - asked.len();
+            let mut line = format!("changed on {name}: {}", ids(&asked));
+            if followed > 0 {
+                line.push_str(&format!(
+                    "; {} followed (labels, the ends of joined arrows, what a frame holds)",
+                    count(followed as u64)
+                ));
+            }
+            out.push_str(&line);
+            out.push('\n');
         }
         BoardDid::Removed => {
             let asked: Vec<String> = changed

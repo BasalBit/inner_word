@@ -47,28 +47,35 @@ pub fn run(arguments: &[String]) -> Option<ExitCode> {
 
 /// Why a child did not do its work: the clause its parent puts after "the page could not
 /// be checked: ", and the exit code.
-struct Failed {
+#[derive(Debug)]
+pub(crate) struct Failed {
     reason: String,
     code: u8,
 }
 
 impl Failed {
-    fn new(reason: impl Into<String>) -> Failed {
+    pub(crate) fn new(reason: impl Into<String>) -> Failed {
         Failed {
             reason: reason.into(),
             code: 1,
         }
     }
 
-    fn usage(reason: impl Into<String>) -> Failed {
+    pub(crate) fn usage(reason: impl Into<String>) -> Failed {
         Failed {
             reason: reason.into(),
             code: 2,
         }
     }
+
+    /// Why, as the parent reads it.
+    #[cfg(test)]
+    pub(crate) fn reason(&self) -> &str {
+        &self.reason
+    }
 }
 
-fn finish(result: Result<(), Failed>) -> ExitCode {
+pub(crate) fn finish(result: Result<(), Failed>) -> ExitCode {
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(failed) => {
@@ -88,7 +95,7 @@ fn finish(result: Result<(), Failed>) -> ExitCode {
 /// `$TMPDIR/inner-word-<uid>/WebKit/`, beside the directories of the checks (which only
 /// this user can enter), under its one fixed identifier, so the store holds one list
 /// however many checks run.
-fn rules_dir() -> Result<PathBuf, Failed> {
+pub(crate) fn rules_dir() -> Result<PathBuf, Failed> {
     // SAFETY: `getuid` has no arguments and cannot fail.
     let uid = unsafe { libc::getuid() };
     let parent = std::env::temp_dir().join(format!("inner-word-{uid}"));

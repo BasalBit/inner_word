@@ -6,7 +6,7 @@
 
 use innerword_mcp::ErrorKind;
 
-use crate::spec::{self, COMMANDS, Content, Group, Spec};
+use crate::spec::{self, COMMANDS, Content, Group, Spec, Text};
 
 /// The version of the app this binary belongs to.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -30,6 +30,33 @@ An image is a line of its own: ![description](image:<id>) names an image the lib
 (\"innerword get\" prints them so), ![description](picture.png) brings one in from a file. A
 relative path is taken from the folder of --file, else from where the command runs; an
 address on the web stays a link.
+";
+
+/// What the help of a command that takes a whiteboard's elements says about them.
+const SKELETONS: &str = "\
+The elements are a JSON array of Excalidraw's element skeletons, in Excalidraw's camelCase:
+  rectangle, ellipse, diamond  x, y; width, height (100 each), label {\"text\": \"API\"}
+  text                         x, y, text; fontSize (20), fontFamily, textAlign (never a size)
+  arrow                        x, y and points [[0,0],[200,0]], or width and height, or start and
+                               end {\"id\": \"<element>\"}; startArrowhead, endArrowhead, label
+  line                         x, y and points, or width and height
+  freedraw                     x, y, points
+  frame                        children (ids), or x, y, width, height; name
+  image                        x, y, path (a picture file of this Mac); width or height
+Every element may have id (made when not given), angle, strokeColor, backgroundColor,
+fillStyle, strokeWidth, strokeStyle, roughness, opacity, roundness, groupIds, link and locked.
+Give a shape room for its label. A picture is drawn at its own size unless width or height is
+given; PNG, JPEG, GIF, HEIC, TIFF, WebP, BMP and SVG work. A relative path is taken from the
+folder of --file, else from where the command runs.
+";
+
+/// What the help of a command that takes changes of a whiteboard's elements says about them.
+const CHANGES: &str = "\
+The changes are a JSON array of objects, each with the id of an element and what changes:
+x, y (where it is) or dx, dy (how far it moves), width, height, angle, text (of a text, or of
+the label of a shape or an arrow; a shape without one gets one), the style fields of an
+element, fontSize, fontFamily, textAlign, link (null removes it), locked, name (of a frame),
+start and end (an arrow joined again), points. \"innerword get <board>\" lists the ids.
 ";
 
 /// `innerword --help`: every command on one line.
@@ -108,7 +135,7 @@ fn meaning(kind: ErrorKind) -> &'static str {
         ErrorKind::FileExists => "the file exists",
         ErrorKind::Unreadable => "the document cannot be read",
         ErrorKind::PageIncomplete => "the page could not be kept whole",
-        ErrorKind::WrongKind => "a page where a document is needed, or the reverse",
+        ErrorKind::WrongKind => "a page or a whiteboard where a document is needed, or the reverse",
     }
 }
 
@@ -142,6 +169,7 @@ fn left_column(spec: &Spec) -> String {
     let name = match spec.name {
         "image list" => "images",
         "page list" => "pages",
+        "board list" => "boards",
         "comment list" => "comments",
         "history list" => "history",
         "agents list" => "agents",
@@ -196,7 +224,7 @@ pub fn command(spec: &Spec) -> String {
         rows.push((option_label(option), option.help.to_string()));
     }
     if spec.content != Content::None {
-        for option in &spec::CONTENT_OPTIONS {
+        for option in &spec::content_options(spec) {
             rows.push((option_label(option), option.help.to_string()));
         }
     }
@@ -220,18 +248,27 @@ pub fn command(spec: &Spec) -> String {
     out.push_str("\nOptions\n");
     out.push_str(&table(&rows));
 
+    let (what, is, it) = match spec.text {
+        Text::Markdown => ("The text", "is Markdown", "it is"),
+        Text::Elements => ("The elements", "are JSON", "they are"),
+        Text::Changes => ("The changes", "are JSON", "they are"),
+    };
     match spec.content {
         Content::None => {}
-        Content::Optional => out.push_str(
-            "\nThe text is Markdown. Standard input is read only with --stdin or --file -.\n",
-        ),
-        Content::Required => out.push_str(
-            "\nThe text is Markdown. Without --content and --file it is read from standard input\n\
-when that is a pipe or a file.\n",
-        ),
+        Content::Optional => out.push_str(&format!(
+            "\n{what} {is}. Standard input is read only with --stdin or --file -.\n"
+        )),
+        Content::Required => out.push_str(&format!(
+            "\n{what} {is}. Without --content and --file {it} read from standard input\n\
+when that is a pipe or a file.\n"
+        )),
     }
     if spec.content != Content::None {
-        out.push_str(IMAGES_IN_MARKDOWN);
+        out.push_str(match spec.text {
+            Text::Markdown => IMAGES_IN_MARKDOWN,
+            Text::Elements => SKELETONS,
+            Text::Changes => CHANGES,
+        });
     }
     if spec.writes {
         out.push_str(
@@ -244,7 +281,7 @@ version than this tool, or it did not answer).\n",
     if spec
         .positionals
         .iter()
-        .any(|p| matches!(p.name, "document" | "folder" | "item"))
+        .any(|p| matches!(p.name, "document" | "folder" | "item" | "board"))
     {
         out.push('\n');
         out.push_str(ADDRESSING);
@@ -370,9 +407,9 @@ mod tests {
             );
         }
         // (70 before the two commands about images, 72 before the two about pages and
-        // their two exit codes.)
+        // their two exit codes, 75 before the five about whiteboards.)
         assert!(
-            overview.lines().count() <= 75,
+            overview.lines().count() <= 81,
             "the overview has {} lines",
             overview.lines().count()
         );
@@ -384,8 +421,13 @@ mod tests {
         assert!(overview.contains("While Inner Word is open, a change is carried out by the app"));
         assert!(overview.contains("13 the document cannot be read,"));
         assert!(overview.contains("14 the page could not be kept whole,"));
-        assert!(overview.contains("15 a page where a document is needed, or the reverse."));
+        assert!(
+            overview
+                .contains("15 a page or a whiteboard where a document is needed, or the reverse.")
+        );
         assert!(overview.contains("pages [<folder>]"), "{overview}");
+        assert!(overview.contains("boards [<folder>]"), "{overview}");
+        assert!(overview.contains("board add <board>"), "{overview}");
         assert!(overview.is_ascii(), "the overview is plain ASCII");
     }
 

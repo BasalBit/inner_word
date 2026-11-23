@@ -35,7 +35,7 @@
 //! | 12 | the file an export would write exists |
 //! | 13 | the stored document cannot be read |
 //! | 14 | the page could not be kept whole; nothing was saved |
-//! | 15 | a page where a document is needed, or the reverse |
+//! | 15 | a page or a whiteboard where a document is needed, or the reverse |
 //!
 //! The codes are `innerword_agent::ErrorKind::exit_code`.
 //!
@@ -45,8 +45,17 @@
 //! check loads the page in WebKit, which runs only in `innerword __page-check` (and the PDF
 //! of a page in `innerword __page-pdf`), never in the tool or the MCP server themselves
 //! ([`page_check`]). [`main`] installs that checker on every library it opens.
+//!
+//! # Whiteboards
+//!
+//! `innerword board new|add|update|remove` and `innerword boards` work in pure Rust (the
+//! command layer turns skeletons into Excalidraw's elements). Only the PDF of a whiteboard
+//! needs WebKit: `innerword export board:12 x.pdf` writes the stored scene and its pictures
+//! into a directory and runs `innerword __board-pdf <dir> <out.pdf>` ([`board_pdf`]), the
+//! whiteboard's export page loaded offscreen in that child.
 
 mod agents;
+mod board_pdf;
 mod help;
 mod page_check;
 mod pages;
@@ -73,8 +82,12 @@ fn main() -> ExitCode {
             }
         }
     }
-    // The children of a page's check and of its PDF are programs of their own.
+    // The children of a page's check and of its PDF, and of a whiteboard's PDF, are
+    // programs of their own.
     if let Some(code) = page_check::run(&arguments) {
+        return code;
+    }
+    if let Some(code) = board_pdf::run(&arguments) {
         return code;
     }
     // `--json` shapes the error output too, also when the command line cannot be read.
@@ -258,6 +271,19 @@ fn hint(kind: ErrorKind) -> Option<&'static str> {
 const EXPORT_PAGE: &str = "Here: a page is written as a folder (\"innerword export <page> <folder>\"), as \
 a PDF (a path ending in .pdf) or as its text (.txt).";
 
+/// The hint after a text operation on a whiteboard: the commands that change one.
+const BOARD_COMMANDS: &str = "Here: innerword board add, board update and board remove change a \
+whiteboard; \"innerword get <board>\" lists its elements with their ids.";
+
+/// The hint after a whiteboard's command on a document or a page.
+const LIST_BOARDS: &str = "Here: \"innerword boards\" lists the whiteboards.";
+
+/// The hint after an export of a whiteboard in a format of a text.
+const BOARD_PDF: &str = "Here: a path that ends in .pdf.";
+
+/// The hint after an element id a whiteboard does not have.
+const ELEMENT_IDS: &str = "Here: \"innerword get <board>\" lists the elements with their ids.";
+
 /// The hint after a text operation on a page: how a newer copy of a page comes in.
 const NEWER_PAGE: &str = "Here: \"innerword page add <file or folder> --source-url <address>\" with the \
 address the page came from brings a newer copy (\"innerword info <page>\" shows the address).";
@@ -299,6 +325,20 @@ fn hint_in(spec: Option<&spec::Spec>, failure: &Failure) -> Option<&'static str>
     }
     if failure.kind == ErrorKind::WrongKind && failure.message.contains(" is a page: ") {
         return Some(NEWER_PAGE);
+    }
+    if failure.kind == ErrorKind::WrongKind {
+        if failure.message.contains(innerword_agent::BOARD_IS_PDF_ONLY) {
+            return Some(BOARD_PDF);
+        }
+        if failure.message.contains(" is a whiteboard: ") {
+            return Some(BOARD_COMMANDS);
+        }
+        if failure.message.contains(", not a whiteboard.") {
+            return Some(LIST_BOARDS);
+        }
+    }
+    if failure.kind == ErrorKind::NotFound && failure.message.starts_with("there is no element ") {
+        return Some(ELEMENT_IDS);
     }
     hint(failure.kind)
 }

@@ -435,9 +435,25 @@ impl LiveApp {
                 if !incoming.begin() {
                     continue;
                 }
-                // The app's listener stores the files of a page before the request is
-                // queued, and the main thread only writes the row.
+                // The app's listener stores the files of a page, or the pictures of a
+                // whiteboard, before the request is queued, and the main thread only writes
+                // the row or the scene. With the owner's switch off it refuses such a
+                // request at once, and nothing is stored.
                 if live::carries_page_files(incoming.request()) {
+                    if !live::changes_allowed(&store) {
+                        let request = incoming.request();
+                        tell.send(Served {
+                            name: request.name(),
+                            author: request.author().map(str::to_string),
+                            changes: 0,
+                            done: false,
+                        })
+                        .ok();
+                        incoming
+                            .answer(live::Answer::refused(innerword_agent::Refusal::SwitchedOff))
+                            .ok();
+                        continue;
+                    }
                     let mut files = innerword_store::ImageFile::beside(&database_for_thread);
                     if let Err(error) = live::store_page_files(incoming.request_mut(), &mut files) {
                         incoming.answer(live::Answer::failed(&error)).ok();
@@ -478,6 +494,14 @@ impl LiveApp {
             .map(|served| served.name)
             .filter(|name| *name != "flush")
             .collect()
+    }
+
+    /// Whether `images.db` of the library has the file of this id (32 hex digits): a
+    /// picture the listener stored.
+    pub fn has_file(&self, hex: &str) -> bool {
+        let id = innerword_store::FileId::parse(hex).expect("an id of 32 hex digits");
+        let files = innerword_store::ImageFile::beside(&self.database);
+        files.file_bytes(&id).ok().flatten().is_some()
     }
 
     /// Presses the owner's switch "Agents can make changes while Inner Word is open".

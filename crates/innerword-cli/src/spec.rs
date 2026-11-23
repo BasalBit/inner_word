@@ -72,6 +72,17 @@ pub enum Content {
     Required,
 }
 
+/// What the text of a command is (`--content`, `--file`, `--stdin`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Text {
+    /// Markdown: the text of a document.
+    Markdown,
+    /// A JSON array of a whiteboard's elements, as Excalidraw's element skeletons.
+    Elements,
+    /// A JSON array of changes of a whiteboard's elements, each with the id of one.
+    Changes,
+}
+
 /// One command.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Spec {
@@ -92,6 +103,8 @@ pub struct Spec {
     pub positionals: &'static [Positional],
     pub options: &'static [Opt],
     pub content: Content,
+    /// What its text is, when it takes text.
+    pub text: Text,
     /// Whether it changes the library (and so is carried out by the app while that is open).
     pub writes: bool,
     /// Whether `--dry-run` does something for it.
@@ -155,6 +168,8 @@ const VERSION: &str = "A version: its id as \"innerword history\" prints it";
 const VERSION_DOCUMENT: &str = "The document the version belongs to (a check; may be left out)";
 const AGENT: &str =
     "An agent by its id as \"innerword agents\" prints it (claude-code, codex, ...)";
+const BOARD: &str = "A whiteboard: its id (12 or board:12) or its path in the library \
+(\"Sketches/Architecture\")";
 
 /// The options every command with text has.
 pub const CONTENT_OPTIONS: [Opt; 3] = [
@@ -166,6 +181,45 @@ pub const CONTENT_OPTIONS: [Opt; 3] = [
     ),
     switch("stdin", "The text, from standard input"),
 ];
+
+/// The options of a command whose text is a whiteboard's elements.
+pub const ELEMENT_OPTIONS: [Opt; 3] = [
+    value(
+        "content",
+        "json",
+        "The elements, as a JSON array (see below)",
+    ),
+    value(
+        "file",
+        "path",
+        "The elements, from a JSON file (\"-\" is standard input)",
+    ),
+    switch("stdin", "The elements, from standard input"),
+];
+
+/// The options of a command whose text is changes of a whiteboard's elements.
+pub const CHANGE_OPTIONS: [Opt; 3] = [
+    value(
+        "content",
+        "json",
+        "The changes, as a JSON array (see below)",
+    ),
+    value(
+        "file",
+        "path",
+        "The changes, from a JSON file (\"-\" is standard input)",
+    ),
+    switch("stdin", "The changes, from standard input"),
+];
+
+/// The options for the text of a command, by what its text is.
+pub fn content_options(spec: &Spec) -> [Opt; 3] {
+    match spec.text {
+        Text::Markdown => CONTENT_OPTIONS,
+        Text::Elements => ELEMENT_OPTIONS,
+        Text::Changes => CHANGE_OPTIONS,
+    }
+}
 
 const FORMAT_READ: Opt = value(
     "format",
@@ -206,6 +260,7 @@ const fn reading(name: &'static str, group: Group) -> Spec {
         positionals: &[],
         options: &[],
         content: Content::None,
+        text: Text::Markdown,
         writes: false,
         dry_run: false,
         examples: &[],
@@ -325,7 +380,8 @@ comment anchors). Nothing but the text is printed, so the output can be piped or
 --section only the part under one heading is printed. An image is printed as a line \
 ![description](image:<id>) in Markdown; in the plain text, which is the text an edit matches, it \
 has no text, not even its description. \"innerword images\" lists the images of a document with \
-their sizes and descriptions.",
+their sizes and descriptions. A whiteboard is printed as the list of its elements, one a line with \
+its id, type, place, size and text (--format json: the scene as Excalidraw stores it).",
         positionals: &[arg("document", DOCUMENT)],
         options: &[
             FORMAT_READ,
@@ -627,7 +683,9 @@ Markdown export are written as files into a folder beside it (\"chapter images\"
 chapter.md) and linked from the text, which is also the way to look at a picture; a DOCX holds \
 its pictures. A page is written as a folder of web files that opens offline (--original: the \
 files it was added from, as they were), as a PDF the way WebKit prints it (a path ending in \
-.pdf), or as its text (.txt); a folder exported as one file leaves its pages out.",
+.pdf), or as its text (.txt); a folder exported as one file leaves its pages out. A whiteboard is \
+written as a PDF only (a path ending in .pdf): one page the size of its drawing; a folder exported \
+as one file leaves its whiteboards out.",
         positionals: &[
             arg("item", ITEM),
             optional(
@@ -654,6 +712,7 @@ files it was added from, as they were), as a PDF the way WebKit prints it (a pat
             "innerword export doc:12 --to chapter1.md --overwrite",
             "innerword export page:12 ~/Desktop/page.pdf",
             "innerword export page:12 ~/Desktop/orbitarium --original",
+            "innerword export board:12 ~/Desktop/architecture.pdf",
         ],
         ..reading("export", Group::Documents)
     },
@@ -734,6 +793,103 @@ skip the ones that are in already. Also written \"innerword pages\".",
             "innerword page list \"Claude Pages\" --json",
         ],
         ..reading("page list", Group::Documents)
+    },
+    Spec {
+        synopsis: "[<title>]",
+        summary: "New whiteboard, empty or with elements (--in <folder>)",
+        about: "Makes a whiteboard: a drawing in the library, drawn in the app with Excalidraw (shapes, \
+arrows, text, frames and pictures on a canvas), and prints its id (board:12). Without --content, \
+--file or --stdin it is empty; with them it starts with those elements, as \"innerword board add\" \
+takes them. Its title is the name given here (\"Untitled\" without one) and never follows what is \
+drawn. The folder must exist unless --create-folders is given.",
+        positionals: &[optional("title", "The name of the whiteboard")],
+        options: &[
+            value(
+                "in",
+                "folder",
+                "The folder to make it in (default: the top level)",
+            ),
+            CREATE_FOLDERS,
+            FIRST,
+            BEFORE,
+            AFTER,
+        ],
+        content: Content::Optional,
+        text: Text::Elements,
+        examples: &[
+            "innerword board new \"Architecture\" --in Sketches",
+            "innerword board new \"System overview\" --in Sketches --file shapes.json --author Claude",
+        ],
+        ..writing("board new", Group::Documents)
+    },
+    Spec {
+        synopsis: "<board>",
+        summary: "Draw on a whiteboard: shapes, arrows, text, frames, pictures",
+        about: "Adds elements to a whiteboard, on top of what is drawn, and prints their ids. The \
+elements are Excalidraw's element skeletons, as JSON (below). An arrow is joined to the edge of a \
+shape with start and end; a label is text inside a shape or on an arrow, and a shape is made taller \
+when its label needs it. A text is measured, never given a size. A picture is read from a file of \
+this Mac and the library keeps a copy. Every value that is made (an id, the wobble of a stroke) \
+follows from the request and the whiteboard: --dry-run names the ids the real run gives. The \
+drawing as it was is kept as a version first.",
+        positionals: &[arg("board", BOARD)],
+        content: Content::Required,
+        text: Text::Elements,
+        examples: &[
+            "innerword board add board:12 --file shapes.json --author Claude",
+            "innerword board add board:12 --content '[{\"type\":\"rectangle\",\"id\":\"api\",\"x\":100,\"y\":80,\"label\":{\"text\":\"API\"}}]'",
+            "innerword board add board:12 --content '[{\"type\":\"image\",\"id\":\"photo\",\"x\":640,\"y\":80,\"path\":\"harbour.jpg\"}]'",
+        ],
+        ..writing("board add", Group::Documents)
+    },
+    Spec {
+        synopsis: "<board>",
+        summary: "Move, resize, restyle or rewrite elements of a whiteboard by id",
+        about: "Changes elements of a whiteboard by id: where each is or how far it moves, its size, \
+its angle, its text or its label's, its style, its link, the elements an arrow joins. What follows \
+by itself does, as when the writer drags in the app: a shape's label and the ends of the arrows \
+joined to it move with it, and a frame moves what it holds. A picture is moved and resized like any \
+element; its file is not changed (remove it and add another). The drawing as it was is kept as a \
+version first.",
+        positionals: &[arg("board", BOARD)],
+        content: Content::Required,
+        text: Text::Changes,
+        examples: &[
+            "innerword board update board:12 --content '[{\"id\":\"api\",\"dx\":40,\"backgroundColor\":\"#ffc9c9\"}]'",
+            "innerword board update board:12 --file changes.json --dry-run",
+        ],
+        ..writing("board update", Group::Documents)
+    },
+    Spec {
+        synopsis: "<board> <id>...",
+        summary: "Remove elements of a whiteboard by id, with their labels",
+        about: "Removes elements of a whiteboard by id. A shape goes with its label, and the arrows \
+joined to it stay, no longer joined; an arrow goes with its label; the id of a label removes only \
+the label; a frame goes and what it holds stays. The drawing as it was is kept as a version first, \
+so nothing is lost for good.",
+        positionals: &[
+            arg("board", BOARD),
+            many(
+                "id",
+                "The id of an element, as \"innerword get <board>\" lists it",
+            ),
+        ],
+        examples: &[
+            "innerword board remove board:12 db",
+            "innerword board remove board:12 api db --dry-run",
+        ],
+        ..writing("board remove", Group::Documents)
+    },
+    Spec {
+        synopsis: "[<folder>]",
+        summary: "The whiteboards, with how many elements and pictures each has",
+        about: "Prints every whiteboard of the library (or of a folder, at any depth) on one line: \
+its id, its path, how many elements and pictures it has, and when it last changed. Whiteboards in \
+the trash are listed too, marked. \"innerword get <board>\" lists the elements of one. Also written \
+\"innerword boards\".",
+        positionals: &[optional("folder", FOLDER)],
+        examples: &["innerword boards", "innerword board list Sketches --json"],
+        ..reading("board list", Group::Documents)
     },
     // ----- Documents and folders -----------------------------------------------------
     Spec {
@@ -1046,11 +1202,15 @@ agent. With --library the server works on that library.",
 
 /// The first words that open a group, with the group's own name (the first word of its
 /// commands).
-const GROUPS: [(&str, &str); 10] = [
+const GROUPS: [(&str, &str); 14] = [
     ("image", "image"),
     ("images", "image"),
     ("page", "page"),
     ("pages", "page"),
+    ("board", "board"),
+    ("boards", "board"),
+    ("whiteboard", "board"),
+    ("whiteboards", "board"),
     ("comment", "comment"),
     ("comments", "comment"),
     ("history", "history"),
@@ -1096,7 +1256,7 @@ pub fn find(first: &str, second: Option<&str>) -> Found {
 pub fn options(spec: &Spec) -> Vec<Opt> {
     let mut options = spec.options.to_vec();
     if spec.content != Content::None {
-        options.extend(CONTENT_OPTIONS);
+        options.extend(content_options(spec));
     }
     options
 }
@@ -1123,10 +1283,18 @@ pub fn usage_head(spec: &Spec) -> String {
 /// How the usage line of a command names its text and its options.
 pub fn usage_tail(spec: &Spec) -> String {
     let mut tail = String::new();
+    let text = match spec.text {
+        Text::Markdown => "markdown",
+        Text::Elements | Text::Changes => "json",
+    };
     match spec.content {
         Content::None => {}
-        Content::Optional => tail.push_str("[--content <markdown> | --file <path> | --stdin]"),
-        Content::Required => tail.push_str("(--content <markdown> | --file <path> | --stdin)"),
+        Content::Optional => {
+            tail.push_str(&format!("[--content <{text}> | --file <path> | --stdin]"))
+        }
+        Content::Required => {
+            tail.push_str(&format!("(--content <{text}> | --file <path> | --stdin)"))
+        }
     }
     if !options(spec).is_empty() || spec.dry_run {
         if !tail.is_empty() {

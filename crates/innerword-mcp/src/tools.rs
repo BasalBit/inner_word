@@ -524,10 +524,17 @@ fn add_to_board(library: &Library, arguments: Map<String, Value>) -> Result<Repl
 }
 
 fn update_board(library: &Library, arguments: Map<String, Value>) -> Result<Reply, Error> {
-    let changed = library.update_board(&request::<UpdateBoardRequest>(arguments)?)?;
+    let request = request::<UpdateBoardRequest>(arguments)?;
+    let changed = library.update_board(&request)?;
+    let named: Vec<String> = request
+        .changes
+        .iter()
+        .filter_map(|change| change.0.get("id").and_then(Value::as_str))
+        .map(str::to_string)
+        .collect();
     reply(
         &changed,
-        render::board_changed(render::BoardDid::Updated, &changed, &[]),
+        render::board_changed(render::BoardDid::Updated, &changed, &named),
     )
 }
 

@@ -12,7 +12,7 @@ use innerword_mcp::{ErrorKind, Failure, Item, Reply, Toolbox};
 use serde_json::{Map, Value, json};
 
 use crate::parse::{Globals, Parsed};
-use crate::spec::{Content, Spec};
+use crate::spec::{Content, Spec, Text};
 
 /// The arguments of an operation, as they are put together.
 struct Arguments(Map<String, Value>);
@@ -108,14 +108,89 @@ fn content(spec: &Spec, parsed: &Parsed) -> Result<Option<String>, Failure> {
                 read_stdin()?
             };
             if piped.is_empty() {
+                let missing = match spec.text {
+                    Text::Markdown => {
+                        "no text was given: use --content <markdown>, --file <path> or --stdin (or pipe the text in)"
+                    }
+                    Text::Elements => {
+                        "no elements were given: use --content <json>, --file <path> or --stdin (or pipe them in)"
+                    }
+                    Text::Changes => {
+                        "no changes were given: use --content <json>, --file <path> or --stdin (or pipe them in)"
+                    }
+                };
                 return Err(Failure::invalid(format!(
-                    "no text was given: use --content <markdown>, --file <path> or --stdin (or pipe the text in)\nSee \"innerword {} --help\".",
+                    "{missing}\nSee \"innerword {} --help\".",
                     spec.name
                 )));
             }
             Ok(Some(piped))
         }
     }
+}
+
+/// The JSON array of a whiteboard's elements or changes (`what`), as `--content`,
+/// `--file` or standard input gave it: an array of objects, or one object alone.
+fn json_array(text: &str, what: &str, example: &str) -> Result<Value, Failure> {
+    let wrong = |problem: String| {
+        Failure::invalid(format!(
+            "{problem}: the {what} are a JSON array of objects ({example})"
+        ))
+    };
+    match serde_json::from_str::<Value>(text.trim()) {
+        Ok(Value::Array(items)) => match items.iter().position(|item| !item.is_object()) {
+            None => Ok(Value::Array(items)),
+            Some(index) => Err(wrong(format!(
+                "the {what} cannot be read: the one at index {index} is not an object"
+            ))),
+        },
+        Ok(one @ Value::Object(_)) => Ok(Value::Array(vec![one])),
+        Ok(_) => Err(wrong(format!("the {what} cannot be read"))),
+        Err(error) => Err(wrong(format!(
+            "the {what} cannot be read as JSON ({error})"
+        ))),
+    }
+}
+
+/// The elements of `innerword board new` and `innerword board add`.
+fn elements(text: &str) -> Result<Value, Failure> {
+    json_array(
+        text,
+        "elements",
+        "[{\"type\": \"rectangle\", \"x\": 100, \"y\": 80, \"label\": {\"text\": \"API\"}}]",
+    )
+}
+
+/// What the command line adds when a picture an element names is not there: where a
+/// path that does not start at the top was looked for.
+fn missing_picture(failure: Failure, parsed: &Parsed) -> Failure {
+    if failure.kind != ErrorKind::Invalid || !failure.message.contains("(path): there is no file ")
+    {
+        return failure;
+    }
+    let whence = match parsed.value("file").filter(|file| *file != "-") {
+        Some(_) => format!(
+            "the folder of --file: {}",
+            base_dir(parsed)
+                .map(|dir| dir.display().to_string())
+                .unwrap_or_default()
+        ),
+        None => format!(
+            "where the command runs: {}",
+            std::env::current_dir()
+                .map(|dir| dir.display().to_string())
+                .unwrap_or_else(|_| "the directory the command runs in".to_string())
+        ),
+    };
+    let first = failure.message.trim_end();
+    let stop = if first.ends_with(['.', '!', '?']) {
+        ""
+    } else {
+        "."
+    };
+    Failure::invalid(format!(
+        "{first}{stop}\nA path that does not begin with / or ~/ is taken from {whence}"
+    ))
 }
 
 /// The directory a relative path of an image file is taken from: the directory of the
@@ -416,6 +491,52 @@ pub fn run(
             }
             call("list_pages", arguments)
         }
+        // ----- whiteboards -----------------------------------------------------------
+        "board list" => {
+            if let Some(folder) = parsed.arg(0).filter(|folder| folder.trim() != "/") {
+                arguments.set("folder", folder);
+            }
+            call("list_boards", arguments)
+        }
+        "board new" => {
+            arguments
+                .set_some("title", parsed.arg(0))
+                .set_some("folder", parsed.value("in"))
+                .set_flag("create_folders", parsed.flag("create-folders"));
+            placement(&mut arguments, parsed);
+            if let Some(text) = content(spec, parsed)? {
+                arguments.set("elements", elements(&text)?);
+            }
+            call("create_board", arguments).map_err(|failure| missing_picture(failure, parsed))
+        }
+        "board add" => {
+            let text = content(spec, parsed)?.unwrap_or_default();
+            arguments
+                .set("board", arg(0))
+                .set("elements", elements(&text)?);
+            call("add_to_board", arguments).map_err(|failure| missing_picture(failure, parsed))
+        }
+        "board update" => {
+            let text = content(spec, parsed)?.unwrap_or_default();
+            let changes = json_array(
+                &text,
+                "changes",
+                "[{\"id\": \"api\", \"dx\": 40, \"backgroundColor\": \"#ffc9c9\"}]",
+            )?;
+            arguments.set("board", arg(0)).set("changes", changes);
+            call("update_board", arguments)
+        }
+        "board remove" => {
+            let ids = parsed.args_from(1);
+            if ids.is_empty() {
+                return Err(Failure::invalid(format!(
+                    "name the elements to remove by their ids (\"innerword get <board>\" lists them)\nusage: {}\nSee \"innerword board remove --help\".",
+                    crate::spec::usage(spec)
+                )));
+            }
+            arguments.set("board", arg(0)).set("ids", json!(ids));
+            call("remove_from_board", arguments)
+        }
         "image add" => {
             arguments
                 .set("document", arg(0))
@@ -687,12 +808,12 @@ pub fn run(
                 named.set("document", document);
                 let info = call("document_info", named)?;
                 if info.data["document"]["id"] != reply.data["document"]["id"] {
-                    // `doc:12`, or `page:12` for a page.
+                    // `doc:12`, `page:12` for a page, `board:12` for a whiteboard.
                     let named = |document: &serde_json::Value| {
-                        let prefix = if document["kind"] == "page" {
-                            "page"
-                        } else {
-                            "doc"
+                        let prefix = match document["kind"].as_str() {
+                            Some("page") => "page",
+                            Some("board") => "board",
+                            _ => "doc",
                         };
                         format!(
                             "{prefix}:{} \"{}\"",

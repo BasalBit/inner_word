@@ -24,9 +24,20 @@ innerword-agent.workspace = true
 # tool.
 innerword-page.workspace = true
 innerword-web.workspace = true
+# The child of a whiteboard's PDF (`innerword __board-pdf`): the directory the command
+# layer writes (`innerword_board::export_dir`), and the bundle of Excalidraw with its
+# export page (`innerword_board_web::Assets`), which WebKit loads in that child.
+innerword-board.workspace = true
+innerword-board-web.workspace = true
 # The user id, for the folder the rule list of WebKit is kept in.
 libc.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
 innerword-store.workspace = true
+# The text and the page size of a whiteboard's PDF, as PDFKit reads them (the case that
+# runs the real child).
+objc.workspace = true
+# The id the library stores a picture under (the first 16 bytes of its SHA-256), to look
+# for it in images.db.
+sha2 = "0.10"

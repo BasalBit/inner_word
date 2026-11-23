@@ -714,6 +714,14 @@ fn main() -> ExitCode {
     if wanted("bundle_glue") {
         bundle::the_glue_keeps_what_the_writer_does(&mut report, &rules);
     }
+    // A whiteboard's PDF against what the screen shows.
+    if wanted("board_pdf") {
+        bundle::the_pdf_is_the_screen(&mut report, &rules);
+    }
+    // The Edit menu on a whiteboard, with a pasteboard of the test's own.
+    if wanted("board_edit") {
+        bundle::the_edit_menu_on_a_whiteboard(&mut report, &rules);
+    }
     // The converter of agents' skeletons (innerword-board) against Excalidraw's own.
     if wanted("crosscheck") {
         crosscheck::the_converter_against_excalidraw(&mut report, &rules);

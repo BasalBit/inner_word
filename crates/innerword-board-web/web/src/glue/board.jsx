@@ -16,7 +16,7 @@ import { post, reportError } from "./bridge.js";
 import { boardCalls, defineCalls } from "./calls.js";
 import { loadFontsFor } from "./fonts.js";
 import { installKeys, watchTheInterface } from "./keys.js";
-import { itemsOfStored, libraryChanged, postLibrary, servedLibrary } from "./library.js";
+import { itemsOfStored, libraryChanged, postLibrary, servedLibrary, whenLibraryWaitingChanges } from "./library.js";
 import { onLinkOpen, withKeptLinks } from "./links.js";
 import { loadPictures } from "./pictures.js";
 import { NEVER_KEPT, board, currentRev, markReady, recordVersions, withoutNeverKept } from "./scene.js";
@@ -194,6 +194,7 @@ export async function startBoard() {
   installKeys();
   defineCalls(boardCalls, { needsReady: true });
   installGestureTracking({ onHidden: postLibrary });
+  whenLibraryWaitingChanges(sendStatus);
 
   const [stored, storedLibrary] = await Promise.all([fetchJson("./board.json"), fetchJson("./library.json")]);
   // The app always serves board.json (4.3). Without a stored scene to start from, the page

@@ -1,7 +1,8 @@
 // The export page (export.html), loaded offscreen to make a whiteboard's PDF
 // (docs/whiteboard-design.md, section 5): the stored scene drawn by Excalidraw's own
 // exportToSvg, in light colours, at scale 1 (or less when a side would pass maxSide), with
-// its fonts inlined, and the page then showing that SVG alone at (0, 0).
+// its fonts inlined, mended where Excalidraw's SVG differs from its canvas (a frame's clip,
+// the room around an arrow's label), and the page then showing that SVG alone at (0, 0).
 import { convertToExcalidrawElements, exportToSvg, restore, restoreElements } from "@excalidraw/excalidraw";
 import { defineCalls } from "./calls.js";
 import { loadFontsFor } from "./fonts.js";
@@ -17,6 +18,42 @@ async function storedScene() {
 
 function sizeOf(svg) {
   return { width: parseFloat(svg.getAttribute("width")), height: parseFloat(svg.getAttribute("height")) };
+}
+
+const SVG_NS = "http://www.w3.org/2000/svg";
+
+/** Excalidraw 0.18.1's `BOUND_TEXT_PADDING`: the room the canvas leaves around the label of
+ * an arrow or a line. */
+const BOUND_TEXT_PADDING = 5;
+
+/** What Excalidraw's exportToSvg draws otherwise than its canvas, mended so that the PDF is
+ * what the writer sees (docs/whiteboard-design.md, section 5):
+ *
+ * - A frame's children are wrapped in a group whose clip is set with
+ *   `setAttributeNS(SVG_NS, "clip-path", …)`: an attribute in the SVG namespace, which no
+ *   renderer reads (presentation attributes have none), so the children were drawn whole
+ *   where the canvas cuts them at the frame's edge. The attribute is set again plainly.
+ * - The line of an arrow or a line is masked out under its label, by the label's box
+ *   exactly, where the canvas clears the box and `BOUND_TEXT_PADDING` around it: the line
+ *   ran up to the letters. The hole of each such mask is made as large as the canvas's. */
+function asTheCanvasDraws(svg) {
+  for (const group of svg.querySelectorAll("g")) {
+    const clip = group.getAttributeNS(SVG_NS, "clip-path");
+    if (clip !== null) {
+      group.removeAttributeNS(SVG_NS, "clip-path");
+      group.setAttribute("clip-path", clip);
+    }
+  }
+  for (const hole of svg.querySelectorAll('mask[id^="mask-"] > rect[fill="#000"]')) {
+    const number = (name) => parseFloat(hole.getAttribute(name));
+    const [x, y, width, height] = ["x", "y", "width", "height"].map(number);
+    if (![x, y, width, height].every(Number.isFinite)) continue;
+    hole.setAttribute("x", `${x - BOUND_TEXT_PADDING}`);
+    hole.setAttribute("y", `${y - BOUND_TEXT_PADDING}`);
+    hole.setAttribute("width", `${width + 2 * BOUND_TEXT_PADDING}`);
+    hole.setAttribute("height", `${height + 2 * BOUND_TEXT_PADDING}`);
+  }
+  return svg;
 }
 
 function showOnly(svg) {
@@ -69,7 +106,7 @@ const exportCalls = {
       svg = await draw(maxSide / longest);
       size = sizeOf(svg);
     }
-    showOnly(svg);
+    showOnly(asTheCanvasDraws(svg));
     return size;
   },
 

@@ -211,13 +211,14 @@ impl Scene {
         })
     }
 
-    /// The size of the whiteboard's PDF page as Rust estimates it (section 5): the drawn
-    /// area and `padding` on each side, the whole scaled down when its longer side would
-    /// pass `max_side`, each side rounded up as WebKit's page is. `None` for an empty
+    /// The size of the whiteboard's PDF page as Rust estimates it (section 5): what the PDF
+    /// shows ([`Scene::pdf_bounds`]: the frames with their names, the elements in no frame)
+    /// and `padding` on each side, the whole scaled down when its longer side would pass
+    /// `max_side`, each side rounded up as WebKit's page is. `None` for an empty
     /// whiteboard. Text sizes are Rust's estimates, so a page whose extremes are texts can
     /// differ from WebKit's by a few points.
     pub fn pdf_size(&self, padding: f64, max_side: f64) -> Option<(f64, f64)> {
-        let bounds = self.bounds()?;
+        let bounds = self.pdf_bounds()?;
         let (mut width, mut height) = (bounds.width + 2.0 * padding, bounds.height + 2.0 * padding);
         let longest = width.max(height);
         if longest > max_side && longest > 0.0 {

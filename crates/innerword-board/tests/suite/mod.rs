@@ -2,6 +2,7 @@ mod add;
 mod common;
 mod corpus;
 mod delta;
+mod frames;
 mod library;
 mod remove;
 mod robust;

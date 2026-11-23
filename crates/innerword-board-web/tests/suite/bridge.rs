@@ -58,7 +58,7 @@ fn a_file() {
 #[test]
 fn a_status_as_the_page_writes_it() {
     let m = parse(
-        r#"{"v":1,"kind":"status","rev":31,"posted":30,"editing":false,"composing":true,"pointer":"down","zoom":1.25,"scrollX":-120.5,"scrollY":40,"elements":14,"selected":2,"tooLarge":false}"#,
+        r#"{"v":1,"kind":"status","rev":31,"posted":30,"editing":false,"composing":true,"pointer":"down","zoom":1.25,"scrollX":-120.5,"scrollY":40,"elements":14,"selected":2,"tooLarge":false,"libraryWaiting":true}"#,
     )
     .unwrap();
     let Message::Status(status) = m else { panic!() };
@@ -76,6 +76,7 @@ fn a_status_as_the_page_writes_it() {
             elements: 14,
             selected: 2,
             too_large: false,
+            library_waiting: true,
         }
     );
     assert!(status.holds_more());
@@ -101,6 +102,21 @@ fn what_holds_more() {
     assert!(Status { pointer_down: true, ..quiet.clone() }.holds_more());
     // Composing alone holds nothing unposted (the agents' wait is the app's).
     assert!(!Status { composing: true, ..quiet.clone() }.holds_more());
+    // A waiting change of the shape library is said apart: it is not the drawing's.
+    assert!(!Status { library_waiting: true, ..quiet.clone() }.holds_more());
+}
+
+#[test]
+fn a_waiting_library_change_is_in_the_status_the_glue_writes() {
+    let status = Status { library_waiting: true, ..Status::default() };
+    assert_eq!(serde_json::to_value(&status).unwrap()["libraryWaiting"], true);
+    let Message::Status(old) = parse(r#"{"v":1,"kind":"status","rev":3,"posted":3}"#).unwrap() else {
+        panic!()
+    };
+    assert!(!old.library_waiting, "a status without the field waits for nothing");
+    let glue = std::fs::read_to_string(super::web().join("src/glue/autosave.js")).unwrap();
+    assert!(glue.contains("libraryWaiting: libraryWaiting(),"));
+    assert!(glue.contains("status.tooLarge, status.libraryWaiting].join"), "a change of it is posted at once");
 }
 
 #[test]

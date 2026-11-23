@@ -6,6 +6,7 @@
 // is edited; never while the pointer is down; at once when the page is hidden or goes.
 import { MAX_VIEW_SCENE_BYTES, fitsIn, post, postFile, postSceneText } from "./bridge.js";
 import { board, currentRev, namedFileIds, recordVersions, sceneJson, selectedIds } from "./scene.js";
+import { libraryWaiting } from "./library.js";
 
 const KEY_QUIET_MS = 150;
 const EDITING_EVERY_MS = 1000;
@@ -155,6 +156,7 @@ export function statusNow() {
     elements: elements.filter((e) => !e.isDeleted).length,
     selected: appState ? selectedIds(appState, elements).length : 0,
     tooLarge: board.tooLarge,
+    libraryWaiting: libraryWaiting(),
   };
 }
 
@@ -168,7 +170,7 @@ let statusTimer = null;
 export function sendStatus() {
   if (!board.isReady) return;
   const status = statusNow();
-  const key = [status.posted, status.editing, status.composing, status.pointer, status.elements, status.selected, status.tooLarge].join("|")
+  const key = [status.posted, status.editing, status.composing, status.pointer, status.elements, status.selected, status.tooLarge, status.libraryWaiting].join("|")
     + (status.pointer === "up" ? `|${status.rev}` : "");
   const viewKey = `${status.zoom}|${status.scrollX}|${status.scrollY}|${status.rev}`;
   if (key !== lastStatusKey) {

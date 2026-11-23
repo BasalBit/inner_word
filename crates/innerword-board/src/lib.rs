@@ -10,7 +10,8 @@
 //!   `embeddable`, `magicframe`) are left out.
 //! - What is read of a scene: its text in reading order ([`Scene::text`], what the library
 //!   indexes), its summary, its listing for agents and the assistant ([`Scene::listing`],
-//!   [`Scene::listed`]), its bounds and the size of its PDF ([`Scene::pdf_size`]).
+//!   [`Scene::listed`]), its bounds, what its PDF shows ([`Scene::pdf_bounds`]: a frame clips its
+//!   children) and the size of its PDF ([`Scene::pdf_size`]).
 //! - What agents write: skeletons made into Excalidraw 0.18.1's elements ([`add`]), changes
 //!   by id ([`update`]) and removals ([`remove`]), in pure Rust, with every value derived
 //!   from the input ([`HashedMaking`]), never random.
@@ -30,6 +31,7 @@ pub mod metrics;
 
 mod delta;
 mod file_hex;
+mod frames;
 mod fractional;
 mod geometry;
 mod json;

@@ -1085,6 +1085,56 @@ fn a_change_to_what_an_element_already_is_changes_nothing() {
     assert_eq!(after.element("db").unwrap().x(), 420.0);
 }
 
+/// What an agent leaves sticking out of a frame is a warning (the screen and the PDF cut it
+/// at the frame's edge): from `update_board`, a dry run included, and from `create_board`
+/// with a frame of a given size; a change that leaves everything inside says nothing.
+#[test]
+fn what_sticks_out_of_a_frame_is_said() {
+    let fx = fixture();
+    let framed = format!(
+        "{},{{\"type\":\"frame\",\"id\":\"backend\",\"children\":[\"api\",\"db\",\"reads\"],\"name\":\"backend\"}}]",
+        PLAN.trim_end().trim_end_matches(']')
+    );
+    let made = board(&fx, None, "Plan", &framed);
+    assert!(made.warnings.is_empty(), "{made:?}");
+    let plan = made.board.id;
+    let sentence = "db sticks out of frame backend: what is outside is not shown.";
+    let moved = |write: WriteOptions| UpdateBoardRequest {
+        board: plan.into(),
+        changes: changes(r#"[{"id":"db","dy":60}]"#),
+        write,
+    };
+    let tried = fx.library.update_board(&moved(dry())).unwrap();
+    assert_eq!(tried.warnings, vec![sentence.to_string()], "{tried:?}");
+    fx.clock.advance_ms(1000);
+    let done = fx.library.update_board(&moved(claude())).unwrap();
+    assert!(done.written.changed, "{done:?}");
+    assert_eq!(done.warnings, vec![sentence.to_string()], "{done:?}");
+    fx.clock.advance_ms(1000);
+    let back = fx
+        .library
+        .update_board(&UpdateBoardRequest {
+            board: plan.into(),
+            changes: changes(r#"[{"id":"db","dy":-60}]"#),
+            write: claude(),
+        })
+        .unwrap();
+    assert!(back.warnings.is_empty(), "{back:?}");
+
+    // A frame of a given size made around what does not fit in it.
+    let small = board(
+        &fx,
+        None,
+        "Small",
+        r#"[{"type":"rectangle","id":"wide","x":0,"y":0,"width":300,"height":50},
+            {"type":"frame","id":"f","x":0,"y":0,"width":100,"height":100,"children":["wide"]}]"#,
+    );
+    assert_eq!(
+        small.warnings,
+        vec!["wide sticks out of frame f: what is outside is not shown.".to_string()]
+    );
+}
+
 /// A change that undoes what another change of the same request did is a change: it is
 /// judged against the drawing as it stood just before it, not by where its element ends.
 #[test]

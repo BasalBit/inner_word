@@ -1410,7 +1410,7 @@ fn shape_library(report: &mut Report, assets: &Assets, elements: &Value, rules: 
 // here, where they run with every other case: against the dist of before those fixes
 // (5f9f3b1 and 3008498), 15 of their checks fail, at least one in each case.
 
-/// The eight cases.
+/// The nine cases.
 pub(super) fn the_glue_keeps_what_the_writer_does(report: &mut Report, rules: &Path) {
     let assets = match Assets::find() {
         Ok(assets) => assets,
@@ -1425,6 +1425,7 @@ pub(super) fn the_glue_keeps_what_the_writer_does(report: &mut Report, rules: &P
     adopt_while_a_new_text_is_typed(report, &assets, rules);
     a_start_without_a_stored_scene(report, &assets, rules);
     a_library_longer_than_one_message(report, &assets, rules);
+    a_library_change_waiting_its_post(report, &assets, rules);
     a_picture_longer_than_one_message(report, &assets, rules);
     what_a_paste_brings_is_kept_within_bounds(report, &assets, rules);
 }
@@ -1979,6 +1980,15 @@ fn a_library_longer_than_one_message(report: &mut Report, assets: &Assets, rules
             view.stats()
         ),
     );
+    let waiting_before = posted(&events, "status")
+        .last()
+        .map(|s| s["libraryWaiting"].clone());
+    report.check(
+        waiting_before == Some(json!(true)),
+        &format!(
+            "{case}: the status says a change of the library is waiting while it is too large to post ({waiting_before:?})"
+        ),
+    );
     let collected =
         call(&view, calls::COLLECT, "{}").and_then(|text| calls::answer::<calls::Collected>(&text));
     let items: Vec<Value> = collected
@@ -1987,6 +1997,15 @@ fn a_library_longer_than_one_message(report: &mut Report, assets: &Assets, rules
         .and_then(|c| c.library.as_ref())
         .and_then(|library| serde_json::from_str(library.items.get()).ok())
         .unwrap_or_default();
+    report.check(
+        collected
+            .as_ref()
+            .is_ok_and(|c| !c.status.library_waiting),
+        &format!(
+            "{case}: the status collect answers says nothing waits once it brought the library ({:?})",
+            collected.as_ref().map(|c| c.status.library_waiting)
+        ),
+    );
     report.check(
         items.len() == 1 && items[0]["id"] == "huge",
         &format!(
@@ -1997,6 +2016,104 @@ fn a_library_longer_than_one_message(report: &mut Report, assets: &Assets, rules
                 .err()
                 .map(|e| format!(", {e}"))
                 .unwrap_or_default()
+        ),
+    );
+}
+
+/// A change of the shape library waits 300 ms before it is posted, and the status says so
+/// (`libraryWaiting`, 4.6 and 4.15), so that a deliberate end inside those 300 ms asks
+/// `collect`, which brings it at once: a status that says so is posted at the change, the
+/// state call says so, collect brings the library and answers false, and nothing is posted
+/// after it; without collect, the post comes and a status that says false after it.
+fn a_library_change_waiting_its_post(report: &mut Report, assets: &Assets, rules: &Path) {
+    let case = "a library change waiting its post";
+    let source = BundleSource::new(assets);
+    three_rectangles(&source);
+    let host = Host::new();
+    let Some((view, events)) =
+        ready_view(report, &host, case, "board-48-1700000000000", source, rules)
+    else {
+        return;
+    };
+    let before = page_json(&view, calls::STATE);
+    report.check(
+        before["libraryWaiting"] == false,
+        &format!("{case}: nothing waits at the start ({})", short_json(&before)),
+    );
+    // Excalidraw's own updateLibrary: onLibraryChange, as a change in its sidebar makes it.
+    let change = |id: &str| {
+        format!(
+            "const api = window.innerwordBoard.api;
+             const base = api.getSceneElements()[0];
+             await api.updateLibrary({{ libraryItems: [{{ id: '{id}', status: 'unpublished', created: 1, elements: [{{ ...base, id: 'lib-{id}' }}] }}], merge: false, openLibraryMenu: false }});"
+        )
+    };
+    // A change, then at once the state and collect, well inside the 300 ms.
+    let statuses_before = posted(&events, "status").len();
+    let answered = page_json(
+        &view,
+        &format!(
+            "{}
+             const state = await window.innerwordBoard.call('state', '{{}}');
+             const collected = await window.innerwordBoard.call('collect', '{{}}');
+             return JSON.stringify({{ state: JSON.parse(state), collected: JSON.parse(collected) }});",
+            change("first")
+        ),
+    );
+    let posted_at_change: Vec<Value> = posted(&events, "status")
+        .into_iter()
+        .skip(statuses_before)
+        .collect();
+    report.check(
+        posted_at_change.iter().any(|s| s["libraryWaiting"] == true),
+        &format!(
+            "{case}: a status that says a library change waits is posted at the change ({} statuses since)",
+            posted_at_change.len()
+        ),
+    );
+    let state = answered["state"].clone();
+    let collected = answered["collected"].clone();
+    report.check(
+        state["libraryWaiting"] == true,
+        &format!("{case}: the state call says it waits ({})", short_json(&answered["state"])),
+    );
+    let items = collected["library"]["items"].as_array().cloned().unwrap_or_default();
+    report.check(
+        items.len() == 1
+            && items[0]["id"] == "first"
+            && collected["status"]["libraryWaiting"] == false,
+        &format!(
+            "{case}: collect brings the waiting change at once, and its status says nothing waits ({} items; {})",
+            items.len(),
+            short_json(&collected["status"])
+        ),
+    );
+    let posts_before = posted(&events, "library").len();
+    wait(Duration::from_millis(700));
+    report.check(
+        posted(&events, "library").len() == posts_before,
+        &format!(
+            "{case}: what collect brought is not posted again ({} library posts)",
+            posted(&events, "library").len()
+        ),
+    );
+    // Without collect: the post comes 300 ms later, and a status that says false after it.
+    let _ = call(&view, &format!("{}\nreturn '1';", change("second")), "{}");
+    let waiting = page_json(&view, calls::STATE);
+    wait(Duration::from_millis(700));
+    let library_posts = posted(&events, "library");
+    let after = page_json(&view, calls::STATE);
+    let last_status = posted(&events, "status").last().cloned().unwrap_or_default();
+    report.check(
+        waiting["libraryWaiting"] == true
+            && library_posts.last().is_some_and(|p| p["items"][0]["id"] == "second")
+            && after["libraryWaiting"] == false
+            && last_status["libraryWaiting"] == false,
+        &format!(
+            "{case}: without collect it waits, is posted, and then nothing waits (before {}, after {}, last status {})",
+            short_json(&waiting),
+            short_json(&after),
+            short_json(&last_status)
         ),
     );
 }
@@ -2150,4 +2267,553 @@ fn short_json(value: &Value) -> String {
     } else {
         text
     }
+}
+
+// ---------------------------------------------------------------------------
+// The whiteboard's PDF against the screen: frames clip, arrow labels.
+
+/// A scene made by `innerword_board` from skeletons, then changed, as an agent makes one.
+fn agents_scene(skeletons: &str, changes: &str) -> innerword_board::Scene {
+    use innerword_board::{ElementChange, HashedMaking, Pictures, Scene, Skeleton};
+    let skeletons: Vec<Skeleton> = serde_json::from_str(skeletons).expect("skeletons");
+    let mut scene = Scene::empty();
+    let mut making = HashedMaking::new(&[b"pdf-frames"], 1_795_432_196_771);
+    innerword_board::add(&mut scene, &skeletons, &Pictures::new(), &mut making).expect("add");
+    let changes: Vec<ElementChange> = serde_json::from_str(changes).expect("changes");
+    if !changes.is_empty() {
+        innerword_board::update(&mut scene, &changes, &mut making).expect("update");
+    }
+    scene
+}
+
+/// What a case reads of the SVG the export page shows: the SVG, how many groups are clipped
+/// as a renderer reads it (a plain `clip-path`) and how many only in the SVG namespace, the
+/// first frame's clip rectangle and the first arrow's mask hole, `[x, y, width, height]`
+/// in points.
+const MEASURE_EXPORT: &str = r##"const svg = document.querySelector('svg');
+const groups = [...svg.querySelectorAll('g')];
+const ns = 'http://www.w3.org/2000/svg';
+const clipped = groups.filter((g) => g.getAttributeNS(null, 'clip-path')).length;
+const unclipped = groups.filter((g) => g.getAttributeNS(ns, 'clip-path') !== null).length;
+const frameRect = svg.querySelector('clipPath rect');
+const at = frameRect && /translate\(([-\d.e]+)[ ,]+([-\d.e]+)\)/.exec(frameRect.getAttribute('transform') || '');
+const frame = at ? [parseFloat(at[1]), parseFloat(at[2]), parseFloat(frameRect.getAttribute('width')), parseFloat(frameRect.getAttribute('height'))] : null;
+const holeRect = svg.querySelector('mask[id^="mask-"] > rect[fill="#000"]');
+const hole = holeRect ? ['x', 'y', 'width', 'height'].map((k) => parseFloat(holeRect.getAttribute(k))) : null;
+return JSON.stringify(Object.assign(size, { svg: svg.outerHTML, clipped, unclipped, frame, hole }));"##;
+
+/// The export page's PDF of a stored scene, and the SVG it showed.
+fn export_pdf(
+    assets: &Assets,
+    rules: &Path,
+    scene: &Value,
+) -> Result<(Value, innerword_web::PrintedPdf), String> {
+    let source = BundleSource::new(assets);
+    source.set_json(SCENE_PATH, scene);
+    let script = format!(
+        "const size = JSON.parse(await (async () => {{ {body} }})());\n{MEASURE}",
+        body = calls::EXPORT_LAYOUT,
+        MEASURE = MEASURE_EXPORT
+    );
+    let output = run_script_blocking(ScriptInput {
+        source,
+        entry: EXPORT_ENTRY.to_string(),
+        script,
+        argument_json: calls::export_argument(),
+        pdf: true,
+        csp: board_export_policy(),
+        limit: Duration::from_secs(60),
+        rules_dir: rules.to_path_buf(),
+    })?;
+    let answer: Value = serde_json::from_str(&output.value).map_err(|e| e.to_string())?;
+    let pdf = output.pdf.ok_or("no PDF")?;
+    Ok((answer, pdf))
+}
+
+/// A PDF's first page drawn at `scale` pixels to the point on white, by CoreGraphics:
+/// (width, height, grey levels from the top left, 0 black to 255 white).
+fn pdf_greys(bytes: &[u8], scale: f64) -> Option<(usize, usize, Vec<u8>)> {
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct CGRect {
+        x: f64,
+        y: f64,
+        width: f64,
+        height: f64,
+    }
+    #[link(name = "CoreGraphics", kind = "framework")]
+    unsafe extern "C" {
+        fn CGDataProviderCreateWithData(
+            info: *mut c_void,
+            data: *const c_void,
+            size: usize,
+            release: *const c_void,
+        ) -> *mut c_void;
+        fn CGDataProviderRelease(provider: *mut c_void);
+        fn CGPDFDocumentCreateWithProvider(provider: *mut c_void) -> *mut c_void;
+        fn CGPDFDocumentRelease(document: *mut c_void);
+        fn CGPDFDocumentGetPage(document: *mut c_void, number: usize) -> *mut c_void;
+        fn CGPDFPageGetBoxRect(page: *mut c_void, box_kind: i32) -> CGRect;
+        fn CGColorSpaceCreateDeviceGray() -> *mut c_void;
+        fn CGColorSpaceRelease(space: *mut c_void);
+        fn CGBitmapContextCreate(
+            data: *mut c_void,
+            width: usize,
+            height: usize,
+            bits_per_component: usize,
+            bytes_per_row: usize,
+            space: *mut c_void,
+            bitmap_info: u32,
+        ) -> *mut c_void;
+        fn CGContextSetGrayFillColor(context: *mut c_void, gray: f64, alpha: f64);
+        fn CGContextFillRect(context: *mut c_void, rect: CGRect);
+        fn CGContextScaleCTM(context: *mut c_void, sx: f64, sy: f64);
+        fn CGContextDrawPDFPage(context: *mut c_void, page: *mut c_void);
+        fn CGContextRelease(context: *mut c_void);
+    }
+    // SAFETY: CoreGraphics' own calls; the bytes outlive the document, everything made here
+    // is released here.
+    unsafe {
+        let provider = CGDataProviderCreateWithData(
+            std::ptr::null_mut(),
+            bytes.as_ptr() as *const c_void,
+            bytes.len(),
+            std::ptr::null(),
+        );
+        let document = CGPDFDocumentCreateWithProvider(provider);
+        CGDataProviderRelease(provider);
+        if document.is_null() {
+            return None;
+        }
+        let page = CGPDFDocumentGetPage(document, 1);
+        if page.is_null() {
+            CGPDFDocumentRelease(document);
+            return None;
+        }
+        let media = CGPDFPageGetBoxRect(page, 0);
+        let (width, height) = (
+            (media.width * scale).round() as usize,
+            (media.height * scale).round() as usize,
+        );
+        let mut pixels = vec![255u8; width * height];
+        let space = CGColorSpaceCreateDeviceGray();
+        let context = CGBitmapContextCreate(
+            pixels.as_mut_ptr() as *mut c_void,
+            width,
+            height,
+            8,
+            width,
+            space,
+            0,
+        );
+        CGColorSpaceRelease(space);
+        if !context.is_null() {
+            CGContextSetGrayFillColor(context, 1.0, 1.0);
+            CGContextFillRect(
+                context,
+                CGRect {
+                    x: 0.,
+                    y: 0.,
+                    width: width as f64,
+                    height: height as f64,
+                },
+            );
+            CGContextScaleCTM(context, scale, scale);
+            CGContextDrawPDFPage(context, page);
+            CGContextRelease(context);
+        }
+        CGPDFDocumentRelease(document);
+        Some((width, height, pixels))
+    }
+}
+
+/// The darkest grey in a rectangle of points (x, y from the top left, at `scale`).
+fn darkest(page: &(usize, usize, Vec<u8>), scale: f64, rect: (f64, f64, f64, f64)) -> u8 {
+    let (width, height, pixels) = page;
+    let (x0, y0) = ((rect.0 * scale).floor().max(0.) as usize, (rect.1 * scale).floor().max(0.) as usize);
+    let x1 = (((rect.0 + rect.2) * scale).ceil() as usize).min(*width);
+    let y1 = (((rect.1 + rect.3) * scale).ceil() as usize).min(*height);
+    let mut out = 255;
+    for y in y0..y1 {
+        for x in x0..x1 {
+            out = out.min(pixels[y * width + x]);
+        }
+    }
+    out
+}
+
+/// A rectangle `[x, y, width, height]` the export's measure answered under `key`.
+fn svg_rect(answer: &Value, key: &str) -> Option<(f64, f64, f64, f64)> {
+    let r = &answer[key];
+    Some((r[0].as_f64()?, r[1].as_f64()?, r[2].as_f64()?, r[3].as_f64()?))
+}
+
+/// What Excalidraw's canvas shows, the PDF shows (`docs/whiteboard-design.md`, section 5):
+/// an agent moved an ellipse half out of its frame ("db", 9.4's drawing); the screen cuts
+/// it at the frame's edge, and so must the PDF (Excalidraw's SVG wrote the clip as an
+/// attribute no renderer reads), and the page is the size `Scene::pdf_size` says (the frame
+/// with its name, not the part of the ellipse outside it). The arrow's line stops short of
+/// its label by Excalidraw's `BOUND_TEXT_PADDING`, as on the canvas (its SVG cut the line at
+/// the letters).
+pub(super) fn the_pdf_is_the_screen(report: &mut Report, rules: &Path) {
+    let assets = match Assets::find() {
+        Ok(assets) => assets,
+        Err(why) => {
+            report.check(false, &format!("the whiteboard's bundle is found ({why})"));
+            return;
+        }
+    };
+    let scene = agents_scene(
+        r##"[
+  {"type":"rectangle","id":"api","x":100,"y":100,"width":160,"height":80,"label":{"text":"API"}},
+  {"type":"ellipse","id":"db","x":400,"y":100,"width":160,"height":80,"label":{"text":"Postgres"}},
+  {"type":"arrow","id":"reads","x":260,"y":140,"width":140,"height":0,"start":{"id":"api"},"end":{"id":"db"},"label":{"text":"reads"}},
+  {"type":"frame","id":"backend","children":["api","db","reads"],"name":"backend"}
+]"##,
+        r#"[{"id":"db","dy":60}]"#,
+    );
+    let stored: Value = serde_json::from_str(&scene.to_stored()).unwrap();
+    let (answer, pdf) = match export_pdf(&assets, rules, &stored) {
+        Ok(made) => made,
+        Err(why) => {
+            report.check(false, &format!("the export page makes a PDF of a frame ({why})"));
+            return;
+        }
+    };
+    if let Some(dir) = std::env::var_os("INNERWORD_WEB_PDF_DUMP") {
+        let dir = PathBuf::from(dir);
+        std::fs::create_dir_all(&dir).ok();
+        std::fs::write(dir.join("frames.pdf"), &pdf.bytes).ok();
+        std::fs::write(dir.join("frames.svg"), answer["svg"].as_str().unwrap_or("")).ok();
+    }
+    let rust = scene.pdf_size(calls::EXPORT_PADDING, calls::EXPORT_MAX_SIDE);
+    report.check(
+        rust.is_some_and(|(w, h)| (w - pdf.paper.0).abs() < 1.0 && (h - pdf.paper.1).abs() < 1.0),
+        &format!(
+            "a child half out of its frame: the PDF's page is the size Scene::pdf_size says, the frame with its name and the margin ({:?} against {rust:?})",
+            pdf.paper
+        ),
+    );
+    let svg = answer["svg"].as_str().unwrap_or_default();
+    report.check(
+        !svg.is_empty() && answer["unclipped"] == 0 && answer["clipped"].as_u64().unwrap_or(0) >= 3,
+        &format!(
+            "every child of the frame is drawn under the frame's clip, as a renderer reads it ({} clipped, {} not)",
+            answer["clipped"], answer["unclipped"]
+        ),
+    );
+    const SCALE: f64 = 2.0;
+    let Some(page) = pdf_greys(&pdf.bytes, SCALE) else {
+        report.check(false, "the PDF of the frame can be drawn");
+        return;
+    };
+    let frame = svg_rect(&answer, "frame");
+    let below = frame.map(|(x, y, w, h)| darkest(&page, SCALE, (x, y + h + 2.0, w, pdf.paper.1 - (y + h + 2.0))));
+    let inside = frame.map(|(x, y, w, h)| darkest(&page, SCALE, (x + 2.0, y + 2.0, w - 4.0, h - 4.0)));
+    report.check(
+        below == Some(255) && inside.is_some_and(|d| d < 100),
+        &format!(
+            "the PDF draws nothing of the ellipse below the frame's edge, as the screen does (frame {frame:?}: darkest below {below:?}, inside {inside:?})"
+        ),
+    );
+    // The hole the mask leaves under the label: the label's box and the canvas's room
+    // around it. Between the two, nothing is drawn; the line is there just outside.
+    let hole = svg_rect(&answer, "hole");
+    let ring = hole.map(|(x, y, w, h)| {
+        let pad = 5.0;
+        [
+            darkest(&page, SCALE, (x + 0.5, y + pad, pad - 1.5, h - 2.0 * pad)),
+            darkest(&page, SCALE, (x + w - pad + 1.0, y + pad, pad - 1.5, h - 2.0 * pad)),
+        ]
+    });
+    let line = hole.map(|(x, y, _, h)| darkest(&page, SCALE, (x - 6.0, y - 6.0, 5.0, h + 12.0)));
+    report.check(
+        ring.is_some_and(|r| r.iter().all(|&d| d == 255)) && line.is_some_and(|d| d < 100),
+        &format!(
+            "the arrow's line stops {} pt short of its label, as on the canvas (hole {hole:?}: darkest in the room left and right {ring:?}, the line beside it {line:?})",
+            5
+        ),
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The Edit menu on a whiteboard, with a pasteboard of the test's own.
+
+/// For the length of a case, `+[NSPasteboard generalPasteboard]` and `+[NSPasteboard
+/// pasteboardWithName:]` with the general pasteboard's name answer a pasteboard of the
+/// test's own, made with a unique name: WebKit reads and writes the pasteboard in the UI
+/// process (this one), through `PlatformPasteboard`, which asks AppKit for it by name, so a
+/// paste: and a copy: of the view go to that pasteboard and the user's is never touched.
+/// Dropping it puts AppKit's own methods back and releases the pasteboard.
+struct OwnPasteboard {
+    board: Id,
+    general_name: Id,
+    with_name: (*mut objc::runtime::Method, objc::runtime::Imp),
+    general: (*mut objc::runtime::Method, objc::runtime::Imp),
+}
+
+#[link(name = "objc")]
+unsafe extern "C" {
+    fn class_getClassMethod(cls: *const objc::runtime::Class, sel: Sel) -> *mut objc::runtime::Method;
+    fn method_setImplementation(
+        method: *mut objc::runtime::Method,
+        imp: objc::runtime::Imp,
+    ) -> objc::runtime::Imp;
+}
+
+/// The pasteboard of the test and the name of the general one, while an [`OwnPasteboard`]
+/// lives (read by the replaced class methods, on any thread).
+static OWN_BOARD: std::sync::atomic::AtomicPtr<Object> =
+    std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+static GENERAL_NAME: std::sync::atomic::AtomicPtr<Object> =
+    std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+/// AppKit's own `pasteboardWithName:`, for every other name.
+static APPKIT_WITH_NAME: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+extern "C" fn own_general(_class: &objc::runtime::Class, _sel: Sel) -> Id {
+    OWN_BOARD.load(Ordering::SeqCst)
+}
+
+extern "C" fn own_with_name(class: &objc::runtime::Class, sel: Sel, name: Id) -> Id {
+    let general = GENERAL_NAME.load(Ordering::SeqCst);
+    let is_general: BOOL = if name.is_null() || general.is_null() {
+        NO
+    } else {
+        unsafe { msg_send![name, isEqualToString: general] }
+    };
+    if is_general != NO {
+        return OWN_BOARD.load(Ordering::SeqCst);
+    }
+    // SAFETY: AppKit's implementation of this very method, saved before it was replaced.
+    unsafe {
+        let appkit: extern "C" fn(&objc::runtime::Class, Sel, Id) -> Id =
+            std::mem::transmute(APPKIT_WITH_NAME.load(Ordering::SeqCst));
+        appkit(class, sel, name)
+    }
+}
+
+impl OwnPasteboard {
+    fn new() -> OwnPasteboard {
+        // SAFETY: AppKit's and the Objective-C runtime's own; undone in `drop`.
+        unsafe {
+            let class = class!(NSPasteboard);
+            let board: Id = msg_send![class, pasteboardWithUniqueName];
+            let _: Id = msg_send![board, retain];
+            let general: Id = msg_send![class, generalPasteboard];
+            let general_name: Id = msg_send![general, name];
+            let general_name: Id = msg_send![general_name, copy];
+            OWN_BOARD.store(board, Ordering::SeqCst);
+            GENERAL_NAME.store(general_name, Ordering::SeqCst);
+            let with_name_method = class_getClassMethod(class, sel!(pasteboardWithName:));
+            let general_method = class_getClassMethod(class, sel!(generalPasteboard));
+            let with_name_imp: objc::runtime::Imp = std::mem::transmute(
+                own_with_name as extern "C" fn(&objc::runtime::Class, Sel, Id) -> Id,
+            );
+            let general_imp: objc::runtime::Imp =
+                std::mem::transmute(own_general as extern "C" fn(&objc::runtime::Class, Sel) -> Id);
+            let appkit_with_name = method_setImplementation(with_name_method, with_name_imp);
+            APPKIT_WITH_NAME.store(appkit_with_name as usize, Ordering::SeqCst);
+            let appkit_general = method_setImplementation(general_method, general_imp);
+            OwnPasteboard {
+                board,
+                general_name,
+                with_name: (with_name_method, appkit_with_name),
+                general: (general_method, appkit_general),
+            }
+        }
+    }
+
+    /// The change count of the user's general pasteboard, asked of AppKit's own method.
+    fn general_change_count(&self) -> i64 {
+        // SAFETY: AppKit's own `generalPasteboard`, saved before it was replaced.
+        unsafe {
+            let appkit: extern "C" fn(&objc::runtime::Class, Sel) -> Id =
+                std::mem::transmute(self.general.1);
+            let general = appkit(class!(NSPasteboard), sel!(generalPasteboard));
+            msg_send![general, changeCount]
+        }
+    }
+
+    fn change_count(&self) -> i64 {
+        unsafe { msg_send![self.board, changeCount] }
+    }
+
+    /// Puts `text` alone on the test's pasteboard.
+    fn put(&self, text: &str) {
+        unsafe {
+            let _: i64 = msg_send![self.board, clearContents];
+            let string = ns_string(text);
+            let kind = ns_string("public.utf8-plain-text");
+            let _: BOOL = msg_send![self.board, setString: string forType: kind];
+        }
+    }
+
+    /// The plain text on the test's pasteboard.
+    fn text(&self) -> String {
+        unsafe {
+            let kind = ns_string("public.utf8-plain-text");
+            let string: Id = msg_send![self.board, stringForType: kind];
+            if string.is_null() {
+                return String::new();
+            }
+            let utf8: *const std::os::raw::c_char = msg_send![string, UTF8String];
+            std::ffi::CStr::from_ptr(utf8).to_string_lossy().into_owned()
+        }
+    }
+}
+
+impl Drop for OwnPasteboard {
+    fn drop(&mut self) {
+        // SAFETY: puts back what `new` replaced; releases what it retained.
+        unsafe {
+            method_setImplementation(self.with_name.0, self.with_name.1);
+            method_setImplementation(self.general.0, self.general.1);
+            OWN_BOARD.store(std::ptr::null_mut(), Ordering::SeqCst);
+            GENERAL_NAME.store(std::ptr::null_mut(), Ordering::SeqCst);
+            let _: () = msg_send![self.board, releaseGlobally];
+            let _: () = msg_send![self.board, release];
+            let _: () = msg_send![self.general_name, release];
+        }
+    }
+}
+
+/// An autoreleased `NSString`.
+fn ns_string(text: &str) -> Id {
+    unsafe {
+        let string: Id = msg_send![class!(NSString), alloc];
+        let string: Id = msg_send![string,
+            initWithBytes: text.as_ptr() as *const c_void
+            length: text.len()
+            encoding: 4usize];
+        msg_send![string, autorelease]
+    }
+}
+
+/// The Edit menu on a whiteboard, as the app's sends it (`Workspace::edit_on_board`): Paste
+/// and Copy as `paste:` and `copy:` to the whiteboard's view, its first responder (the
+/// view's `edit`, which AppKit's menu reaches through the responder chain), Select All, Undo
+/// and Redo as the glue's calls. The page gets the clipboard events and Excalidraw acts on
+/// them: a text pasted is a text on the canvas, a copy writes Excalidraw's clipboard. Every
+/// read and write goes to a pasteboard of the test's own ([`OwnPasteboard`]); the user's
+/// general pasteboard is checked untouched, and the copy is sent only once the paste showed
+/// that the pasteboard WebKit reads is the test's.
+pub(super) fn the_edit_menu_on_a_whiteboard(report: &mut Report, rules: &Path) {
+    let assets = match Assets::find() {
+        Ok(assets) => assets,
+        Err(why) => {
+            report.check(false, &format!("the whiteboard's bundle is found ({why})"));
+            return;
+        }
+    };
+    let case = "the Edit menu on a whiteboard";
+    let source = BundleSource::new(&assets);
+    three_rectangles(&source);
+    let host = Host::new();
+    let Some((view, _events)) =
+        ready_view(report, &host, case, "board-50-1700000000000", source, rules)
+    else {
+        return;
+    };
+    let pasteboard = OwnPasteboard::new();
+    let general_before = pasteboard.general_change_count();
+    let words = "Pasted from the test's own pasteboard 7f3c";
+    pasteboard.put(words);
+    let _ = call(
+        &view,
+        "window.__clip = [];
+         for (const kind of ['paste', 'copy', 'cut']) {
+           document.addEventListener(kind, (e) => window.__clip.push({ kind, text: kind === 'paste' ? e.clipboardData?.getData('text/plain') ?? null : null }), true);
+         }
+         document.querySelector('.excalidraw-container')?.focus();
+         return '';",
+        "{}",
+    );
+    view.focus();
+    let texts = |view: &WebPage| -> Vec<String> {
+        canvas(view)
+            .iter()
+            .filter(|e| e["type"] == "text" && e["isDeleted"] != true)
+            .filter_map(|e| e["text"].as_str().map(str::to_string))
+            .collect()
+    };
+    // The replaced methods answer the test's pasteboard before anything is sent.
+    let answered: (Id, Id) = unsafe {
+        let class = class!(NSPasteboard);
+        (
+            msg_send![class, generalPasteboard],
+            msg_send![class, pasteboardWithName: pasteboard.general_name],
+        )
+    };
+    if answered != (pasteboard.board, pasteboard.board) {
+        report.check(false, &format!("{case}: AppKit answers the test's pasteboard for the general one"));
+        return;
+    }
+    view.edit(EditCommand::Paste);
+    let pasted = RefCell::new(Vec::new());
+    testing::run_until(Duration::from_secs(5), || {
+        *pasted.borrow_mut() = texts(&view);
+        !pasted.borrow().is_empty()
+    });
+    let pasted = pasted.into_inner();
+    let clip = page_json(&view, "return JSON.stringify(window.__clip);");
+    let read_ours = clip
+        .as_array()
+        .is_some_and(|list| list.iter().any(|e| e["kind"] == "paste" && e["text"] == words));
+    report.check(
+        read_ours,
+        &format!("{case}: paste: reaches the page as a paste event with the text of the test's pasteboard ({clip})"),
+    );
+    report.check(
+        pasted == vec![words.to_string()],
+        &format!("{case}: Excalidraw puts the pasted text on the canvas ({pasted:?})"),
+    );
+    if read_ours {
+        // The pasted text is selected: copy: writes Excalidraw's clipboard of it.
+        let before = pasteboard.change_count();
+        view.edit(EditCommand::Copy);
+        testing::run_until(Duration::from_secs(5), || pasteboard.change_count() != before);
+        let copied = pasteboard.text();
+        let clip = page_json(&view, "return JSON.stringify(window.__clip);");
+        report.check(
+            clip.as_array().is_some_and(|l| l.iter().any(|e| e["kind"] == "copy"))
+                && copied.contains("excalidraw/clipboard")
+                && copied.contains(words),
+            &format!(
+                "{case}: copy: reaches the page and Excalidraw writes its clipboard of the selection ({} characters: {})",
+                copied.chars().count(),
+                copied.chars().take(80).collect::<String>()
+            ),
+        );
+    } else {
+        report.note(&format!(
+            "{case}: copy: was not sent, the paste did not show that WebKit reads the test's pasteboard"
+        ));
+    }
+    // Undo, Redo and Select All, as the app sends them on a whiteboard: the glue's calls.
+    let undone = call(&view, calls::UNDO, &calls::steps_argument(1));
+    wait(Duration::from_millis(300));
+    let after_undo = texts(&view);
+    let redone = call(&view, calls::REDO, &calls::steps_argument(1));
+    wait(Duration::from_millis(300));
+    let after_redo = texts(&view);
+    report.check(
+        undone.is_ok() && redone.is_ok() && after_undo.is_empty() && after_redo == vec![words.to_string()],
+        &format!("{case}: Undo takes the paste out and Redo brings it back ({after_undo:?}, {after_redo:?})"),
+    );
+    let _ = call(&view, calls::SELECT_ALL, "{}");
+    wait(Duration::from_millis(300));
+    let selected = page_json(
+        &view,
+        "return JSON.stringify(Object.keys(window.innerwordBoard.api.getAppState().selectedElementIds ?? {}).length);",
+    );
+    report.check(
+        selected.as_u64() == Some(4),
+        &format!("{case}: Select All selects the whole drawing (the three rectangles and the text: {selected})"),
+    );
+    let general_after = pasteboard.general_change_count();
+    drop(pasteboard);
+    report.check(
+        general_after == general_before,
+        &format!("{case}: the user's pasteboard was not touched (its change count {general_before} -> {general_after})"),
+    );
 }

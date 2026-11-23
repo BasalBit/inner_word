@@ -1033,7 +1033,7 @@ to stderr; nothing it says is ever run).
 | `scene` | `rev`, `scene` (`elements`, `appState`, `files` without `file` and without `dataURL`) | the drawing changed (4.6) |
 | `scenePart` | `rev`, `index`, `count`, `text` (a slice of the scene's JSON, at most 16 MB of UTF-8, cut between characters) | in place of `scene` when the scene's JSON is longer than 16 MB; the app joins the `count` parts of one `rev` and drops an incomplete set when a newer `rev` begins |
 | `file` | `id` (Excalidraw's file id), `mimeType` (a hint only: the bytes decide, section 2), `dataURL` | a picture the app has not had yet (pasted), once per id, **before** the first `scene` that names it, and again whenever the app asks for it (`files`, 4.5) |
-| `status` | `rev`, `posted` (the last rev posted), `editing` (a text element is being edited), `composing` (an input method is composing in it), `pointer` (`"down"`/`"up"`), `zoom`, `scrollX`, `scrollY`, `elements`, `selected` | any of them changed; zoom and scroll at most every 250 ms |
+| `status` | `rev`, `posted` (the last rev posted), `editing` (a text element is being edited), `composing` (an input method is composing in it), `pointer` (`"down"`/`"up"`), `zoom`, `scrollX`, `scrollY`, `elements`, `selected`, `tooLarge` (4.4, size), `libraryWaiting` (a change of the shape library not given to the app yet, 4.15) | any of them changed; zoom and scroll at most every 250 ms |
 | `library` | `lrev`, `items` (Excalidraw's `LibraryItems`: `[{id, status, elements, created, name?}]`), `tooLarge` | the shape library changed (`onLibraryChange`), 300 ms after the last change; at once on `pagehide` (4.15). A library longer than one message is posted as `{"lrev": N, "items": null, "tooLarge": true}` and not marked posted; `collect` brings it whole (built after review: the view had dropped it without a word) |
 | `help` | none | Excalidraw's `?` key or the main menu's Help: the app opens its list of shortcuts at the place "On a whiteboard" (it opens nothing else; the bridge can ask for no other window) |
 | `error` | `message` | an uncaught error, a rejected promise or a refusal of the policy (which says where), at most one a second; the app writes it to stderr. A message beginning with `START_FAILED` (built) is a failed start, with no `ready` |
@@ -1326,7 +1326,8 @@ not there.
 
 **Getting what the page has not posted yet.** What the app holds can lag the canvas by a
 gesture that has not ended, or the 150 ms after a key. The view's last `status` says so
-(`rev > posted`, `editing`, `pointer: down`). So every **deliberate end** of the whiteboard's
+(`rev > posted`, `editing`, `pointer: down`; for the shape library, `libraryWaiting`,
+4.15). So every **deliberate end** of the whiteboard's
 session first asks the page:
 
 1. **Another item opened** (the library, quick open, the library search, a hit, the
@@ -1512,7 +1513,19 @@ flowchart navigation) added, and `cmd-enter` also editing a line's points; `Boar
   clipboard events, which Excalidraw handles) and Undo, Redo and Select All to the glue
   (4.5), never to the web view's `NSUndoManager` or `selectAll:`. A `cmd-z` reaches either
   Excalidraw's own key handler (the view asked first) or the menu's Undo (the menu asked
-  first); both undo once.
+  first); both undo once. **Built (follow-up): a WebKit case holds it**
+  (`board_edit`, `tests/webkit/bundle.rs`, `the_edit_menu_on_a_whiteboard`): `paste:` and
+  `copy:` sent to the whiteboard's view as the app sends them (`WebPage::edit`,
+  `tryToPerform:` on the view, its window's first responder) reach the page as `paste` and
+  `copy` events, Excalidraw puts the pasted text on the canvas and writes its own
+  clipboard (`excalidraw/clipboard`) of the selection, and the glue's Undo, Redo and
+  Select All take the paste out, bring it back and select the whole drawing. WebKit reads
+  and writes the pasteboard in the UI process, through `PlatformPasteboard`, which asks
+  AppKit for it by name: for the length of the case `+[NSPasteboard generalPasteboard]` and
+  `+[NSPasteboard pasteboardWithName:]` with the general name answer a pasteboard the test
+  made with a unique name (`OwnPasteboard`, put back on drop), the case checks that AppKit
+  answers it before it sends anything, sends `copy:` only once the paste read the test's
+  text, and checks the change count of the user's general pasteboard unchanged at the end.
 - **A command that opens a field or a panel in the page** (Find, Mermaid to drawing, the
   shape library) gives the page the keyboard as it opens it (final review).
 - **`escape`** is Excalidraw's (deselect, leave a text, close its dialogs). The ways out of
@@ -1751,8 +1764,24 @@ the library** (answer 6).
   yet, so the deliberate ends of 4.6 keep the last one. A change the app's own `library`
   call answered (Add selection to shape library: its `lrev` above the last post taken)
   counts as "the page holds more" until it is posted, so a deliberate end collects then
-  (final review). A change made in Excalidraw's sidebar is known to the app only from its
-  post; that the status says one is waiting is the glue's to add (`innerword-board-web`). Only one whiteboard view lives at a
+  (final review). **Built (follow-up): the status says when a change waits.** A change made
+  in Excalidraw's sidebar was known to the app only from its post, 300 ms later, so a
+  deliberate end inside those 300 ms could lose it. The page's `status` (4.4) and the
+  status `collect` answers carry `libraryWaiting` (`Status::library_waiting` in
+  `innerword_board_web::bridge`; absent in a status of an older glue: false): **true from
+  Excalidraw's `onLibraryChange` (or the `library` call) until the `library` message is
+  posted, or until `collect` brings the change, and for as long as the library is too long
+  for one message** (posted as `tooLarge`, which does not count as given: `collect` brings
+  it whole). A status is posted at once when it turns true and when it turns false (the
+  glue's `whenLibraryWaitingChanges`, set to `sendStatus`), so the app knows within a turn
+  of the page. `collect` brings a waiting change at once (its `library` field), and the
+  status it answers says false. It is **not** part of `Status::holds_more`, which is about
+  the drawing: the app collects at a deliberate end while either holds
+  (`BoardState::holds_more`). The WebKit case `a_library_change_waiting_its_post` holds
+  the status posted at the change, the `state` call, `collect` bringing it inside the
+  300 ms and answering false, nothing posted after it, and the post and false without
+  `collect`; `a_library_longer_than_one_message` holds the status true while too large and
+  false after `collect`. Only one whiteboard view lives at a
   time, so there is no merge between two libraries; the app is the setting's only writer
   (no tool and no MCP tool reads or writes it, and the live channel has no operation for
   it).
@@ -1797,6 +1826,36 @@ scene (never from the live canvas, so the zoom, the theme and a selection change
    a Retina PDF twice the drawing's size), or less when the longer side with the margin
    would pass 14,400: then `14400 / that side`, the whole drawing scaled down (Acrobat's
    limit; WebKit made a 22,010 pt page without complaint).
+   **Built (follow-up of the acceptance run): the SVG is mended where it differs from the
+   canvas** (`asTheCanvasDraws` in `export.js`), before it is shown:
+   - *A frame clips its children.* Excalidraw's canvas cuts a frame's children at the
+     frame's edges (`frameRendering.clip`, on by default and in the restored `appState`),
+     and its `exportToSvg` wraps each child in a group with the frame's `clipPath`, but sets
+     the attribute with `setAttributeNS(SVG_NS, "clip-path", …)`: an attribute in the SVG
+     namespace, which no renderer reads (presentation attributes are in none), so WebKit,
+     like every browser, drew the child whole. 9.4's run moved an ellipse half out of its
+     frame: the screen cut it, the PDF did not, and its page cut the ellipse off at the
+     bottom instead. The glue sets each such attribute again without a namespace.
+   - *The room around an arrow's label.* The canvas clears the label's box and
+     `BOUND_TEXT_PADDING` (5 px) around it from the arrow's line; the SVG masks the line
+     with a black rectangle of the label's box alone, so the line ran up to the letters
+     ("—reads—>"). WebKit's `createPDF` draws the mask as it is (a mask is a soft clip in
+     the PDF: the line is cut, not covered); the glue makes each hole 5 larger on every
+     side, which is the canvas's gap.
+   **The page's size is one rule in Rust and JS.** Excalidraw sizes the SVG with
+   `getCanvasSize(getRootElements(elements))`: the frames, the elements in no frame (a
+   `frameId` that names no frame of the scene is none), and the name Excalidraw adds above
+   each frame for the export (Helvetica 14 at line height 1.25, one line per line of the
+   name, "Frame" without one, ending 3 above the frame, never wider than the frame); a
+   frame's children add nothing, since what of them is outside the frame is not drawn.
+   `Scene::pdf_bounds` is that rule (`innerword-board/src/frames.rs`), and `Scene::pdf_size`
+   measures it (before, Rust took every element's bounds and no name: 9.4's page was
+   expected 734 x 224 and made 734 x 215). `Scene::bounds`, the drawn area of the listing
+   and the summary, still holds every element. The WebKit case `board_pdf`
+   (`tests/webkit/bundle.rs`, `the_pdf_is_the_screen`) exports 9.4's frame with the
+   ellipse moved half out and holds the page at `pdf_size` (544 x 185), every child under a
+   clip a renderer reads, no ink below the frame, and no ink in the 5 pt around the label
+   with the line just beside it (three of its checks fail against the export of before).
 3. **The PDF**: `createPDFWithConfiguration:` with the rect `(0, 0, ceil(w), ceil(h))`, after
    `document.fonts.ready` and two frames. One page, exactly the drawing and a 32 pt margin
    (11 mm), lines as vector paths, text as text in the embedded hand-drawn fonts (PDFKit read
@@ -2536,6 +2595,18 @@ Excalidraw needs nothing new:
   board:1 “Architecture” already is so." and keeps no version.
 - An id the whiteboard does not have: exit 3, with the ids it has as candidates (at most
   twenty, the nearest by name first).
+- **Built (follow-up of the acceptance run):** a change that leaves an element not wholly
+  inside the frame it belongs to (its bounds, rotation included, within the frame's
+  rectangle and half a pixel), or its label not, is a warning: "db sticks out of frame
+  backend: what is outside is not shown." The screen cuts a frame's children at its edges
+  and so does the PDF (section 5), so a shape moved half out of its frame is half gone,
+  which an agent cannot see. Said for each element the request changed (a label by its
+  container) and for each child of a frame it changed (a frame made smaller), once per
+  element, in the order of the scene; the same for `add` (an element added in a frame, a
+  frame of a given size added around elements that do not fit in it; a frame fitted to
+  its children says nothing). `innerword_board::frames::sticking_out`, in `Added.warnings`
+  and `Updated.warnings`, passed through `BoardChanged.warnings`, a dry run too; the tool
+  and the server print each as a `Note:` line.
 
 `remove` takes ids. A shape goes with its label; arrows bound to it stay, unbound (removed
 from its `boundElements`, their binding taken off); an arrow goes with its label; a label

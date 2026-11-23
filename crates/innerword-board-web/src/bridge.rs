@@ -120,6 +120,14 @@ pub struct Status {
     /// The scene is over `MAX_VIEW_SCENE_BYTES`: it is not posted; the app asks for it at the
     /// end, for the recovery file.
     pub too_large: bool,
+    /// `libraryWaiting`: the shape library changed since the app was last given it
+    /// (Excalidraw's onLibraryChange, or the `library` call): its `library` message is
+    /// waiting its 300 ms, or the library is too long for one message (posted as
+    /// `tooLarge`, which does not count as given). `collect` brings it in its `library`
+    /// field, and the status it answers (and posts) says false from then on. Not part of
+    /// [`Status::holds_more`], which is about the drawing: a deliberate end asks `collect`
+    /// when either holds (4.6, 4.15).
+    pub library_waiting: bool,
 }
 
 impl Status {
@@ -167,6 +175,8 @@ struct WireStatus {
     selected: u64,
     #[serde(default)]
     too_large: bool,
+    #[serde(default)]
+    library_waiting: bool,
 }
 
 fn number<'de, D: Deserializer<'de>>(deserializer: D) -> Result<f64, D::Error> {
@@ -192,6 +202,7 @@ impl From<WireStatus> for Status {
             elements: wire.elements,
             selected: wire.selected,
             too_large: wire.too_large,
+            library_waiting: wire.library_waiting,
         }
     }
 }
@@ -210,6 +221,7 @@ impl From<&Status> for WireStatus {
             elements: status.elements,
             selected: status.selected,
             too_large: status.too_large,
+            library_waiting: status.library_waiting,
         }
     }
 }

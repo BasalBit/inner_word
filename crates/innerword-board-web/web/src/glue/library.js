@@ -17,6 +17,25 @@ export const library = {
   timer: null,
 };
 
+/** Told whenever `libraryWaiting()` may have changed (the glue sends its status then). */
+let waitingChanged = () => {};
+
+/** Who is told when a change of the library starts or stops waiting: the status. */
+export function whenLibraryWaitingChanges(tell) {
+  waitingChanged = tell;
+}
+
+/**
+ * The status's `libraryWaiting` (4.6, 4.15): the library changed since the app was last
+ * given it. True from Excalidraw's onLibraryChange (or the `library` call) until the
+ * `library` message is posted POST_AFTER_MS later, or until `collect` brings it; and for as
+ * long as the library is too long for one message (posted as `tooLarge`, never counted as
+ * given): `collect` brings it whole. A deliberate end asks `collect` while it is true.
+ */
+export function libraryWaiting() {
+  return library.lrev > library.posted;
+}
+
 /** The items a stored library holds, whatever form it was written in. */
 export function itemsOfStored(stored) {
   if (!stored || typeof stored !== "object") return [];
@@ -43,6 +62,7 @@ export function libraryChanged(items) {
   library.lrev++;
   clearTimeout(library.timer);
   library.timer = setTimeout(postLibrary, POST_AFTER_MS);
+  waitingChanged();
 }
 
 /**
@@ -61,10 +81,14 @@ export function postLibrary() {
     postText(`{"v":1,"kind":"library","lrev":${library.lrev},"items":null,"tooLarge":true}`);
     return;
   }
-  if (postText(text)) library.posted = library.lrev;
+  if (postText(text)) {
+    library.posted = library.lrev;
+    waitingChanged();
+  }
 }
 
-/** For `collect`: the library when it changed since its last post (and it counts as posted). */
+/** For `collect`: the library when it changed since its last post (and it counts as
+ * posted; `collect` answers the status after it, `libraryWaiting` false). */
 export function collectLibrary() {
   if (library.lrev <= library.posted) return null;
   clearTimeout(library.timer);

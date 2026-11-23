@@ -84,10 +84,18 @@ bundled) and change what moved.
   measured (`exportToCanvas` onto one pixel).
 - **The export** (`export.js`): `exportToSvg`'s options (`exportScale`, `exportPadding`,
   `exportBackground`, `exportWithDarkMode`), the SVG's `width` and `height`, the font
-  subsetter's worker (it loads the chunk that holds it, `import.meta.url`).
+  subsetter's worker (it loads the chunk that holds it, `import.meta.url`). What
+  `asTheCanvasDraws` mends: a frame's clip set with `setAttributeNS(SVG_NS, "clip-path", …)`
+  (`maybeWrapNodesInFrameClipPath`; a fixed version sets it plainly, and the mend then finds
+  nothing), the mask of an arrow's or a line's label (`mask-<id>`, a black `rect` of the
+  label's box, where the canvas clears `BOUND_TEXT_PADDING` more), and the size of the
+  export (`getCanvasSize(getRootElements(…))` with `addFrameLabelsAsTextElements`'s names,
+  `FRAME_STYLE`), which `innerword_board`'s `Scene::pdf_bounds` repeats in Rust. The WebKit
+  case `board_pdf` holds all three.
 - **Mermaid** (`mermaid.js`): `parseMermaidToExcalidraw`, the retry with `"` made `'`, the TTD
   dialog's name and tab (`openDialog: {name: "ttd", tab: "mermaid"}`).
-- **The shape library**: `onLibraryChange`, `updateLibrary`, `restoreLibraryItems`,
+- **The shape library**: `onLibraryChange` (the status's `libraryWaiting` turns true there),
+  `updateLibrary`, `restoreLibraryItems`,
   `getLibraryItemsHash`, and how "Add to library" makes an item (selected elements, their
   labels, the contents of selected frames).
 - **Links**: `onLinkOpen` and `redirectToLink` (`window.open` when not prevented), element

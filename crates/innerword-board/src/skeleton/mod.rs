@@ -151,7 +151,9 @@ impl std::error::Error for BoardError {}
 /// Adds elements made from `skeletons` on top of the drawing (section 7.2): every value
 /// derived from `making`, every refusal before anything is changed (on an error the scene
 /// is as it was). An `image` skeleton whose path is not in `pictures` is refused (the
-/// caller prepares every path of [`picture_paths`] first).
+/// caller prepares every path of [`picture_paths`] first). An element added in a frame, or
+/// a frame added around elements, that is not wholly inside it is a warning: what is
+/// outside the frame is not shown.
 pub fn add(
     scene: &mut Scene,
     skeletons: &[Skeleton],
@@ -159,7 +161,15 @@ pub fn add(
     making: &mut dyn Making,
 ) -> Result<Added, BoardError> {
     let mut work = scene.clone();
-    let added = add::add(&mut work, skeletons, pictures, making)?;
+    let mut added = add::add(&mut work, skeletons, pictures, making)?;
+    let ids: Vec<String> = added
+        .elements
+        .iter()
+        .flat_map(|e| std::iter::once(e.id.clone()).chain(e.with.iter().cloned()))
+        .collect();
+    added
+        .warnings
+        .extend(crate::frames::sticking_out(&work, &ids));
     *scene = work;
     Ok(added)
 }
@@ -179,7 +189,8 @@ pub fn picture_paths(skeletons: &[Skeleton]) -> Vec<String> {
 }
 
 /// Changes elements by id (section 7.3), with what follows them. On an error the scene is
-/// as it was.
+/// as it was. An element changed, or a child of a frame changed, that is left not wholly
+/// inside its frame is a warning: what is outside the frame is not shown.
 ///
 /// An elbow arrow (`elbowed: true`, which only the writer draws) keeps its route and its
 /// bindings with their `fixedPoint` (section 7.1): its `start`, `end`, `points`, `width`,
@@ -194,7 +205,9 @@ pub fn update(
     making: &mut dyn Making,
 ) -> Result<Updated, BoardError> {
     let mut work = scene.clone();
-    let updated = update::update(&mut work, changes, making)?;
+    let mut updated = update::update(&mut work, changes, making)?;
+    let out = crate::frames::sticking_out(&work, &updated.changed);
+    updated.warnings.extend(out);
     *scene = work;
     Ok(updated)
 }

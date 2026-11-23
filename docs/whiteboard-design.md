@@ -1,13 +1,17 @@
 # Whiteboards: design
 
-Status: the spec the builders work from. Written 2026-11-23 against `main` at 0c0193d
-(0.10.1). Every name of existing code below was read in that commit, or comes from the four
-scout reports of this design and their experiments on macOS 27.0.1 (this session's
-scratchpad, `board/scout-app.md`, `scout-web.md`, `scout-agents.md`, `scout-excalidraw.md`;
-the prototype of the bundle and its WebKit harness are in `board/proto/`). Where a fact was
+Status: **built** (a383097..bc997a4, 2026-11-23), and this text now says what was built.
+Written 2026-11-23 against `main` at 0c0193d (0.10.1) as the spec the builders worked from;
+every name of existing code below was read in that commit, or comes from the four scout
+reports of this design and their experiments on macOS 27.0.1 (that session's scratchpad,
+`board/scout-app.md`, `scout-web.md`, `scout-agents.md`, `scout-excalidraw.md`; the
+prototype of the bundle and its WebKit harness were in `board/proto/`). Where a fact was
 only read and not run, it says so. Revised after two reviews (safety, feasibility): where a
 reviewer's point was taken, the text below says what holds now; where it was not, a note
-"Not taken" says why.
+"Not taken" says why. Revised again after the build: where the build departed from the
+spec, the text says the built thing, and a short note marked **Built:** says why (the
+builders' reports, the reviews of each package and the final review). CLAUDE.md
+("Whiteboards") is the short form of the same facts.
 
 The feature in one paragraph. A **whiteboard** is a third kind of item in the library,
 beside documents and pages: a canvas the writer draws on with the real Excalidraw
@@ -61,8 +65,9 @@ app takes their changes into an open whiteboard without losing a stroke of the w
    `node build.mjs` (esbuild 0.28.2, exact versions, the lockfile committed), the output in
    `dist/`, **committed**, so that no cargo build and no test needs node or the network.
    The CJK hand-drawn font (Xiaolai, 12.7 MB) is left out (answer 1); Mermaid to Excalidraw
-   ships whole (answer 4: 3.5 MB of chunks loaded only when it is used): the bundle adds
-   about 9 MB, 3.1 MB as tar.gz.
+   ships whole (answer 4: 100 chunks, 2.66 MB, loaded only when it is used): the bundle is
+   7.44 MB in 159 files (2.67 MB as tar.gz; the estimate was about 9 MB and 3.1 MB), and
+   the arm64 disk image grew from 12.5 MB (0.10.1) to 15.6 MB.
 4. The app and the tool read the bundle as files: `Contents/Resources/Whiteboard/` in the
    app bundle (one copy for both executables), the crate's `dist/` when the executable is not
    in an app bundle. Not `include_bytes!`: a universal build would carry four copies.
@@ -70,7 +75,9 @@ app takes their changes into an open whiteboard without losing a stroke of the w
    has: one script message handler (`innerwordBoard`, from the main frame of its own origin
    only, under a size cap), calls into the page with `callAsyncJavaScript`, no navigation
    after the first load, and a stricter Content-Security-Policy (no script but the
-   bundle's files, no frames, no eval). A page's view keeps no bridge and its policy.
+   bundle's files, no eval). A view with the bridge loads no subframe at all (every subframe
+   navigation is cancelled: the policy alone lets a `srcdoc` frame run a script of the
+   view's own origin, 4.2). A page's view keeps no bridge and its policy.
 6. **Never lose a stroke.** The page posts the scene at the end of every gesture (and 150 ms
    after a change made with the keyboard); the app always holds the newest scene it was
    given and saves it in the background as it saves a text, **compare-and-swap** against
@@ -87,8 +94,9 @@ app takes their changes into an open whiteboard without losing a stroke of the w
    list of shortcuts, find, close, quit); every other chord Excalidraw acts on is the
    whiteboard's on a whiteboard, held there by fixed `NoAction` bindings in `BoardView`
    and by a menu bar rebuilt without those key equivalents while a whiteboard is open; the
-   list of shortcuts shows them as fixed rows "On a whiteboard". The Edit menu's Undo, Redo
-   and Select All reach Excalidraw through the glue. Six commands without default keys
+   list of shortcuts shows them as fixed rows "On a whiteboard". The Edit menu's Undo, Redo,
+   Cut, Copy, Paste and Select All keep their keys on a whiteboard and reach Excalidraw
+   (4.7). Six commands without default keys
    (Add text, rectangle, ellipse, diamond, arrow, frame) make an element without the
    pointer, so a whiteboard can be drawn from the keyboard alone (product rule 1).
 8. The zoom commands zoom Excalidraw's canvas, not the web view; Fit Width and Fit Page
@@ -108,7 +116,8 @@ app takes their changes into an open whiteboard without losing a stroke of the w
     restores the stored scene, runs Excalidraw's `exportToSvg` (scale 1, light colours, a
     32 px margin, its fonts inlined), shows the SVG alone, and
     `createPDFWithConfiguration:` makes one page of exactly that size, scaled down only
-    when a side would pass 14,400 pt. The app runs it in-process; the tool runs it in a
+    when a side would pass 14,400 pt (and `innerword_web::MAX_PDF_SIDE` caps whatever the
+    page answers). The app runs it in-process; the tool runs it in a
     child, `innerword __board-pdf <dir> <out.pdf>`. An empty whiteboard has no PDF.
 11. Print… prints that PDF on the user's paper, scaled down to fit (`innerword-print` gains
     a scaling). The export picker of a whiteboard has one row, "PDF file". **A folder's PDF
@@ -138,7 +147,9 @@ app takes their changes into an open whiteboard without losing a stroke of the w
     a picture and 32 MB a request at most), which the app's listener stores in `images.db`
     `files` before it queues the request, as it stores a page's files (answer 3).
 15. Every change by an agent keeps the scene as it was as a version first; `--dry-run` says
-    what would be added, changed and removed. No new exit code: 15 for a text operation on
+    what would be added, changed and removed; a change that sets what an element already
+    has is left out, and a request that changes nothing keeps no version and says so. No
+    new exit code: 15 for a text operation on
     a whiteboard and the reverse (and for an export that is not a PDF), 3 for an element id
     the whiteboard does not have, 2 for a skeleton that cannot be read, 9 for the PDF of an
     empty whiteboard.
@@ -148,9 +159,11 @@ app takes their changes into an open whiteboard without losing a stroke of the w
     where its own copy is still at that version; where the writer changed the element
     since, the writer's copy stays and the note says which of the agent's changes were not
     taken. One `updateScene` with `captureUpdate: IMMEDIATELY`, one step of Excalidraw's
-    undo; the note's Undo takes it out while the writer has not drawn since. The same rule
+    undo; the note's Undo takes it out while the writer has not drawn since, and is offered
+    only when every change of the agent's run is a step of that undo. The same rule
     in Rust (`innerword_board::merge`) settles the cases the view cannot answer.
-17. The side chat is sent the whiteboard's listing of elements in place of Markdown; the
+17. The side chat is sent the whiteboard's listing of elements in place of Markdown (a
+    message waits up to 1 s for what the page has not posted yet); the
     quick chat does not open on one; comments, spelling, the format bar and Vim mode are not
     there.
 18. Tests never make a `WKWebView` in the app's suite: the fake page engine learns
@@ -189,9 +202,15 @@ app takes their changes into an open whiteboard without losing a stroke of the w
   was used), with an empty scene, and **named in place in the sidebar** as a new document
   of the library's own `n` is (the sidebar is shown for it when hidden). `enter` takes the
   name and opens the whiteboard with the keyboard on the canvas; `escape` leaves it
-  "Untitled" and opens it all the same. Its title is the name it was given and never follows
-  its text. (Wave 2 makes and opens it without the naming; wave 3 adds the naming, section
-  9.)
+  "Untitled" and opens it all the same; when the keyboard goes elsewhere while it is named
+  (a click in the window, the sidebar hidden), the name typed so far is kept and it opens
+  without taking the keyboard; a whiteboard trashed while it is named does not open. Its
+  title is the name it was given and never follows its text. **Built:** the naming is the
+  library panel's (`LibraryPanel::new_board`, available once the app gave the panel the
+  scene of an empty whiteboard, `set_new_board_content`, which it does only with a page
+  engine); the spec named only `enter` and `escape`, the third end keeps the panel from
+  taking the keyboard back from where it went. `Workspace::new_board(title)` (no naming)
+  remains for `board:new` and the tests.
 - Without a page engine (macOS below 12.3, `INNER_WORD_PAGES=off`) New Whiteboard has no
   handler: greyed out in the menu bar, left out of the palette and the menus.
 
@@ -201,7 +220,8 @@ app takes their changes into an open whiteboard without losing a stroke of the w
   panel, its zoom and undo buttons and its main menu (trimmed, section 4.13) are inside it.
 - **Title**: the whiteboard's title. The chevron and a right-click open its menu:
   Rename…, Add (a submenu: Text, Rectangle, Ellipse, Diamond, Arrow, Frame, From Mermaid…,
-  From Shape Library…), Shape Library, Find on Whiteboard…, Insert Picture…, Zoom to Fit,
+  From Shape Library…), Shape Library, Add Selection to Shape Library, Find on
+  Whiteboard…, Insert Picture…, Zoom to Fit,
   Print…, Export as PDF…, Version History…, Reveal in Library, and Assistant while the
   assistant is shown.
 - **Drawing without the pointer** (product rule 1): "Add text", "Add rectangle", "Add
@@ -219,11 +239,14 @@ app takes their changes into an open whiteboard without losing a stroke of the w
   "Insert from shape library…" (a picker of the app over the stored items, section 4.15)
   do with keys what the library's sidebar does with the pointer. Product rule 1 holds with
   no exception.
-- **Status bar**, from the left: the save state ("Saved", "Saving…", "Not saved", the
-  item a text has, with its menu: Save Now), the elements ("14 elements"; its menu says how
-  many of each kind, the pictures and the words), the zoom ("100 %"; its menu: Zoom In, Zoom
-  Out, Actual Size, Zoom to Fit and the steps), the assistant's sparkle while the assistant
-  is shown. No Vim chip, no character limit, no page indicator.
+- **Status bar**, from the left: the save state ("Saved", "Saving…", "Edited", "Not saved:
+  <the reason>", the item a text has, with its menu: Save Now), the elements ("14
+  elements", counted as the listing counts them: a label is part of its shape or arrow;
+  its menu says how many of each kind in plain plural words, "2 rectangles, 1 arrow", the
+  pictures and the words), the zoom ("100 %"; its menu: Zoom In, Zoom Out, Actual Size,
+  Zoom to Fit and the steps), the assistant's sparkle while the assistant is shown. No Vim
+  chip, no character limit, no page indicator. A whiteboard that is not drawn (no engine,
+  a page that failed to start) shows the listing's count and no zoom.
 - **`ctrl-enter` and `shift-f10`** (`board::OpenContextMenu`) open the app's menu of the
   whiteboard over a picture of it: Undo, Redo, Select All, the six Add items, then the
   title menu's items. A right-click on the canvas opens Excalidraw's own menu (drawn by the
@@ -291,6 +314,10 @@ SELECT 1;
   `a_failed_first_whiteboard_leaves_the_library_at_4`,
   `a_build_that_knows_schema_4_refuses_a_library_of_schema_5`; the tests that pin
   `SCHEMA_VERSION == 4` keep 4 as `OPEN_SCHEMA_VERSION` and 5 as `SCHEMA_VERSION`.
+- **Built:** `open_read_only` (the tool's read of a library the app has open) compares
+  against `OPEN_SCHEMA_VERSION`, not `SCHEMA_VERSION`, and `NeedsUpgrade.supported` is 4:
+  otherwise a 0.11 tool would have taken every library at 4 for an outdated one.
+  `take_steps_above_open(&Transaction)` is the lazy step; `migrate` goes up to 4 only.
 
 ### The stored scene
 
@@ -333,8 +360,17 @@ SELECT 1;
   `srcdoc`, section 4.13). The glue deletes them from the canvas the moment they appear;
   wherever a scene is read (`innerword_board::Scene::from_stored`, `from_view`) they are
   dropped with a warning; an agent's request that names one is refused.
-- Minified. The order of keys inside an object is whatever `serde_json` writes; it means
-  nothing to Excalidraw.
+- **What every read of a scene mends** (built in the final review): an element's `link`
+  whose scheme is not `http`, `https`, `mailto` or the view's own origin is left out (a
+  pasted scene can carry any); a value nested deeper than `serde_json` reads (a pasted
+  `customData` 130 deep) is read as `null` with a warning, so it never makes a drawing
+  unsaveable.
+- Minified, **every object's keys sorted**, and every number the crate computes rounded to
+  9 decimals. **Built:** the spec left the order to `serde_json`, but gpui turns on its
+  `preserve_order` in `target/`, so the app and the tool (`target-pure`) would have written
+  different bytes for one scene; and a summed width such as 116.86000000000001 changed
+  bytes on a rewrite. Sorted keys and exact numbers make `to_stored` the same bytes in
+  every build. The order means nothing to Excalidraw.
 - **Only `innerword_board::Scene::to_stored` writes this JSON** (the app's save, the agent's
   operations); every reader parses it through `Scene::from_stored`. The collector's scan
   reads in it the one token it reads in a page's manifest (`"file"`, optional white space,
@@ -394,13 +430,26 @@ kind and the source address):
   - `save_board` refuses a text and a page (`WrongKind`), `save_document` refuses a page
     and a whiteboard, `save_page` refuses a text and a whiteboard. Today `save_document`
     refuses only `Page` and `save_page` only `Text`: both become "anything but my kind".
-  - The answer carries the new stamp (`BoardSaved { meta, stamp }`).
+  - **The order of refusals** (built; the spec fixed none): `WrongKind`, then `Stale`, then
+    `FilesMissing`. The kind is checked first, so a save of another kind touches nothing;
+    then the files are looked up (`board_files_missing`, which clears the collector's stamp
+    of each present id and writes back one only the backups' copy has); then the IMMEDIATE
+    transaction checks the kind again and compares the stamp, the one place a save that
+    goes through reads and hashes the stored scene. When files are missing the stored
+    stamp is looked at first, so a late post is told `Stale` (which the app merges on)
+    before `FilesMissing`. So a save refused as `Stale` or `FilesMissing` writes nothing to
+    `library.db` but may have touched `images.db` as said (harmless: the caller's scene
+    names those files). The ids of `FilesMissing` come in the order of `board.files`.
+  - The answer carries the new stamp (`BoardSaved { meta, stamp }`); the text is not
+    indexed again when it did not change.
 - `Store::boards()`: every whiteboard, live and trashed, most recently updated first, from
-  the covering index.
+  the covering index (`boards_query`, held by the plan test
+  `the_list_of_whiteboards_does_not_read_the_scenes` at schema 4 and 5).
 - `StoreError::WrongKind { id, kind, saving }` (`saving`: the kind the caller tried to
   write), with a sentence for each pair that names the item by its id, as today's does (the
-  store's error carries no title: "Item 12 is a whiteboard: a text cannot be saved over
-  it."); the agents' and the app's sentences, which have the title, are their own
+  store's error carries no title: "item 12 of the library is a whiteboard: the text of a
+  document cannot be saved over it", in the crate's lowercase style and its existing words
+  for a text); the agents' and the app's sentences, which have the title, are their own
   (section 7.7). `FilesMissing`'s sentence says "the item" instead of "the page".
 - `images/collect.rs`, the table of who can hold the id of stored bytes, gets a row: "a
   whiteboard's scene, live, trashed or in a version: the scan finds it (`"file"`). The open
@@ -450,7 +499,8 @@ kind and the source address):
 `innerword_board::Scene::text()`: the text of every text element (free text, the labels of
 shapes and arrows) and the name of every frame, in reading order (by the top edge of the
 element, a label by its container's, then by the left edge), one per line, empty texts
-left out. It is `plain_text`; the counts are of it. So the library search finds a
+left out (a text as it was typed, its `originalText`, not as it wraps). It is
+`plain_text`; the counts are of it. So the library search finds a
 whiteboard by the words on it, `innerword list` shows its words, and quick open lists it by
 title. A whiteboard without text has none.
 
@@ -466,7 +516,11 @@ title. A whiteboard without text has none.
   "Before a drawing by Claude" (`add_to_board`, new `Reason::Drawing`), "Before an edit by
   Claude" (`update_board`, `Reason::Edit`), "Before a removal by Claude"
   (`remove_from_board`, new `Reason::Removal`), "Before a version was restored by Claude"
-  (`restore_version`, `Reason::Restore`). `create_board` keeps none.
+  (`restore_version`, `Reason::Restore`). `create_board` keeps none. A change that sets
+  what an element already has is left out of the request (no version raised); a request
+  left with nothing to do keeps no version and says "Nothing changed" ("would change
+  nothing" in a dry run, `Written::would_change`). **Built:** at first such a request still
+  raised versions and kept one (the final review).
 - **The version history** of a whiteboard shows each version with its date and label, and
   as its preview the listing of its elements (section 7), in the muted colour. Restore
   keeps the current scene as a version first and brings the old one into the open view as
@@ -494,32 +548,44 @@ and `innerword-web`), builds and tests in `target-pure`, and is linked by `inner
 
 ```
 crates/innerword-board-web/
-  Cargo.toml            serde, serde_json, sha2 (all in Cargo.lock already)
+  Cargo.toml            serde, serde_json, sha2 (all in Cargo.lock already); dev: innerword-board,
+                        innerword-keymap, sha2, tempfile
+  build.rs              INNER_WORD_BUNDLED: compile no dist/ path in
   src/lib.rs            Assets, bridge, calls, keys (section 9, B3)
-  tests/main.rs         one integration binary: dist against MANIFEST and BUILD-INFO, ...
+  tests/main.rs         one integration binary (suite/: assets, bridge, bundle, calls, keys):
+                        dist against MANIFEST and BUILD-INFO, notices, no eval, ...
   web/
     package.json        "private": true, exact versions, no ranges
     package-lock.json   lockfile version 3, with integrity hashes; committed
     .npmrc              ignore-scripts=true, audit=false, fund=false
     build.mjs           the build
+    bundled-inside.json packages carried inside others, and the license texts that are ours
     src/index.html      the editor's page
     src/export.html     the export page
     src/main.jsx        mounts Excalidraw (index.html) or runs the export (export.html)
-    src/glue/           bridge.js, autosave.js, calls.js, export.js, links.js, keys.js, fonts.js
+    src/glue/           asset-path.js, bridge.js, scene.js, fonts.js, pictures.js, autosave.js,
+                        edit.js, calls.js, keys.js, links.js, library.js, mermaid.js,
+                        board.jsx, export.js
     src/board.css       what is hidden of Excalidraw's interface
-    fonts-licenses/     the OFL 1.1 text once, each font's copyright line, Comic Shanns' MIT text
+    fonts-licenses/     the OFL 1.1 text once, Comic Shanns' MIT text, fonts.json (each font's
+                        copyright lines, which the build checks against every file)
+    licenses/           license texts of packages that ship none (Excalidraw itself, 35 Radix
+                        packages, fastdom, ...), named under textsOfOurs in bundled-inside.json
     UPGRADING.md        what to do for a new Excalidraw (below)
-  dist/                 the built folder, committed (git: -diff, linguist-generated)
-    index.html  export.html  assets/  fonts/
-    MANIFEST.json       every file of dist/: path, bytes, sha256, media type
+  dist/                 the built folder, committed (git: -diff -text linguist-generated)
+    index.html  export.html  assets/  fonts/  font-metrics.json
+    MANIFEST.json       every file of dist/: path, bytes, sha256, media type ("type")
     BUILD-INFO.json     the versions, the sha256 of every input, the patches applied
     NOTICES.txt         the licenses of everything in the bundle
 ```
 
 Root files, in B3's first commit: `.gitignore` gets `crates/innerword-board-web/web/node_modules/`;
-`.gitattributes` gets `crates/innerword-board-web/dist/** -diff linguist-generated` and
+`.gitattributes` gets `crates/innerword-board-web/dist/** -diff -text linguist-generated` and
 `*.woff2 binary`; the root `Cargo.toml` gets `innerword-board-web` in
-`[workspace.dependencies]`.
+`[workspace.dependencies]`. **Built:** `-text` was added after review: with only `-diff`, the
+repository's `* text=auto eol=lf` would let git convert a CR a later build writes, and a fresh
+clone would hold files whose size and SHA-256 differ from `MANIFEST.json`, which
+`Assets::read` refuses.
 
 ### Pinned versions
 
@@ -536,7 +602,7 @@ Root files, in B3's first commit: `.gitignore` gets `crates/innerword-board-web/
     "react": "19.2.9",
     "react-dom": "19.2.9"
   },
-  "devDependencies": { "esbuild": "0.28.2" }
+  "devDependencies": { "esbuild": "0.28.2", "fontkit": "2.0.4" }
 }
 ```
 
@@ -575,10 +641,21 @@ up:
   3. *The locales* (55 lazy chunks, 1.65 MB, loaded only for a language other than `en`):
      left out by a resolve rule that fails the build when it stops applying, if 0.18.1's
      dynamic import allows one; otherwise kept (never loaded).
+  4. *No eval in the font subsetter* (built, not in the spec): its WebAssembly glue
+     (emscripten's embind) makes three kinds of function with `Function`, which the export
+     page's policy refuses; subsetting then failed and every font went into the PDF whole
+     (about 1 s an export). The build turns the three into closures, each applied exactly
+     once; the export page keeps its strict policy and an export takes about 90 ms.
+
+  **Built:** patches 2 and 3 applied cleanly: Xiaolai's face list is emptied and its paths
+  blanked, so no 404 is allowed anywhere (the WebKit test fails on a request under
+  `fonts/Xiaolai/` unless `BUILD-INFO.json` records the patch as not applied); the 53
+  locales other than `en` and `percentages` resolve to one empty module. `BUILD-INFO.json`
+  records the count of each patch (font CDN 1, Xiaolai 1, locales 53, no eval 3).
 
   **Mermaid is not patched** (answer 4): `@excalidraw/mermaid-to-excalidraw` 2.2.2 and what
   it brings (`mermaid` 11.17.2 with its `@mermaid-js/parser`, d3, dagre-d3-es, cytoscape,
-  KaTeX's JavaScript, DOMPurify and the rest, 105 lazy chunks, 3.49 MB) are bundled as
+  KaTeX's JavaScript, DOMPurify and the rest; built: 100 lazy chunks, 2.66 MB) are bundled as
   Excalidraw imports them, behind its two dynamic `import()`s (the dialog and a paste of
   Mermaid text), so none of it loads with the page. The build's `--no-mermaid` switch of the
   prototype is not carried over. What Mermaid needs at run time, read in the prototype's
@@ -594,21 +671,24 @@ up:
   the build needs Python or a package outside the lockfile (reviewer's point: fontTools is
   not on this Mac and installing it reaches the network). `innerword-board` keeps a copy of
   that file and a test holds the two equal (section 7.1).
-- Writes `MANIFEST.json` (every file: path, bytes, sha256, media type by the table below),
-  `BUILD-INFO.json` (`excalidraw`, `react`, `esbuild` versions; the sha256 of
-  `package-lock.json`, `build.mjs` and every file under `src/` and `fonts-licenses/`; the
-  patches applied), and `NOTICES.txt` (below). No time stamps: the same inputs give the same
+- Writes `MANIFEST.json` (every file: path, bytes, sha256, media type by the table below,
+  under the key `"type"`), `BUILD-INFO.json` (`excalidraw`, `react`, `esbuild`, `fontkit`,
+  `mermaid` versions; the sha256 of `package-lock.json`, `build.mjs` and every file under
+  `src/` and `fonts-licenses/`; the patches applied; `packages`, `mermaidChunks`, and the
+  two lists `metafilePackages` (`name@version` of every package in esbuild's metafile,
+  before any license handling: 127) and `carriedInside` (`{carrier: [names]}`), against
+  which a test holds `NOTICES.txt`), and `NOTICES.txt` (below). No time stamps: the same inputs give the same
   bytes, which `--check` holds.
 - Fails on a license outside the accepted list.
 
-What is in it, without Xiaolai and with Mermaid (the prototype's full build, `board/proto/dist`,
-measured again for this design; the builder writes the real numbers into CLAUDE.md):
-JavaScript about 8.4 MB in 180 files (1.35 MB of it loaded at start, the 1.8 MB font
-subsetter at the first export, Mermaid's 3.5 MB at the first Mermaid dialog or paste, the
-1.65 MB of locales never, unless patch 3 removes them), CSS 145 KB, fonts about 440 KB
-(Excalifont, Virgil, Nunito, Lilita One, Comic Shanns, Liberation Sans, Cascadia Code and
-the interface font Assistant): about 9.0 MB on disk (7.4 MB if the locales go), 3.1 MB as
-tar.gz. The disk image grows by about 3 MB.
+What is in it, without Xiaolai and with Mermaid, **as built**: 159 files and the manifest,
+7.44 MB on disk, 2.67 MB as tar.gz; JavaScript 6.66 MB in 128 files (about 1.4 MB of it
+loaded at start, the font subsetter at the first export, Mermaid's 100 chunks, 2.66 MB, at
+the first Mermaid dialog or paste; the locales are gone), fonts about 440 KB (Excalifont,
+Virgil, Nunito, Lilita One, Comic Shanns, Liberation Sans, Cascadia Code and the interface
+font Assistant). The arm64 disk image grew by 3.1 MB (12.5 MB for 0.10.1, 15.6 MB), the
+editor is 7.5 MB in the app. (The design's estimate from the prototype's build was 8.4 MB of
+JavaScript in 180 files, about 9.0 MB on disk and 3.1 MB as tar.gz.)
 
 ### Licenses
 
@@ -623,7 +703,12 @@ tar.gz. The disk image grows by about 3 MB.
   when one of its alternatives is (DOMPurify 3.5.0 is `(MPL-2.0 OR Apache-2.0)`: taken
   under Apache-2.0, and `NOTICES.txt` says so); a package whose `package.json` names no
   license (`khroma` 2.1.0) is read from its `license` file, and the build fails when that
-  says nothing it knows.
+  says nothing it knows. **Built:** many bundled packages ship no license file at all
+  (Excalidraw itself, 35 Radix packages, fastdom, react-remove-scroll-bar); their texts were
+  taken from their repositories into `web/licenses/`, named under `textsOfOurs` in
+  `bundled-inside.json`, and a new package without a text fails the build. The subsetter
+  carries fonteditor-core and harfbuzzjs as WebAssembly: their texts come from the chunk's
+  license comments.
 - **Packages inside another package's files.** A package's own `dist/` can carry others
   that the metafile never shows as packages (`@mermaid-js/parser` carries langium and
   chevrotain, Apache-2.0 and MIT). The metafile's path is read from its innermost
@@ -631,7 +716,10 @@ tar.gz. The disk image grows by about 3 MB.
   `mermaid`), and `web/bundled-inside.json` names, for each package that carries others,
   those it carries; their texts come from their own folders in `node_modules`. The build
   fails when a package it lists is not in the lockfile, and `UPGRADING.md` says to read the
-  carriers' `dist/` again.
+  carriers' `dist/` again. **Built:** the carriers are found from their source maps and
+  keyed by carrier name and version: `@mermaid-js/parser@1.2.1` carries langium, chevrotain
+  and ten others, `mermaid@11.17.2` carries js-yaml 4.3.0 (path-browserify and js-yaml are
+  not in the lockfile, so their texts are in `licenses/`); 13 carried in all.
 - `dist/NOTICES.txt` ships inside the bundle (`Contents/Resources/Whiteboard/NOTICES.txt`).
   `about.hbs` gets a paragraph so that `THIRD-PARTY-LICENSES.txt` says: "The whiteboard's
   editor, Excalidraw, and its fonts are JavaScript and font files, not crates: their
@@ -662,7 +750,10 @@ asks on a background queue). The view's source and the tool's child wrap it as a
 `innerword_web::PageSource` (section 9). Media types: `text/html; charset=utf-8`,
 `text/javascript; charset=utf-8`, `text/css; charset=utf-8`, `font/woff2`, `application/wasm`
 (WebAssembly's streaming compile refuses another), `application/json`, `image/svg+xml`,
-`image/png`; a file of another ending fails the build.
+`image/png`, and `text/plain; charset=utf-8` (built: so that `NOTICES.txt` is listed); a file
+of another ending fails the build. `Assets::read` refuses a file whose size is not the
+manifest's. The Rust half has `Assets::{find, find_for(executable), at, root, get, read,
+paths}` and `AssetInfo { media_type, bytes, sha256 }`.
 
 **Why files and not `include_bytes!`**: the app and the tool are two executables; a
 universal build holds each architecture's copy of embedded data; four copies of 9 MB is
@@ -672,15 +763,17 @@ in `Resources` are sealed by the bundle's signature as the executables are.
 ### `scripts/bundle.sh`
 
 - Copies `crates/innerword-board-web/dist/` to `Contents/Resources/Whiteboard/` before
-  signing; checks `index.html`, `export.html`, `MANIFEST.json` and `NOTICES.txt` are there,
-  in the app and in the app on the disk image; builds both executables with
+  signing (`ditto`, then `diff -rq`); checks `index.html`, `export.html`, `MANIFEST.json` and
+  `NOTICES.txt` are there and that the folder has as many files as its `MANIFEST.json` lists,
+  in `dist/`, in the app and in the app on the disk image; builds both executables with
   `INNER_WORD_BUNDLED=1`.
-- When `node` is on the `PATH`, runs `node build.mjs --check` and refuses to bundle a `dist/`
-  that is not what its sources build (without node it says that the check was skipped).
+- When `node` is on the `PATH` **and the packages are installed** (`web/node_modules`), runs
+  `node build.mjs --check` and refuses to bundle a `dist/` that is not what its sources
+  build; otherwise it says which of the two was missing and that the check was skipped.
 - The smoke test, while the bundled app is open on its temporary library: the bundled tool
-  makes a whiteboard, adds a rectangle with a label, reads it back, and exports it as a PDF
-  (the real child in the bundle, which must find `Resources/Whiteboard`): one page, its text
-  has the label.
+  makes a whiteboard and draws on it (the app takes both changes), reads it back, and
+  exports it as a PDF (the real child in the bundle, which must find
+  `Resources/Whiteboard`), read back with PDFKit: one page, its text has the label.
 
 ### Upgrading Excalidraw (`web/UPGRADING.md`)
 
@@ -696,6 +789,10 @@ keys the glue removes (4.7); run
 `innerword-web`'s WebKit program (its cross-check of the converter fails when Excalidraw's
 own output moved) and the person checks of section 10. `innerword_board::EXCALIDRAW_VERSION`
 and `innerword_board_web::EXCALIDRAW_VERSION` must equal the package's (a test of B3).
+**Built:** the test that nothing in the bundle evaluates a string counts what is allowed
+exactly (six of lodash's `Function("return this")`, one dead `(0,eval)(t)` of chevrotain,
+and no `new Function`, no string timer, no `.constructor("…")`); `UPGRADING.md` says what to
+do when a new version changes a count.
 
 ---
 
@@ -747,16 +844,30 @@ otherwise edit `innerword-app`).
   `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self'
   data: blob:; font-src 'self' data:; connect-src 'self' data: blob:; worker-src 'self'
   blob:; frame-src 'none'; child-src 'none'; object-src 'none'; form-action 'none';
-  base-uri 'self'`. No inline script, no eval, no frame: whatever a pasted scene or an
-  undo puts on the live canvas before the glue deletes it (an `iframe` element whose
-  `srcdoc` Excalidraw renders; a `srcdoc` frame inherits its parent's policy) runs no
-  script. The export page needs WebAssembly for the font subsetter: its policy adds
-  `'wasm-unsafe-eval'` to `script-src` (`BOARD_EXPORT_CONTENT_SECURITY_POLICY`), and it only
-  ever loads a stored scene that `innerword_board` read and filtered. Where the WebKit of a
-  supported macOS does not know `'wasm-unsafe-eval'` (B4 asks it on the oldest it can run,
-  and reads WebKit's release notes for 12.3), the export page takes `'unsafe-eval'` in its
-  place, and only the export page (the review proposed `'wasm-unsafe-eval'` for the live
-  view too; it does no export and loads no WebAssembly, so it gets none). The bundle's HTML
+  base-uri 'self'`. The policy runs no inline script, no eval, no frame of a file and no
+  `data:` frame, but it does not stop a `srcdoc` frame: a `srcdoc` document inherits the
+  policy, and `script-src 'self'` lets it run any script of the view's own origin, while
+  `frame-src 'none'` does not apply to `about:srcdoc`. What keeps every frame away from the
+  bridge is that **a view with the bridge loads no subframe at all**: every subframe
+  navigation is cancelled, whether to a file, a `srcdoc`, a `data:` URL or `about:blank`
+  with a source (`ViewHost::subframe_may_load`, `ViewShared::bridged`). The main-frame check
+  alone cannot do it, because WebKit reports a message that a same-origin frame posts
+  through `top.webkit.messageHandlers` as the main frame's. **Built:** the spec said the
+  policy alone kept frames off; B11 found in WebKit (`board::frames_never_reach_the_bridge`)
+  that a `srcdoc` frame naming one of the view's own scripts runs under it (a static one,
+  one a script makes after the load, one sandboxed `allow-scripts allow-same-origin`, a file
+  frame turned to `srcdoc` later), and added the cancellation. The export page needs
+  WebAssembly for the font subsetter: its policy adds `'wasm-unsafe-eval'` to `script-src`
+  (`BOARD_EXPORT_CONTENT_SECURITY_POLICY`), and it only ever loads a stored scene that
+  `innerword_board` read and filtered. **Built:** the export policy is chosen at run time
+  (`innerword_web::board_export_policy()`): `'wasm-unsafe-eval'` exists only from Safari 16's
+  WebKit (614, `WASM_KEYWORD_SINCE_WEBKIT`), and macOS 12.3's WebKit (613) ignores it and
+  refuses WebAssembly, so below 614 the export page takes `'unsafe-eval'` in its place
+  (`BOARD_EXPORT_CONTENT_SECURITY_POLICY_BEFORE_WASM_KEYWORD`), and only the export page (the
+  review proposed `'wasm-unsafe-eval'` for the live view too; it does no export and loads no
+  WebAssembly, so it gets none). Read from WebKit's release notes, not run on 12.3; every
+  caller (the app, the tool's child, the tests) passes `board_export_policy()`, never the
+  constant. The bundle's HTML
   has no inline script and no inline
   event handler (a test of B3). This also guards the calls: `collect` and `adopt` live in
   the page world, where a foreign script could replace them and hand the app a forged
@@ -777,19 +888,34 @@ otherwise edit `innerword-app`).
   (`ViewStats::messages_dropped`) whatever fails: the name; `frameInfo.isMainFrame`;
   `frameInfo.securityOrigin` is `innerword-page` with the view's own host; the body is a
   string of at most `max_bytes` UTF-8 bytes. Then `PageEvents::message(body)`, which only
-  posts. `WebPage`'s `Drop` sends `removeAllScriptMessageHandlers` (and the check's
+  posts. **Built:** the body is converted **lossily** (`bridge::utf8_of`: strict UTF-8 first,
+  else the UTF-16 units through `getCharacters:range:`, a lone surrogate becoming U+FFFD),
+  and the byte cap applies after the conversion; a strict conversion would have dropped
+  every post of a rev whose text the glue failed to mend, against 4.4's promise that the
+  transport never refuses a drawing. `call_async`'s answers go through the same function.
+  The handler's ivar is `innerwordBridge`. `WebPage`'s `Drop` sends `removeAllScriptMessageHandlers` (and the check's
   `tear_down` keeps doing it for the check).
 - `PageEvents::message(&self, body: String)`, a default method that drops the body.
 - `ViewExtras::one_document: bool`: after the entry's first load finished, every
   main-frame navigation is cancelled, also to the view's own files (a whiteboard never
   navigates; a navigation would throw away what is not saved). `WebPage::reload` still
   works (it is the app's), and the view does not call `alert`'s toast for such a view
-  (`PageEvents::alert` is not called when `one_document` is set).
+  (`PageEvents::alert` is not called when `one_document` is set). **Built:** a little
+  stricter: in the main frame only the view's own loads of its entry go through (the first
+  load and `WebPage::reload`), also before the first load finished; a link the reader opens
+  still goes to the browser through the existing gate.
 - **A view out of sight, still drawn**: `WebPage::park(&self)` moves the view's frame out
   of the window's visible content (its origin at x = -100,000, its size kept) and turns its
   window occlusion detection off; it is not hidden (a hidden `WKWebView` stops animation
   frames and throttles timers, and fires `visibilitychange`). The closing whiteboard's view
-  is parked while its last scene is collected (4.6).
+  is parked while its last scene is collected (4.6). **Built:** `park` hides and shows the
+  view again in the same turn of the run loop after turning occlusion detection off
+  (otherwise WebKit never checks visibility again in a window already covered, and
+  animation frames stay stopped), hands the keyboard back to GPUI's view, and records the
+  hidden state and the occlusion detection it found (`_windowOcclusionDetectionEnabled`,
+  read only where the view answers it, an optional selector); `set_frame` brings a parked
+  view back and restores both, and `set_hidden` on a parked view becomes the state it comes
+  back with (`WebPage::is_parked`). The app never calls `set_frame` on a closing view.
 - `WebPage::call_async(&self, body: &str, argument_json: &str, done)`:
   `callAsyncJavaScript:arguments:inFrame:inContentWorld:completionHandler:` in the page world,
   with one argument `arg`, the JSON text as an `NSString` (WebKit passes values, so nothing
@@ -802,7 +928,9 @@ otherwise edit `innerword-app`).
   generalise what `check.rs` and `print_offscreen` already do: an offscreen window at
   (-20000, -20000), a web view with occlusion detection off (Excalidraw draws in animation
   frames), a fresh data store, the rule list, the CSP, a host of its own (`board-export`),
-  the source's entry loaded, `didFinish` waited for, then **one** `callAsyncJavaScript` in the
+  the source's entry loaded, `didFinish` **and the page's `load` event** waited for (built:
+  WebKit reported `didFinish` while `document.readyState` was still `interactive`, and in
+  about half the runs `window.innerwordBoard` did not exist yet), then **one** `callAsyncJavaScript` in the
   page world with `input.script` and `input.argument_json`; every answer of the source
   carries `input.csp`. With `input.pdf`, the script's
   answer must be JSON `{"width": w, "height": h}` (CSS pixels, which become points 1:1), and
@@ -810,14 +938,22 @@ otherwise edit `innerword-app`).
   `createPDFWithConfiguration:` with a `WKPDFConfiguration` whose `rect` is
   `(0, 0, ceil(w), ceil(h))` (WebKit drops a fractional size: 413.5 became 413 in the
   scout's run), checks the result is one page (`pixels::pdf_pages`) and tears everything
-  down. Fails on a crash, a navigation error, a script error, the time limit
-  (`input.limit`), or a missing entry.
+  down. Fails on a crash, a navigation error, a script error, an answer that is no size,
+  the time limit (`input.limit`), or a missing entry. Each side of the answer is capped at
+  `innerword_web::MAX_PDF_SIDE` (14,400 pt) whatever the page says (built, after review: a
+  forged answer of 1e7 would have made WebKit render a huge rect). `ScriptInput { source,
+  entry, script, argument_json, pdf, csp, limit, rules_dir }`, `ScriptOutput { value, pdf:
+  Option<PrintedPdf> }`. The check of a page under another policy is
+  `check_with_policy` / `check_blocking_with_policy` (built: `CheckInput` stays as it was,
+  since other crates build it with literals).
 - `ViewStats` gains `messages_received` and `messages_dropped`.
 - The guard (`selectors.rs`, `USED`) gains what the new code sends: `+[WKContentWorld
   pageWorld]`, `-[WKWebView callAsyncJavaScript:arguments:inFrame:inContentWorld:completionHandler:]`,
   `-[WKWebView createPDFWithConfiguration:completionHandler:]`, `-[WKPDFConfiguration setRect:]`,
   `-[WKScriptMessage name]`, `-[WKFrameInfo securityOrigin]`, `-[WKSecurityOrigin protocol]`,
-  `-[WKSecurityOrigin host]`, `-[NSData length]`, `-[NSData bytes]`. All are macOS 11 or older,
+  `-[WKSecurityOrigin host]`, `-[NSData length]`, `-[NSData bytes]`, and (built)
+  `-[NSString length]`, `-[NSString dataUsingEncoding:allowLossyConversion:]`,
+  `-[NSString getCharacters:range:]`. All are macOS 11 or older,
   under the 12.3 floor of pages, and required: a macOS without one has no whiteboards and
   no pages, rather than a whiteboard that cannot save.
 - The module's notes (`lib.rs`) say "no bridge to the app in a page's view; a whiteboard's
@@ -841,17 +977,28 @@ otherwise edit `innerword-app`).
     one, a reload after a crash, Reload whiteboard) starts from what the library holds,
     never from what it held when the view was made. (The export page reads `scene.json`,
     the stored scene alone, section 5.)
-  - `library.json`: the stored shape library as it is now, from a cell of its own (4.15).
+  - `library.json`: the stored shape library as it is now, from a cell of its own (4.15),
+    **always** (`{}` when there is none: a page that finds no `library.json` starts with an
+    empty shape library, which the writer's next "Add to library" would save over the
+    stored one).
   - `_files/<FileId>`: the stored bytes of a picture the whiteboard names, through a
     read-only `ImageFile` of its own (as `LibraryPageSource` reads a page's files), with the
     type of the stored bytes (section 2, "Pictures"). Only the `FileId`s the source was told
     about (the stored scene's, and those the app stores or adopts later) are answered; any
     other path is a 404.
-- The glue at start (`index.html`): fetches `board.json` and `library.json`; fetches each
+- The glue at start (`index.html`): fetches `board.json` and `library.json` (**a
+  `board.json` that is missing or is no stored scene** — no string `stamp`, no object
+  `scene` with an `elements` list — **is a failed start**: the page posts an `error` whose
+  message begins with `bridge::START_FAILED` and never posts `ready`, and the app shows that
+  the whiteboard stopped working; built after review, where an empty canvas had been
+  offered as the loaded scene); fetches each
   picture (`_files/<FileId>`) and makes it a `dataURL`; waits for every font family the
   scene uses (`document.fonts.load("20px <family>", <its text>)`, a few milliseconds:
   Excalidraw measures text with whatever font is loaded at that moment, and the same text
-  measured 26 % wider once Excalifont was there); then
+  measured 26 % wider once Excalifont was there; built: the fonts are loaded through
+  `exportToCanvas` onto one pixel first, because Excalidraw adds its faces to
+  `document.fonts` only when it exports or mounts, and `document.fonts.load` alone measured
+  with the fallback font); then
   `restore(scene, null, null, { refreshDimensions: true, repairBindings: true })` (the two
   only act together), which measures every text again, mends bindings and fractional
   indices, and fills fields a Rust-made element lacks; mounts `<Excalidraw>` with that as
@@ -859,12 +1006,19 @@ otherwise edit `innerword-app`).
   when the view is `{}` or its `at` is not the stamp it loaded); clears Excalidraw's undo
   history; deletes the kinds of element never kept (4.13); and after two animation frames
   posts `ready` with the stamp it loaded, which becomes the session's base (4.6).
+- **Built:** `PageEvents::loaded` can arrive before the module scripts ran, so the app waits
+  for `ready`, never for `loaded`; a scripted run turns occlusion detection off for a
+  whiteboard's view too (`pages::draw_when_covered`, which survives a `park`), since
+  Excalidraw mounts in animation frames and a view in a covered window never posts `ready`.
 - **Opening saves nothing.** The glue takes the restored scene as its starting point (its
   change detector starts there), so the text widths Excalidraw measured again reach the
   library with the writer's next change, not at the open. A whiteboard that was only looked
   at keeps its `updated_at`.
 - Measured by the scout (the prototype, macOS 27, arm64): the first view of a run 183 to
   388 ms from load to ready (the WebContent process started), a later one 109 to 214 ms.
+  As built: 90 to 440 ms in the debug app (`board:wait` prints "loaded in N ms",
+  `BoardState::ready_in`), 129 to 345 ms in the WebKit program; a whiteboard of 3,000
+  elements (5,250 with labels, 3.0 MB) 477 ms in the release app.
 
 ### 4.4 The bridge: what the page posts
 
@@ -880,10 +1034,16 @@ to stderr; nothing it says is ever run).
 | `scenePart` | `rev`, `index`, `count`, `text` (a slice of the scene's JSON, at most 16 MB of UTF-8, cut between characters) | in place of `scene` when the scene's JSON is longer than 16 MB; the app joins the `count` parts of one `rev` and drops an incomplete set when a newer `rev` begins |
 | `file` | `id` (Excalidraw's file id), `mimeType` (a hint only: the bytes decide, section 2), `dataURL` | a picture the app has not had yet (pasted), once per id, **before** the first `scene` that names it, and again whenever the app asks for it (`files`, 4.5) |
 | `status` | `rev`, `posted` (the last rev posted), `editing` (a text element is being edited), `composing` (an input method is composing in it), `pointer` (`"down"`/`"up"`), `zoom`, `scrollX`, `scrollY`, `elements`, `selected` | any of them changed; zoom and scroll at most every 250 ms |
-| `library` | `lrev`, `items` (Excalidraw's `LibraryItems`: `[{id, status, elements, created, name?}]`) | the shape library changed (`onLibraryChange`), 300 ms after the last change; at once on `pagehide` (4.15) |
+| `library` | `lrev`, `items` (Excalidraw's `LibraryItems`: `[{id, status, elements, created, name?}]`), `tooLarge` | the shape library changed (`onLibraryChange`), 300 ms after the last change; at once on `pagehide` (4.15). A library longer than one message is posted as `{"lrev": N, "items": null, "tooLarge": true}` and not marked posted; `collect` brings it whole (built after review: the view had dropped it without a word) |
 | `help` | none | Excalidraw's `?` key or the main menu's Help: the app opens its list of shortcuts at the place "On a whiteboard" (it opens nothing else; the bridge can ask for no other window) |
-| `error` | `message` | an uncaught error or a rejected promise of the page, at most one a second; the app writes it to stderr |
+| `error` | `message` | an uncaught error, a rejected promise or a refusal of the policy (which says where), at most one a second; the app writes it to stderr. A message beginning with `START_FAILED` (built) is a failed start, with no `ready` |
 
+- **Built:** the posted scene has the `inner-word` envelope, leaves out deleted elements and
+  the kinds never kept, and its `files` entries are `{mimeType, created}`, only for pictures
+  the canvas holds. A `status` is posted at once on each new rev while the pointer is up;
+  while it is down, rev, zoom and scroll go at most every 250 ms. `window.innerwordBoard` is
+  frozen and holds `call`, `excalidraw`, `keysTheWindowTakes`, and an `api` getter for the
+  tests and `board:js:` only.
 - `rev` counts the states of the drawing in this view: the glue's change detector
   (Excalidraw's `hashElementsVersion` over the elements including deleted ones, the four
   `appState` fields, the set of file ids) gives a new `rev` for each state it sees.
@@ -905,13 +1065,20 @@ to stderr; nothing it says is ever run).
   an escape it still meets (`innerword_board::well_formed_json`) before it parses.
 - Measured by the scouts: a post 0.4 to 3 ms; a 20 MB string through the bridge and back
   143 ms.
+- **Built (final review), what the app bounds on its side**: the parts of one scene are
+  bounded in number and size before they are joined; a `file` message's `dataURL` is
+  percent-decoded as bytes (a `%` before a multi-byte character no longer panics); a
+  picture file of a drop or of Insert > Image… is read only when it is a plain file, and
+  only up to the size `prepare` takes.
 
 ### 4.5 What the app asks the page
 
 Calls are `WebPage::call_async` with a body from `innerword_board_web::calls` and one JSON
 argument; each answers JSON. They are started from the workspace's tasks (never inside an
 AppKit callback), and their answers only post. The glue runs its calls one after another
-(a promise chain), in the order the app made them.
+(a promise chain), in the order the app made them, and each waits for `ready`, **except
+`state`, which is answered at once outside the chain** (built after review: behind a
+`collect` waiting on a failed start, the scripted `state` line hung).
 
 | Call | Argument | Answer | Used by |
 |---|---|---|---|
@@ -923,12 +1090,21 @@ AppKit callback), and their answers only post. The glue runs its calls one after
 | `zoom` | `{"in": true}`, `{"out": true}`, `{"to": 1.25}`, `{"fit": true}` | `{"zoom"}` | the zoom commands |
 | `search` | `{"query": "…"}` or `{}` | `{}` | Find, a hit of the library search |
 | `insertPictures` | `{"pictures": [{"file", "mimeType", "dataURL", "width", "height"}], "at": {"x","y"} or null}` | `{"ids": [...]}` | Insert > Image…, a drop (4.12) |
-| `insertElements` | `{"elements": [...], "select": true, "editText": "<id>" or null}` | `{"ids": [...]}` | the six Add commands (section 1), the scripted step `board:draw:` |
+| `insertElements` | `{"elements": [...], "select": true, "editText": "<id>" or null}` | `{"ids": [...]}` | the six Add commands (section 1), the scripted step `board:draw:`. An element whose id the canvas has is replaced when the incoming version is higher; new ones go on top. `restoreElements` drops a 0×0 element, so an Add text element has a size. **Built:** the app does not use `editText` (below) |
 | `center` | `{}` | `{"x","y"}`: the middle of the view in scene coordinates, and the selected elements' ids | the Add commands, before they convert |
 | `mermaid` | `{}`, or `{"insert": "<definition>"}` | `{}`, or `{"ids": [...]}` | "Mermaid to drawing…": opens Excalidraw's dialog (`openDialog: {name: "ttd", tab: "mermaid"}`); with `insert` (the scripted step `board:mermaid:` and WebKit's cases only) converts the definition as the dialog does (`parseMermaidToExcalidraw`, then Excalidraw's `convertToExcalidrawElements` with new ids) and puts it at the middle of the view, selected |
 | `library` | `{"show": true}`, `{"hide": true}`, `{"toggle": true}`, `{"addSelection": true}`, `{"insert": "<item id>"}` | `{"lrev", "added": <item id> or null, "refused": "<sentence>" or null}` | the three shape library commands (4.15) |
 | `state` | `{}` | the `status` fields | the scripted `state` line |
 
+- **Add Text opens its text for typing without a race** (built: the glue's `editText`
+  pressed `enter` before React had drawn the new selection and opened the previously
+  selected shape, and an 80 ms timer of the app's lost the first keys to Excalidraw's
+  shortcuts, `shift-h` flipping the text). Two call bodies of the app's own, run in the
+  page world (`workspace::board::HOLD_KEYS`, `OPEN_TEXT`): `HOLD_KEYS`, sent before
+  `center`, holds the writer's key presses without `cmd` or `ctrl` for at most 2 s (events a
+  script makes pass); `OPEN_TEXT`, sent after `insertElements` answers, waits two animation
+  frames, dispatches `Enter`, waits for Excalidraw's text editor and puts the held keys into
+  it. Moving this into the glue is left for later.
 - `undo`, `redo` and `selectAll` act on the text being edited when there is one
   (`document.execCommand` in Excalidraw's text area), and on the drawing otherwise, by a
   keyboard event the glue dispatches to Excalidraw's container (`cmd-z`, `cmd-shift-z`,
@@ -939,7 +1115,8 @@ AppKit callback), and their answers only post. The glue runs its calls one after
   throttled one. It reads Excalidraw's elements as they are
   (`getSceneElementsIncludingDeleted`, which holds what is typed into a text element being
   edited: Excalidraw writes the text into the element at every input), and answers. A
-  WebKit case collects from a parked view and from a hidden one.
+  WebKit case collects from a parked view and from a hidden one. Over 16 MB its scene comes
+  in parts, also above 256 MB, so that the app can write the recovery file.
 
 **The delta and the merge** (reviewer's point, taken: 0.18.1's
 `restoreElements(incoming, current, …)` raises every incoming element to the canvas's
@@ -976,19 +1153,40 @@ counts every element as touched, which can only make conflicts, never lose a str
 | none, `baseVersion` set (the writer deleted it and a reload forgot the tombstone) | nothing; a conflict | nothing |
 | present, `baseVersion` null (an id the writer gave a new element meanwhile) | the writer's copy stays; a conflict | (cannot happen) |
 
-- The incoming elements go through `restoreElements(incoming, null, { refreshDimensions:
-  true, repairBindings: true })`, **without the canvas's elements** (so nothing is raised),
-  and their versions are then set by the glue as the table says; the merged list is ordered by
-  fractional `index` as Excalidraw orders it, and its indices repaired as Excalidraw
-  repairs them on a load (B3 reads which exported function 0.18.1 has for it). Then
+- **Every wait comes first**: the pictures in the delta are fetched from `_files/<file>`
+  (the app told the source about them), then the fonts of every incoming element are
+  loaded. Then, in one synchronous stretch with no await, the glue reads the rev and the
+  canvas, merges, restores, calls `updateScene` and records the versions (built after
+  review: reading the canvas before an await let a drag released meanwhile be replaced by
+  the old copy).
+- The incoming elements go through `restoreElements(…, null, { refreshDimensions: true,
+  repairBindings: true })`, **without the canvas's elements as local elements** (so nothing
+  is raised), together with **copies** of the canvas elements they name (a container, a
+  frame, the ends of a binding, what is bound to them), which are restored beside them for
+  the binding repair and then thrown away; their versions are then set by the glue as the
+  table says. **Every other canvas element stays the very object Excalidraw has**, and the
+  merge never drops or deletes an element the delta does not name (built after review:
+  restoring the whole canvas made a new object of each element and froze a freehand stroke
+  in progress, whose rest Excalidraw writes into `this.state.newElement`, and dropped a
+  stroke just begun as too small to see; restoring the incoming elements alone would have
+  cut a binding to an element the delta does not name). The merged list is ordered by
+  fractional `index` (where an incoming and a canvas element share one, the canvas's comes
+  first), and its indices are repaired by `updateScene` itself (`syncInvalidIndices` in
+  `replaceAllElements`; 0.18.1 exports no function for it). Then
   `updateScene({ elements, captureUpdate: IMMEDIATELY })`: one step of the undo; `NEVER`
-  when `undoable` is false. The kinds of element never kept are deleted from the result.
-- Pictures in the delta are fetched from `_files/<file>` first (the app told the source
-  about them).
-- `same` is true when there was no conflict, every version the glue set is S2's, and the
-  canvas had nothing the app had not taken in before the merge (its rev was the rev of the
-  last `scene` or `collect` the app took): the canvas then holds exactly S2. Otherwise the
-  page posts the merge, and the app saves it (an extra save at worst). `conflicts` names the agent's elements that were
+  when `undoable` is false. The kinds of element never kept are deleted from the result. An
+  incoming element the restore drops as too small to see counts as removed. A canvas
+  tombstone that was there at the base, met by an incoming element with `baseVersion` null,
+  takes the incoming element (the table's "present" row would have called it a conflict).
+- `same` is true when there was no conflict, every version the glue set is S2's (read again
+  after `updateScene`: Excalidraw's index repair may raise one), and **the canvas was at
+  `baseRev` itself when merged** (built: the spec's rule, "nothing the app had not taken in",
+  would answer `same` after a change the glue posted during the adopt's waits, a post the app
+  holds aside while it adopts, and that change would have been lost). The canvas then holds
+  exactly S2. Otherwise the page posts the merge (taking a new rev when the answered one was
+  posted already, through `sceneChanged`, so it waits for a gesture or text edit under way to
+  end), and the app saves it (an extra save at worst). The same rule judges the stale-save
+  path of 4.6. `conflicts` names the agent's elements that were
   not taken (6.7 says what the note makes of them).
 - The export page (`export.html`) answers two calls: `exportLayout`, with
   `{"padding": 32, "maxSide": 14400}` (section 5), and `convertSkeletons`, which runs
@@ -1040,18 +1238,35 @@ adopted:
    answers `missing` becomes `Missing`, and the save goes on with that element and without
    its `files` entry (Excalidraw shows its missing picture). An id that `base` named is
    never unknown: it is `Stored` from the seed, so a picture is never dropped by a save.
-2. In the background, through the saver's second connection, as a text's (the saver's
-   `SaveJob` gets a second kind: a whiteboard's raw scene, its picture map and its base):
-   `Scene::from_view` with the map, `to_stored`, its text and counts, then
-   `Store::save_board(id, content, expect: Some(base.stamp))`, then `snapshot_if_stale`.
-   A library in memory (tests) saves at once.
+2. In the background, through the saver's second connection, as a text's: `Scene::from_view`
+   with the map, `to_stored`, its text and counts, then `Store::save_board(id, content,
+   expect: Some(base.stamp))`, then the row's `view_state` with `at` set to the stamp just
+   written (`saver::view_state_at`; built after review: the job had written the stamp it
+   expected, so after a crash the whiteboard opened fitted), then `snapshot_if_stale`. A
+   library in memory (tests) saves at once. **Built:** the second kind is a job of its own,
+   `BoardSaveJob` (`Saver::work_board`, and `work_shape_library` for 4.15), sharing the
+   saver's sequence and its cancel; a job writes what it saved (`WrittenBoard`) into a shared
+   slot (`WrittenSlot`) before it lets the second connection go, and a background save that
+   a newer one superseded is retried (the final review).
 3. On success, `base` becomes the saved content and its stamp, the source's cell takes it
    (4.3), `saved` is the rev. On `StoreError::Stale` (the row changed under the view by a
    write the app did not take over; every outside write the app knows of is taken over
    first, so this is a guard, not a path): the app reads the stored scene S, sends the view
    `adopt` with the delta from `base` to S (the base rule keeps the writer's changes), sets
    `base` to S, and drops `held`: the page posts the merge, which is saved on S. The
-   library never loses the outside write and the canvas never loses the writer's.
+   library never loses the outside write and the canvas never loses the writer's. **Built:**
+   when the delta is empty (the stamp changed, no element did) `held` is kept and saved on
+   the new stamp (the first build dropped it, and the page had no reason to post again).
+   **On the synchronous path a `Stale` never drops `held`** (built after review): a flush
+   first takes a background save that already wrote as its base (`settle_board_saves`,
+   from the `WrittenSlot`: `settle` had cut such a job off and left the old stamp, so the
+   flush's own save was refused), and on a `Stale` it merges in Rust
+   (`merge_and_save_now`: `innerword_board::merge(base, held, stored)`, saved on the stored
+   stamp, tried again up to three times when the row keeps changing), the view then taking
+   the merge in as an outside write; when that save fails too, the scene goes to the
+   recovery file. A flush while an adopt is still waiting (`flush_board_while_adopting`)
+   merges the newest of the posted scene and the one held when the adopt began. The
+   library's own flush settles the saver first (final review).
 4. **`Scene::from_view` is lenient**: an element of a type it does not know is kept as it
    came (`ElementType::Other`), so are fields it does not know, and a value of an
    unexpected type (`null` where Excalidraw wrote `NaN`); a lone surrogate is mended
@@ -1082,11 +1297,20 @@ the app wrote it until `adopt` answers, posts of the view are held and not saved
 that left the page before the merge is the scene without the outside write, and would
 write over it); `adopting` is the rev `adopt` answers, and only posts at or above it are
 saved, on the new `base`. A post below it is dropped: the merged canvas already holds what
-it held. When `adopt` fails (a script error, a crash of the WebContent process, no answer in
-3 s): the app collects what it can (1 s), merges in Rust (`innerword_board::merge(base: S1,
-writer: the collected or held scene, theirs: S2)`, the base rule), saves the result with
-`expect: Some(S2's stamp)`, and reloads the view from the stored scene (4.3), whose
-source now serves it. The writer loses Excalidraw's undo history, never a stroke and
+it held. **Built:** a post that arrives during the adopt is held aside, not dropped, because
+the merge the page posts can arrive before the adopt's answer; it is taken when its rev is
+at or above the answered one. When `adopt` fails (a script error, a crash of the WebContent
+process, no answer in 3 s, `ADOPT_PATIENCE`): the app collects what it can (1 s), merges in
+Rust (`innerword_board::merge(base: S1, writer: the newest of what was collected, what was
+posted meanwhile and what was held when the adopt began, theirs: S2)`, the base rule),
+saves the result with `expect: Some(S2's stamp)`, and reloads the view from the stored
+scene (4.3), whose source now serves it; while it reloads, the old page's posts are dropped
+(its `pagehide` post would erase the outside write) until `ready`. When that save fails,
+the merge goes to the recovery file and the view loads the merge on the stored scene's
+stamp, so the next gesture saves everything. A late answer never acts on a later session
+(`adopt_seq` and a session number). **Built:** the first build merged the scene held when
+the adopt started and threw away what the page posted meanwhile, losing a stroke the writer
+finished during the wait. The writer loses Excalidraw's undo history, never a stroke and
 never the agent's change (reviewer's point, taken: a failed adopt used to leave the
 canvas without the change, and the next gesture saved it away).
 
@@ -1108,16 +1332,20 @@ session first asks the page:
 1. **Another item opened** (the library, quick open, the library search, a hit, the
    history of another item, the welcome document), **the whiteboard closed, trashed or
    deleted** by the writer: when the status says the page holds more, the session's view
-   is **parked** (4.2) and kept in `Workspace::closing_board` while the new item opens at
+   is **parked** (4.2) and kept in `Workspace::closing_boards` while the new item opens at
    once; `collect` is called; its answer (or after `VIEW_COLLECT_PATIENCE`, 1 s, without
    it) is saved like a `scene` message, and only then is the view dropped (its snapshot
    pictures handed to `drop_image` first, as `discard_page` does). Opening the same
-   whiteboard again while it is closing waits for that save. When the status says nothing
-   is outstanding, the session ends at once, as a page's.
+   whiteboard again while it is closing waits for that save (a deferred reopen is forgotten
+   when another item opens meanwhile). When the status says nothing is outstanding, the
+   session ends at once, as a page's. **Built:** closing whiteboards are a list
+   (`closing_boards`, `Workspace::boards_closing()`), not one slot: with one slot, opening a
+   second whiteboard while the first was closing ended the first early and dropped the
+   gesture its parked view was about to hand over.
 2. **Closing the window and quitting go through one routine**,
    `Workspace::end_then(End::CloseWindow | End::Quit)`: it collects from the open
-   whiteboard when its status says the page holds more and finishes the whiteboard in
-   `closing_board` (at most 1 s for both together), waits for pictures still being stored,
+   whiteboard when its status says the page holds more and finishes the whiteboards in
+   `closing_boards` (at most 1 s for all together), waits for pictures still being stored,
    saves (`flush`), and then removes the window or quits. Reviewer's point, taken: today
    none of the paths below reaches an asynchronous step. Who calls it:
    - `CloseWindow` (`cmd-w`, File > Close Window): `on_close_window` calls `end_then`
@@ -1127,7 +1355,10 @@ session first asks the page:
    - `Quit` (`cmd-q`, Inner Word > Quit): the app-wide listener of `innerword_app::init`,
      which is `cx.quit()` today, becomes `quit::request(cx)`: with a workspace window it
      dispatches to it and `end_then(End::Quit)` runs; without one (the window that says
-     the library is in use) it quits;
+     the library is in use) it quits. **Built:** `quit::request` runs after the update that
+     asked (`cx.defer`): `cmd-q` pressed in the window reaches the app-wide listener inside
+     that window's update, so updating the workspace from it failed and the app quit at
+     once without asking the whiteboard (found by the tests of the fix round);
    - `SIGTERM`, `SIGHUP`, `ctrl-c` in the terminal: `signals.rs` calls `quit::request(cx)`
      instead of `cx.quit()`;
    - the last window going (`on_window_closed`) quits after `end_then` has already saved.
@@ -1140,7 +1371,9 @@ session first asks the page:
 4. **An agent's request** (6.7), **Save Now**, **Export as PDF**, **Print**, **Version
    History**, **restoring a version**, **Duplicate** of the open whiteboard, **Reload
    whiteboard**, **a folder's PDF export** whose folder holds the open whiteboard (it reads
-   the stored scene, section 5): `collect`, save, then go on. No collect before a move or a
+   the stored scene, section 5), **an Add command or a message of the side chat** while the
+   page holds more (built): `collect`, save, then go on. Duplicate saves first whenever the
+   app holds more than is stored, whether or not the page does (final review). No collect before a move or a
    folder's Markdown, DOCX or plain-text export: a move writes no content (`save_board`
    never touches the folder or the title), and those exports leave whiteboards out, so
    neither reads the scene.
@@ -1194,7 +1427,10 @@ in `BoardView`, routed to Excalidraw's search, 4.10), `cmd-alt-s` and the sideba
 `cmd-q`, `cmd-h`, `cmd-m`.
 
 **The whiteboard's own keys** (`innerword_board_web::keys::WHITEBOARD_KEYS`, read from
-0.18.1's key tests; B3 reads them again in the package and corrects the list):
+0.18.1's key tests; B3 read them again in the package and corrected the list: **43 keys** in
+`innerword-keymap`'s normal form, with `alt-up`, `-down`, `-left`, `-right` (Excalidraw's
+flowchart navigation) added, and `cmd-enter` also editing a line's points; `BoardKey`,
+`TOOL_KEYS_ROW`, `is_whiteboard_key`):
 
 | Keys | Excalidraw | What the window binds there today |
 |---|---|---|
@@ -1216,8 +1452,11 @@ in `BoardView`, routed to Excalidraw's search, 4.10), `cmd-alt-s` and the sideba
 | `cmd-backspace`, `cmd-delete` | clear the canvas (it asks) | (the text's) |
 | `alt-z`, `alt-s`, `alt-/`, `alt-r`, `alt-h`, `alt-v`, `alt-shift-c` | zen mode, snapping, statistics, view mode, distribute, copy as PNG | |
 
-- **How GPUI is kept off them**: after every binding of the app, the app binds each of them
-  to `gpui::NoAction` in `BoardView` (**fixed bindings**: not defaults, not rows of the
+- **How GPUI is kept off them**: after every binding of the app, the app binds each of them,
+  **in every spelling `innerword_keymap::Keystroke::spellings` gives** (`cmd-shift-,` and
+  `cmd-shift-.` also as `cmd-<` and `cmd->`, the only two with a second spelling, which a
+  test holds: 45 bindings for 43 keys; `boards::fixed_key_bindings`, `key_spellings`,
+  `is_fixed_binding`), to `gpui::NoAction` in `BoardView` (**fixed bindings**: not defaults, not rows of the
   list's commands, not in the shortcuts file, never changed). They are appended **after**
   `keymap::take_defaults` (`lib.rs`), at the end of both `keymap::install` and
   `keymap::measure_install`, so they never become defaults or rows, and the test that
@@ -1274,8 +1513,15 @@ in `BoardView`, routed to Excalidraw's search, 4.10), `cmd-alt-s` and the sideba
   (4.5), never to the web view's `NSUndoManager` or `selectAll:`. A `cmd-z` reaches either
   Excalidraw's own key handler (the view asked first) or the menu's Undo (the menu asked
   first); both undo once.
+- **A command that opens a field or a panel in the page** (Find, Mermaid to drawing, the
+  shape library) gives the page the keyboard as it opens it (final review).
 - **`escape`** is Excalidraw's (deselect, leave a text, close its dialogs). The ways out of
   a whiteboard are the window's keys and clicks.
+- **Keys the glue keeps from Excalidraw** (built): `cmd-s`, `cmd-shift-s`, `cmd-o`,
+  `cmd-shift-e`, `cmd-/`, `cmd-shift-p`, `cmd-p` and `alt-shift-d` are stopped before
+  Excalidraw sees them, without `preventDefault`, so the menu bar still gets them; the glue
+  also closes Excalidraw's palette and export dialogs should one open
+  (`keysTheWindowTakes`).
 - **Typing with an input method** into a text element is WebKit's; the glue reports
   `composing` (`compositionstart` to `compositionend`), and an agent's change waits for it
   (6.7).
@@ -1385,15 +1631,27 @@ only when the reader opened it**, the gate pages already have, unchanged:
 The scout measured, with all of this in place and the app's exact CSP and rule list: no CSP
 report from a load, editing, an SVG or PNG export, a PDF, or Mermaid, except the three
 requests the scout made on purpose, all blocked. That was under a page's policy, which
-allows eval: B4's bundle case does Mermaid again under the whiteboard's.
+allows eval: B4's bundle case does Mermaid again under the whiteboard's, and it holds (a
+flowchart in about 70 ms, a sequence diagram, a pie chart as an SVG picture posted as
+`file`, a pasted flowchart; an image node refused by `img-src`; an `onerror` label posts
+nothing).
+
+**Built**, beside the table: the `iframe` row's last clause is now that a view with the
+bridge loads no frame at all (4.2), the policy alone not being enough for a `srcdoc` that
+names the bundle's own script; the main menu is Find on Whiteboard, Keyboard Shortcuts,
+"Reset the canvas" (Excalidraw's own label for Clear Canvas) and Canvas background; the
+welcome screen says: Pick a tool and draw. The whiteboard keeps every stroke as you go.
 
 **What Mermaid to drawing needs at run time**, read for this design in the prototype's
 `node_modules` (`@excalidraw/mermaid-to-excalidraw` 2.2.2, `mermaid` 11.17.2) and in the 105
-chunks the full build makes of it (3,493,120 bytes, `board/proto/dist`):
+chunks the prototype's full build made of it (3,493,120 bytes, `board/proto/dist`; the built
+bundle has 100 chunks, 2.66 MB, without the locales):
 
 - **No eval.** No `eval(`, no `new Function`, no string timer in any of the chunks. The one
   `Function(` is lodash's `freeGlobal || freeSelf || Function("return this")()` (four
-  copies), which a window never reaches: `self` is there. So the live view's
+  copies; six in the whole built bundle), which a window never reaches: `self` is there.
+  (Built: the whole bundle has one dead `(0,eval)(t)` of chevrotain, after a `return`; the
+  test counts it.) So the live view's
   `script-src 'self'` holds, without `'unsafe-eval'`.
 - **No worker, no WebAssembly, no `blob:` script.** Its `Blob`s are data handed to a canvas.
 - **No request.** Its addresses are documentation strings and namespaces. Two ways a
@@ -1433,8 +1691,12 @@ chunks the full build makes of it (3,493,120 bytes, `board/proto/dist`):
 - **Without a page engine** (macOS below 12.3, `INNER_WORD_PAGES=off`): opening a whiteboard
   shows its listing of elements (section 7) in the quiet column a page's text uses, under the
   sentence "Whiteboards need macOS 12.3 or later." (`innerword_web::available`'s, worded for
-  whiteboards) or "Whiteboards are not shown in this run."; it cannot be changed or exported
-  in the app; New Whiteboard is not there.
+  whiteboards: `boards::not_shown_sentence`) or "Whiteboards are not shown in this run."; it
+  cannot be changed or exported in the app; New Whiteboard is not there. A whiteboard whose
+  page failed to start (`START_FAILED`) is "not drawn" too: the drawing commands are not
+  offered and say why ("This whiteboard could not be shown, so nothing can be added to
+  it."), the status bar shows the listing's count and no zoom, and the menu bar keeps every
+  key (final review).
 - A modal, the palette or a context menu over a whiteboard: the snapshot, as for a page (the
   writer cannot draw meanwhile, which is right). Toasts get holes, as for a page.
 
@@ -1474,9 +1736,17 @@ the library** (answer 6).
 - **Saving.** The glue posts `library` (4.4) on `onLibraryChange`, 300 ms after the last
   change, with a counter of its own (`lrev`), and not for the load's own first call (its
   items equal what it was served). The app holds the newest post (`ShapeLibraryState {
-  held, saved }` in the workspace, not in a whiteboard's session: it outlives one) and writes
-  it in the background through the saver's second connection (`SaveJob::ShapeLibrary`:
-  `ShapeLibrary::from_view`, the limits, `to_stored`, the setting), newest wins; the
+  held, posts, saved, stored }` in the workspace, not in a whiteboard's session: it
+  outlives one) and writes it in the background through the saver's second connection
+  (`Saver::work_shape_library`: `ShapeLibrary::from_view`, the limits, `to_stored`, the
+  setting), newest wins. **Built after review:** the page's `lrev` starts at 0 in every
+  load, so it counts per view (`BoardState::library_lrev`, back to 0 at `ready`) and the
+  workspace numbers the posts it takes itself (`posts`, across views); comparing every
+  view's `lrev` with one held number had dropped the changes of a second whiteboard, or of
+  one reopened or reloaded, until its counter passed the first's. Loading a whiteboard
+  stores a held library change before it serves `library.json`. A post with `tooLarge`
+  keeps the stored library and says so in the toast; its `items` (`null`) are never
+  stored; the
   synchronous flush writes what is held; every `collect` (4.5) brings a change not posted
   yet, so the deliberate ends of 4.6 keep the last one. A change the app's own `library`
   call answered (Add selection to shape library: its `lrev` above the last post taken)
@@ -1515,7 +1785,7 @@ scene (never from the live canvas, so the zoom, the theme and a selection change
 2. **The export page**: `innerword_web::run_script` (the app, in-process, on the main thread,
    started from the export's task between two awaits as `print_offscreen` is) or
    `run_script_blocking` (the child) loads `export.html` offscreen under
-   `BOARD_EXPORT_CONTENT_SECURITY_POLICY` and calls
+   `board_export_policy()` (4.2) and calls
    `calls::EXPORT_LAYOUT` with `{"padding": 32, "maxSide": 14400}`. The glue: fetches the
    scene and its pictures; loads the fonts the scene uses; `restore` with
    `refreshDimensions` and `repairBindings` (the text measured in the real fonts, whatever
@@ -1533,7 +1803,10 @@ scene (never from the live canvas, so the zoom, the theme and a selection change
    it back in the scout's run: `Pipeline | Draft chapter | sends | Review | Free text…`),
    pictures as the files they are. Measured: 3 ms for the PDF of a small drawing, 41 ms for
    3,000 elements; the SVG 113 to 135 ms the first time (the font subsetter loads), 54 ms
-   after; the load of the page about 200 ms.
+   after; the load of the page about 200 ms. As built (release): the PDF of a whiteboard of
+   3,000 elements (5,250 with labels) 1.37 s from the stored scene; a small one 90 to
+   200 ms in the WebKit program; the tool's `innerword export board:12 x.pdf` of the 9.4
+   drawing 146 KB in 0.47 s.
 
 A dark PDF is never made: Excalidraw's dark export inverts with a CSS filter, and WebKit then
 puts a picture of the page in the PDF, without text.
@@ -1552,7 +1825,9 @@ Rust (`Scene::is_empty`).
   (`print.stage` is `(Kind::Export, Preparing)`, `print.last_export` is set), so "one job of
   pages at a time", the note "Preparing the PDF of “…”…" after 0.4 s, Cancel PDF export and
   the scripted `export:wait` work as for a document. (Today a page's PDF export does not go
-  through `print.stage`: the whiteboard's does.)
+  through `print.stage`: the whiteboard's does.) **Built:** the file is WebKit's bytes
+  unchanged (so an element's link stays a link annotation); only a folder's PDF draws
+  whiteboards in with `add_pdf_page`. `export:wait` reports it as "1 page, 1 whiteboard, …".
 - **The export picker** (`cmd-shift-s`, File > Export…, the title menu, the row's menu) on a
   whiteboard has **one row, "PDF file"**, under the heading "“<title>”": the same picker
   everywhere, saying what a whiteboard offers. No "Copy as Markdown" or "Copy as plain text"
@@ -1563,10 +1838,15 @@ Rust (`Scene::is_empty`).
   `PrintTarget` (the print panel as a sheet, a test's `Recorder`, a scripted run's
   `Directory`). On the panel the drawing is put on **the user's paper**, landscape when it is
   wider than high, and scaled down when larger than the paper (never up). That needs one
-  change in `innerword-print`: `PrintRequest` gets `paper: Option<(f32, f32)>` (`None`: the
-  user's paper from `NSPrintInfo.sharedPrintInfo`) and `scaling: Scaling` (`Actual`, today's,
-  or `DownToFit`: `kPDFPrintPageScaleDownToFit`); with `DownToFit` the paper, given or the
-  user's, is turned to the drawing's orientation. `printing::Fit` is the app's word for the
+  change in `innerword-print`: `PrintRequest { pdf, paper, scaling, title }` gets `paper:
+  Option<(f32, f32)>` (`None`: the user's paper, read from a copy of
+  `NSPrintInfo.sharedPrintInfo`, `-[NSPrintInfo paperSize]` joining `check_selectors`, 21
+  entries) and `scaling: Scaling` (`Actual`, today's, `kPDFPrintPageScaleNone`, or
+  `DownToFit`: `kPDFPrintPageScaleDownToFit`); with `DownToFit` the paper, given or the
+  user's, is turned to the orientation of the PDF's first page (a square one counts as
+  portrait). Margins stay 0 and centring on. The save job's case: a drawing of 1,600 × 900 pt
+  with `Some(A4)` and `DownToFit` came out as one A4 sheet turned landscape, its text still
+  text, scaled by 0.508. `printing::Fit` is the app's word for the
   two (`Fit::Actual`, a text's job: `paper: Some(job.paper)`, `Scaling::Actual`, as today;
   `Fit::ShrinkOntoPaper`, a whiteboard's: `paper: None`, `Scaling::DownToFit`), mapped in
   `PrintJob::request`. A test that must not depend on the Mac's default printer passes
@@ -1584,11 +1864,21 @@ Rust (`Scene::is_empty`).
     pages. The pages of the folder (web pages) are still left out, and the toast says so.
   - **How the pages are joined**: the whiteboard's PDF is made by WebKit as for Export as
     PDF… (the export page, `createPDFWithConfiguration:`), and the folder's PDF is
-    `innerword-print`'s `PdfWriter`, which gains `add_pdf_page(pdf_bytes, page)`: a page whose
-    media box is that page's, with the page drawn into it by `CGContextDrawPDFPage`. Quartz
-    writes the drawn page's content again into the new file, so its lines stay paths, its
-    text stays text in its embedded font subsets and its pictures stay the files they are
-    (a test of B5 holds text, size and pixels). Not taken: joining PDFs with PDFKit
+    `innerword-print`'s `PdfWriter`, which gains `add_pdf_page(pdf_bytes, page) ->
+    Option<(f32, f32)>` (`page` from 1; `None`, adding nothing, for bytes that are no PDF,
+    page 0, a page past the end or a page of no size): a page of **the size a reader shows
+    for that page** (its crop box, turned by `/Rotate 90` or `270`, drawn through
+    `CGPDFPageGetDrawingTransform`; built: the spec said its media box, which is the same for
+    WebKit's one-box PDFs and wrong for a cropped or turned page), with the page drawn into
+    it by `CGContextDrawPDFPage`, unscaled. Quartz writes the drawn page's content again into
+    the new file, so its lines stay paths, its text stays text in its embedded font subsets
+    and its pictures stay the files they are (B5's unit tests in `src/tests.rs`, not a
+    `tests/` binary, which the crate does not have but for `save_job`: text, size, each word
+    within 0.05 pt, pixels). **Its link annotations are not kept** (`CGContextDrawPDFPage`
+    copies the content stream only): an element's link is a link in the whiteboard's own
+    PDF and plain drawing in a folder's. An added page counts in `Report::pages` and in
+    `Report::embedded_pages`, and `Report::line` names it right after the pages ("14 pages,
+    2 whiteboards, …"); `rows`, `fonts` and `images` count the writer's own pages only. Not taken: joining PDFs with PDFKit
     (`PDFDocument.insertPage`), which would need the documents' PDF finished first and a
     second copy of it in memory, and is AppKit's where `PdfWriter` is CoreGraphics on the
     job's own context.
@@ -1614,10 +1904,13 @@ Rust (`Scene::is_empty`).
     macOS 12.3 or later."). On the fake engine (tests) each is the fixed one-page PDF of
     `Scene::pdf_size`, joined the same way.
 - **The folder's Markdown, DOCX and plain-text exports leave whiteboards out**, as they
-  leave pages out, in the app (`gather_export`) and for agents (`innerword-agent`'s
-  `export.rs`, whose folder export has no PDF). The toast and the agent's warning count
-  both: "1 whiteboard was left out: a whiteboard is exported as a PDF, on its own or in the
-  folder's PDF." / "2 pages and 1 whiteboard were left out: …".
+  leave pages out, in the app (`gather_export`, `export::left_out_sentence`) and for agents
+  (`innerword-agent`'s `export.rs`, whose folder export has no PDF). The toast counts both:
+  "1 whiteboard was left out: a whiteboard is exported as a PDF, on its own or in the
+  folder's PDF." / "2 pages and 1 whiteboard were left out: …". **Built:** the agent's
+  warning says "1 whiteboard was left out: a whiteboard is exported on its own, as a
+  PDF.", since agents have no folder PDF; a folder that holds nothing but pages and
+  whiteboards is refused ("nothing to export as one file").
 - On the fake engine (tests) the PDF is a fixed one-page PDF made by `innerword-print`, of
   the size Rust estimates (`Scene::pdf_size(32.0, 14400.0)`, the bounds of the elements and
   the margin), so a test can hold the page against the drawing.
@@ -1629,10 +1922,15 @@ Rust (`Scene::is_empty`).
 read does), refuses an empty one (exit 9), writes the directory (`innerword_board::export_dir::write`:
 `scene.json` and each picture's bytes under `_files/`) into a `WorkDir` of its own, and
 runs `innerword __board-pdf <dir> <out.pdf>` through the installed checker
-(`PageChecker::print_board`, `ProcessChecker`: standard input closed, the child killed at 60
-s, the last line of its standard error as the reason). The child asks
+(`PageChecker::print_board`, a required method; `ProcessChecker`: standard input closed, the
+child killed at 60 s, `BOARD_PDF_KILL_MS`, or the checker's own limit when lower, the last
+line of its standard error as the reason; the child gives WebKit 50 s). The child asks
 `innerword_web::available()`, finds the bundle (`Assets::find`), builds the source and calls
-`run_script_blocking`, then writes the bytes. WebKit never runs in the MCP server's process.
+`run_script_blocking` with `EXPORT_ENTRY`, `EXPORT_LAYOUT`, `export_argument()`,
+`board_export_policy()` and `pdf: true`, then writes the bytes (`BoardDirSource` serves
+`scene.json`, the `_files/<32 hex>` pictures typed from their bytes, and the bundle;
+`crates/innerword-cli/src/board_pdf.rs`, handled before the command line is parsed). A
+failure is one line on standard error and exit 1. WebKit never runs in the MCP server's process.
 `INNER_WORD_PAGE_CHECK=fake` in a debug build answers in the process with the fixed PDF, as
 for a page's PDF. Any other format of a whiteboard (`.md`, `.docx`, `.txt`, `html`, a
 folder) is exit 15: "“Plan” is a whiteboard, and a whiteboard is exported as a PDF only."
@@ -1644,7 +1942,8 @@ folder) is exit 15: "“Plan” is a whiteboard, and a whiteboard is exported as
 ### 6.1 The shape: an open web item
 
 `Workspace::page: Option<page::PageSession>` becomes the session of the open **web item**,
-with a kind; the name may stay (B8 decides), the shape is:
+with a kind; built: `PageSession` kept its name and gained `item: WebItem { Page(PageItem),
+Board(Box<BoardState>) }`. The shape:
 
 ```rust
 pub(crate) struct PageSession {            // or WebSession
@@ -1684,10 +1983,10 @@ New actions:
 | Action | Title (palette, list) | Category / place | Default key | Where else |
 |---|---|---|---|---|
 | `workspace::NewBoard` | New whiteboard | File, "Anywhere" | none | File > New Whiteboard, the empty state's hint; only with a page engine |
-| `library_panel::NewBoard` | New whiteboard | "In the library" | none | the library's menu and + menu ("New Whiteboard"), a folder row ("New Whiteboard Here"); only when the app gave the panel the content of a new whiteboard (`set_new_board_content`, which it does with a page engine) |
+| `library_panel::NewBoard` | New whiteboard | "In the library" | none | the library's menu and + menu ("New Whiteboard", after New Folder), a folder row ("New Whiteboard Here"); only when the app gave the panel the content of a new whiteboard (`set_new_board_content`, which it does with a page engine; `LibraryPanel::makes_boards`). **Built:** it is not in the panel's `commands()` (every command there has a key in the panel, and the palette has `workspace::NewBoard` already); its row comes from `innerword_library::new_board_command()`, which the app registers as a row of the list that the palette always leaves out, in its place through `HOME_CONTEXTS` (`library_panel` → `innerword_library::TREE_KEY_CONTEXT`, where `n` and `shift-n` are bound): without that, a key the user gave it would have applied anywhere |
 | `board::OpenContextMenu` | Show the whiteboard's context menu | "On a whiteboard" | `ctrl-enter`, `shift-f10` | |
 | `editor_tools::Find` in `BoardView` | Find | "On a whiteboard" | `cmd-f` | Edit > Find, the title menu ("Find on Whiteboard…") |
-| `board::AddText`, `AddRectangle`, `AddEllipse`, `AddDiamond`, `AddArrow`, `AddFrame` | Add text, Add rectangle, … (palette category "Whiteboard", keywords: draw, shape, new element) | "On a whiteboard" | none | Insert > Whiteboard > Text, Rectangle, …; the title menu's Add; the `ctrl-enter` menu. Each asks the glue for `center` (the middle of the view and the selection), converts one skeleton with `innerword_board::add` against the held scene (`HashedMaking` seeded by the held scene's stamp and the moment, so ids do not collide), and calls `insertElements` with it selected (a text: in editing). With the canvas not loaded yet they say "The whiteboard is still loading." |
+| `board::AddText`, `AddRectangle`, `AddEllipse`, `AddDiamond`, `AddArrow`, `AddFrame` | Add text, Add rectangle, … (palette category "Whiteboard", `actions::CATEGORY_WHITEBOARD`, keywords: draw, shape, new element) | "On a whiteboard" | none | Insert > Whiteboard > Text, Rectangle, …; the title menu's Add; the `ctrl-enter` menu. Each asks the glue for `center` (the middle of the view and the selection), converts one skeleton with `innerword_board::add` against the held scene (`HashedMaking` seeded by the held scene's stamp, the rev and the moment, so ids do not collide), and calls `insertElements` with it selected (a text: opened for typing by `HOLD_KEYS` and `OPEN_TEXT`, 4.5). **Built:** when the status says the page holds more, it collects first (the held copy of a shape the writer moved would otherwise replace the canvas's through a new arrow's binding); an arrow between two selected shapes is given `x` and `y` too (the converter needs them; without them Add Arrow between two shapes never worked). With the canvas not loaded yet they say "The whiteboard is still loading.", on a whiteboard that is not drawn "This whiteboard could not be shown, so nothing can be added to it." |
 | `board::MermaidToDrawing` | Mermaid to drawing… (keywords: mermaid, flowchart, diagram, sequence) | "On a whiteboard" | none | Insert > Whiteboard > From Mermaid…, the title menu's Add; the `mermaid` call (4.13) |
 | `board::ToggleShapeLibrary`, `board::AddToShapeLibrary`, `board::InsertFromShapeLibrary` | Show or hide the shape library, Add selection to shape library, Insert from shape library… (keywords: library, shapes, reuse, stencil) | "On a whiteboard" | none | Insert > Whiteboard > Shape Library, Add Selection to Shape Library, From Shape Library…; the title menu; the `library` call; the last opens the app's picker of the held library (4.15) |
 
@@ -1714,7 +2013,7 @@ made per kind):
 | Spelling language | "A whiteboard is not checked for spelling." |
 | Add comment, go to comments (`cmd-2`); Show or hide comments, Next comment, Previous comment (from the menu bar only: their keys are Excalidraw's here, 4.7) | "A whiteboard has no comments." |
 | Vim mode on or off (from the menu bar only) | "Vim mode is for texts; a whiteboard has its own keys." |
-| Ask the assistant (quick chat, `cmd-j`) | "The quick chat works in a text. Ask about this whiteboard in the side chat." (with the side chat's key from the keymap) |
+| Ask the assistant (quick chat, `cmd-j`) | "The quick chat works in a text. Ask about this whiteboard in the side chat." (with the side chat's key from the keymap); without the assistant `cmd-j` is left alone (final review) |
 | Zoom to life size, Zoom to automatic | "A whiteboard has no paper size: Zoom to Fit shows the whole drawing." |
 
 The four with app-wide listeners (comments, Vim mode) answer a click on their menu item
@@ -1728,7 +2027,9 @@ left out of the palette), so `cmd-g` and `cmd-shift-g` are Excalidraw's group an
 
 As section 1 says. `display_title`, the window's title and the side chat's title take the
 whiteboard's title. The elements item and the zoom item read the last `status`; the save
-state item reads `BoardState` (dirty, saving, failure).
+state item reads `BoardState` (dirty, saving, failure). Built: the elements item counts as
+the listing does (`board_elements_label`, from the base scene when there is one), and the
+labels are "Saved", "Saving…", "Edited", "Not saved: …" (`board_save_label`).
 
 ### 6.5 The version history
 
@@ -1748,7 +2049,16 @@ open whiteboard) goes through 6.7 like any agent's change.
 
 - **The side chat** over a whiteboard is sent, with every message, the listing of its
   elements as the app holds it (the held scene, after `collect` when the status says the
-  page holds more, waited for at most 1 s) in place of the Markdown, after one sentence
+  page holds more, waited for at most 1 s) in place of the Markdown. **Built:** the wait is
+  `AssistantPanel::set_before_send` (`innerword-assistant-ui`, added for this: a task of the
+  host's that a message waits for before the open document is read; more messages wait
+  behind it in order; Stop and another document give the text back to the composer), which
+  the app fills with `Workspace::collect_for_a_message` (`VIEW_COLLECT_PATIENCE`, then the
+  message goes with what the app holds); the side chat's source holds a `BoardFeed`, the
+  scene the app holds, kept current per frame and per post; and the keyboard coming into
+  the side chat over a whiteboard by any way asks the page too
+  (`collect_as_the_side_chat_takes_the_keyboard`). B10 had first collected only on `cmd-3`,
+  then on every way in; the hook came with the final round. After one sentence
   (`innerword_assistant::BOARD_PREFACE`: "The open item is a whiteboard: a drawing of shapes,
   arrows, text and pictures. It is changed only by its owner, in the app. Its elements, one
   per line, with their ids, positions, sizes and text:"), with `kind="board"` in the tag
@@ -1769,7 +2079,7 @@ whiteboard is open or closing:
    self`). Today it is `request.changes_library() && self.session.is_some() &&
    is_composing()`, which keeps reads out and is false on a whiteboard, where `session` is
    `None` (reviewer's point, taken). The new condition, in this order:
-   - a whiteboard is in `closing_board`: wait until its last save is done (at most
+   - a whiteboard is in `closing_boards`: wait until its last save is done (at most
      `VIEW_COLLECT_PATIENCE`, 1 s, then it is saved as the app holds it), for every request,
      so a late collect never saves the pre-agent scene over the agent's change;
    - the open whiteboard's last `status` says the page holds more (`rev > posted`, the
@@ -1783,6 +2093,11 @@ whiteboard is open or closing:
      a text element): it waits, and after `COMPOSITION_PATIENCE` (3 s) it is refused with
      `Refusal::Composing`, "nothing was changed", as for a text. A read does not wait for a
      composition. No new refusal.
+   - **Built**, a fourth wait: an earlier outside write whose `adopt` has not answered yet,
+     at most `ADOPT_PATIENCE` plus `VIEW_COLLECT_PATIENCE` (without it, two quick changes to
+     one element were judged against an old `baseRev`, and the second could be taken for the
+     writer's conflict and lost). Each wait has its own patience on the app's clock;
+     `must_wait` gets the request's first moment from the serve loop (`first`).
 2. **Carry out** (`carry_out`, as today): the flush saves the scene the page handed over, so
    the version the agent's operation keeps is what the writer had; the app notes the stored
    scene just before (`S1`, which is `base`); `live::execute` changes the stored
@@ -1808,11 +2123,20 @@ whiteboard is open or closing:
    has what was there before. The agent's answer cannot say this (it goes back in the turn
    of the change, before the view has merged), which is why the note does. Its button is
    **Undo** while the whiteboard is open and its rev is still the one the last adopt
-   answered (the writer has not drawn since): `undo` with as many steps as the run adopted.
-   For a whiteboard that is not open, **Open**.
-5. Cost: the delta is computed on the main thread from two parsed scenes (a few milliseconds
-   for a few hundred elements; B10 measures a scene of 3,000 elements and writes it into
-   CLAUDE.md with the agents' other costs).
+   answered (the writer has not drawn since): `undo` with as many steps as the run adopted
+   (`Undo::Board { board, steps, rev }`, filled when the view answers;
+   `agent_adopt_answered`, withdrawn by `agent_adopt_failed` and `board_moved_on`).
+   **Built after review:** Undo is offered only when every change of the run is one step of
+   that whiteboard's undo (`steps_before + 1 == count`); a run that began with a trash, a
+   change elsewhere, or adopts on both sides of a drawing of the writer's has no Undo (it
+   would have promised to take out more than it does). For a whiteboard that is not open,
+   **Open**.
+5. Cost: the delta is computed on the main thread from two parsed scenes. Measured (release,
+   a whiteboard of 3,000 elements, 5,250 with labels, 3.0 MB): `cost=[save 16, change 81,
+   window 41 ms]`, the tool 169 ms from start to answer; with a 16 MB picture, change
+   76 ms, window 38 ms, the tool 401 ms (the listener stores the picture before the
+   request is queued); the 9.4 drawing on a small whiteboard: change 1.4 ms (in CLAUDE.md
+   with the agents' other costs).
 
 A whiteboard changed by an agent while the app was closed opens with the stored scene, fitted
 to its drawing (its `view_state`'s stamp is not the scene's).
@@ -1829,7 +2153,10 @@ to its drawing (its `view_state`'s stamp is not the scene's).
   today (reviewer's point, taken: a note alone would leave the list unable to answer "what
   does ⌘D do on a whiteboard"): one row per entry of `WHITEBOARD_KEYS`, titled with its
   `what` ("Duplicate", "Group", …), place "On a whiteboard", and one row "Tools (letters
-  and digits)" for the tool keys. They are rows of the list only: the fixed `NoAction`
+  and digits)" for the tool keys. **Built:** the fixed rows are grouped by what a key does,
+  so the 43 keys make 42 rows (Clear canvas has two keys) and the tools row 43; a fixed
+  row says `BOARD_KEY_NOTE`, the tools row `TOOL_KEYS_NOTE` (`shortcuts::Place::Board`).
+  They are rows of the list only: the fixed `NoAction`
   bindings are not commands, not entries of the shortcuts file, and the code that collects
   entries skips `gpui::NoAction` (the test
   `every_key_of_the_keymap_is_a_row_and_an_entry_of_the_file` keeps holding, with the
@@ -1841,7 +2168,12 @@ to its drawing (its `view_state`'s stamp is not the scene's).
   a sentence that says what they hold: today's rows, the two New whiteboard rows, the
   whiteboard's menu, Find, six Add commands, Mermaid to drawing, the three shape library
   commands, the fixed rows, Reload whiteboard being the same command as Reload page;
-  entries grow by the commands only.
+  entries grow by the commands only. **As built: 442 rows and 424 entries with every part
+  shown, 412 rows and 424 entries without the assistant** (`pages.rs` asserts the second
+  pair): whiteboards add 57 rows (the two New whiteboard rows, the menu, Find, the six Add
+  commands, Mermaid to drawing, the three shape library commands, 42 fixed rows and the
+  tools row) and 14 entries (the 14 commands of those rows). B8 had first counted 411 and
+  423, before the library's New whiteboard became a row (6.2).
 - The question about a key: `Listing::sees_keys_first("the whiteboard", [BOARD_VIEW],
   board_leaves, BOARD_TAKES_KEYS_FIRST)` is always on (Vim's is on only with Vim mode), where
   `board_leaves(key)` is true for every key not in `WHITEBOARD_KEYS`. So a key the user gives
@@ -1861,14 +2193,14 @@ to its drawing (its `view_state`'s stamp is not the scene's).
 | Step | What it does |
 |---|---|
 | `board:new[:<title>]` | makes a whiteboard as New Whiteboard does, named `<title>` without the sidebar's field, opens it; logs `board: made board:12 “Plan”` |
-| `board:wait[:<ms>]` | waits until the open whiteboard's page posted `ready` (fails after `ms`, 10 s unless given) |
+| `board:wait[:<ms>]` | waits until the open whiteboard's page posted `ready` (fails after `ms`, 10 s unless given); logs `board: ready after 412 ms (loaded in 380 ms)` (built: the load time, `BoardState::ready_in`) |
 | `board:scene` | logs the listing of the open whiteboard as the app holds it, after `collect` |
 | `board:draw:<json>` | converts skeletons with `innerword_board` against the held scene and gives them to the page as the writer's drawing (`insertElements`), so they go through `onChange` and the autosave; logs the ids |
 | `board:press:<keys>` | sends real `keyDown:`/`keyUp:` events to the web view (as AppKit would hand them to the first responder; GPUI's `keys:` never reaches WebKit), for what reaches Excalidraw; not the menu bar's half |
 | `board:js:<script>` | evaluates a script in the page and logs the answer (scripted runs only) |
 | `board:pdf:<path>` | writes the whiteboard's PDF at once and logs `board: pdf 1 page, 1034 x 478 pt, 2 pictures, made in 0.31 s` |
 | `board:menu` | opens the whiteboard's menu, as `ctrl-enter` |
-| `board:library` | logs the held shape library: `board: library 3 items, saved` |
+| `board:library` | logs the held shape library: `board: library 3 items, saved` (`1 item` in the singular) |
 | `board:mermaid:<definition>` | converts a Mermaid definition (`\n` for a new line) as the dialog's Insert does (the `mermaid` call with `insert`) and logs the ids |
 
 `state` gets `board=[id=12 state=loaded elements=14 rev=31 posted=31 saved=31 dirty=no
@@ -1910,6 +2242,16 @@ impl FakePages {
 }
 ```
 
+**Built** (the fake lives in `crates/innerword-app/src/boards.rs`, `FakeBoard`): every lever
+above, and `change_library_unposted` (the library changed, not posted yet), `post_scene_raw`,
+`board_status`, `press_help`, `fail_start` (a start that posts `START_FAILED`),
+`make_board_pdf`, `fail_board_pdfs`, `board_pdfs_made` and `select`; Reload loads the
+whiteboard again from its cell, which also resets its library counter. App-wide seams beside
+it: `boards::hold_board_saves` / `release_board_saves` (a background save held, for a flush
+that meets one) and `boards::fail_board_saves` (every save of a whiteboard fails, for the
+recovery file). `tests/suite/boards.rs` held 38 cases after B8's first round, 66 after its
+fix round, and 74 after the final review.
+
 B8's tests: `tests/suite/boards.rs` (a submodule of the one test binary), and additions to
 `keybindings.rs` (the new rows and place, the fixed rows, `NoAction` skipped as an entry,
 the binding of the fixed keys after the defaults in both installs and the put-back test,
@@ -1936,7 +2278,7 @@ Here"), which are B7's panel items and wait for wave 3. Cases that must be there
   it;
 - **every way of closing and quitting** with something unposted saves it: `cmd-w`
   (`CloseWindow`), the close button (`should_close`), `Quit` through its listener,
-  `quit::request` as the signal task calls it, and a whiteboard in `closing_board` at each;
+  `quit::request` as the signal task calls it, and a whiteboard in `closing_boards` at each;
   `on_app_quit` alone saves what the app holds;
 - a whiteboard's own save does not adopt and does not reload; a rename while a save is in
   flight keeps the new title;
@@ -1971,7 +2313,7 @@ Here"), which are B7's panel items and wait for wave 3. Cases that must be there
   (`insertElements` with the converted skeleton); "Add arrow" with two shapes selected binds
   them;
 - the Edit menu's Undo, Redo and Select All become glue calls; Copy becomes the view's
-  `copy:`;
+  `copy:`; the six items keep their key equivalents on a whiteboard (final review);
 - `help` from the page opens the list of shortcuts at "On a whiteboard";
 - no engine: a whiteboard shows its listing and the sentence; New Whiteboard is not in the
   palette.
@@ -2009,7 +2351,18 @@ Excalidraw's own `convertToExcalidrawElements`.
   view, the export page: `restore` with `refreshDimensions` and `repairBindings`), so what
   the writer sees and every PDF are exact; the view's measure reaches the library with the
   writer's next change. (3) A case of `innerword-web`'s WebKit program holds the Rust output
-  against Excalidraw's own for a corpus of skeletons (section 9, B11).
+  against Excalidraw's own for a corpus of skeletons (section 9, B11). **Built, and what is
+  left:** every text-width difference is kerning: `innerword-board` sums advance widths and
+  WebKit applies the fonts' GPOS pair kerning (fontkit's shaped widths of the bundle's
+  Excalifont equal WebKit's to the hundredth). On the corpus texts are within 0.6 to 2.9 %
+  ("Yes?" at 16 px is the 2.9 %); measured on 15 heavily kerned words in every family, 33 of
+  105 are more than 3 % off, the worst "P." in Liberation Sans (+15.8 %), "LT" in Nunito
+  (+12.5 %), "P." in Excalifont (+11.5 %); ours is always the wider, and the families without
+  kerning (Virgil, Cascadia, Comic Shanns) are exact (`kerning_measured`, a note of the
+  WebKit program, not a check). So a shape fitted to a short kerned label is a few pixels
+  too wide until Excalidraw measures again. The fix is named and not done: the bundle's build
+  writes the fonts' nonzero pair kerning into `font-metrics.json` (fontkit is there), and
+  `metrics::line_width` applies it.
 - What is written is what Excalidraw 0.18.1 writes: every field of every element type,
   their defaults read from the pinned package (`newElement`, `DEFAULT_ELEMENT_PROPS`,
   `FONT_METADATA`, `getLineHeight`, `BOUND_TEXT_PADDING`, the binding gap), fractional
@@ -2030,7 +2383,17 @@ Excalidraw's own `convertToExcalidrawElements`.
   derived values cost nothing. (The app's Add commands seed it with the held scene's stamp,
   the rev and the moment.)
 - Elbow arrows (`elbowed: true`, routed around shapes) are not made by agents (refused) and
-  are kept as they are when the writer drew them.
+  are kept as they are when the writer drew them. **Built after review**, the rules that
+  keeps: when what an elbow arrow joins moves, is resized, turned or labelled anew, the
+  arrow stays exactly as it was (same version, not among the changed), its bindings with
+  their `fixedPoint` untouched (0.18.1's `repairBinding` unbinds an elbow arrow whose binding
+  lacks one; the first build rewrote them and bent the route); it moves whole only when
+  everything it is bound to moved by the same distance in one change (a frame holding both
+  ends). On an elbow arrow `start`, `end`, `points`, `width`, `height` and `angle` are
+  refused (0.18.1 cannot turn one), and `x`, `y`, `dx`, `dy` while it is bound (as
+  Excalidraw's own drag refuses), each naming the field and "elbow arrow". Excalidraw
+  routes such an arrow again when the writer next moves what it joins; until then an arrow
+  whose shape an agent moved looks detached, its binding intact.
 - **Nothing it makes is invisibly small**: Excalidraw's `restoreElements` drops such an
   element at every load (`isInvisiblySmallElement`), so it would vanish from the canvas and
   then from the library after the agent was told "added". `add` and `update` refuse (exit
@@ -2038,6 +2401,25 @@ Excalidraw's own `convertToExcalidrawElements`.
   within 1 px of each other, a shape or a frame narrower or lower than 1 px, a text that is
   empty or only white space, and a label that is; `update` refuses a change that would make
   an element so. The rule is 0.18.1's, read in its package, and `UPGRADING.md` lists it.
+  (Built: this rule is stricter than 0.18.1's own `isInvisiblySmallElement`, which drops
+  only fewer than two points or a width and height both 0.)
+- **What else the converter decides** (built, beside the spec): a shape with a label and no
+  size is sized to fit its label, as Excalidraw's converter does (only a shape without a
+  label defaults to 100 × 100); a bound arrow's end slides along the given line onto the
+  outline of its element (exact for rectangle, ellipse and diamond; aimed at the centre when
+  the line misses it), its `focus` from a port of Excalidraw's `determineFocusDistance`, gap
+  1, and every new arrow then loses 0.5 px at each end on each axis it runs along, as
+  Excalidraw's converter does; an arrow's or a line's `width` and `height` may be 0 or
+  negative (the extent of its points); a freedraw's width and height come from its points,
+  with `pressures: []` and `simulatePressure: true`; a container's label comes first in its
+  `boundElements`; a frame cannot hold a frame, a label cannot be named as a child, an arrow
+  cannot bind to itself, a line, an arrow, a freedraw or a label. `add`, `update` and
+  `remove` succeed whole or leave the scene as it was (a dry run runs them on a clone), find
+  elements through an index (`skeleton::Positions`, and in `update` the arrows bound to each
+  element and the children of each frame), so they are linear in the whiteboard and the
+  request: 2,000 moves on 11,400 elements take 0.18 s in release (7.27 s before the review).
+  A request with several bad fields names the first in sorted order, the same in `target/`
+  (where gpui's `preserve_order` keeps insertion order) as in `target-pure`.
 
 ### 7.2 The skeleton an agent writes
 
@@ -2055,24 +2437,33 @@ Excalidraw needs nothing new:
 
 | Type | Needs | May have |
 |---|---|---|
-| `rectangle`, `ellipse`, `diamond` | `x`, `y` | `width`, `height` (100 each by default), `label` |
+| `rectangle`, `ellipse`, `diamond` | `x`, `y` | `width`, `height` (100 each by default; built: a shape with a label and no size fits its label), `label` |
 | `text` | `x`, `y`, `text` | `fontSize` (20), `fontFamily`, `textAlign`, `verticalAlign` |
-| `arrow`, `line` | `x`, `y`, and either `points` or `width`/`height` or `start`/`end` | `start`, `end` (`{"id": "<an element of the board or of this request>"}`), `startArrowhead`, `endArrowhead`, `label` |
+| `arrow` | `x`, `y`, and either `points` or `width`/`height` or `start`/`end` | `start`, `end` (`{"id": "<an element of the board or of this request>"}`), `startArrowhead`, `endArrowhead`, `label` |
+| `line` | `x`, `y`, and either `points` or `width`/`height` | (built: `start`, `end`, the arrowheads and `label` are refused on a line; in 0.18.1 only arrows bind, have arrowheads and take a label) |
 | `freedraw` | `x`, `y`, `points` | |
 | `frame` | `children` (ids) or `x`, `y`, `width`, `height` | `name` |
 | `image` | `x`, `y`, `path` (a picture file of this Mac) | `width`, `height` |
 
-- Every type may also have: `id` (kept when unique on the whiteboard, 1 to 64 characters of
-  `[A-Za-z0-9_-]`; made otherwise), `angle` (radians), `strokeColor`, `backgroundColor`,
+- Every type may also have: `id` (1 to 64 characters of `[A-Za-z0-9_-]`, made when not
+  given; **built: an id the whiteboard already has is refused**, exit 2, "the whiteboard
+  already has an element api; give another id", where the spec said one would be made: a
+  silent new id would leave the agent naming the wrong element), `angle` (radians), `strokeColor`, `backgroundColor`,
   `fillStyle` (`hachure`, `cross-hatch`, `solid`, `zigzag`), `strokeWidth`, `strokeStyle`
   (`solid`, `dashed`, `dotted`), `roughness` (0, 1, 2), `opacity` (0 to 100), `roundness`
-  (Excalidraw's `{"type": 3}`, or `null`), `groupIds`, `link` (`http`, `https`, `mailto` or
-  an element link), `locked`.
+  (Excalidraw's `{"type": 3}`, or `null`), `groupIds`, `link` (`http`, `https` or `mailto`),
+  `locked`. **Built:** an element link (Excalidraw's `?element=<id>` on the view's own
+  address) is refused: Excalidraw treats one as such only when its host is the page's, which
+  the converter does not know. Accepting `{"element": "<id>"}` and building the link where
+  the host is known is the way to add it later.
 - `label`: `{"text", "fontSize"?, "fontFamily"?, "textAlign"?, "verticalAlign"?,
   "strokeColor"?}`: a bound text inside the shape or on the arrow, wrapped to the shape's
   width as Excalidraw wraps it, the shape made taller when the text needs it.
 - `fontFamily`: Excalidraw's number (5 Excalifont, 1 Virgil, 6 Nunito, 7 Lilita One, 8 Comic
-  Shanns, 9 Liberation Sans, 3 Cascadia; B2 reads the numbers in 0.18.1) or the name.
+  Shanns, 9 Liberation Sans, 3 Cascadia; B2 read the numbers in 0.18.1) or the name (ours
+  only: Excalidraw's own converter takes a number and measures a name in a fallback font,
+  so the cross-check turns names into numbers first, as it gives a frame without `children`
+  an empty list, which Excalidraw's converter needs).
 - **Text has no `width`, `height` or `lineHeight`** from an agent (refused): Excalidraw
   works out a line height from a given height, and a wrong one stays (a text 1 px high in the
   scout's run).
@@ -2129,10 +2520,20 @@ Excalidraw needs nothing new:
   arrow, a freedraw). Pictures (the writer's and agents') can be moved, resized and rotated
   by id like any element; a change of a picture's file is refused (`path` and `fileId` are
   not fields of a change): remove the element and add another.
-- What follows by itself, as when the writer drags: a shape's label moves and is wrapped
-  again with it; the bound ends of its arrows move with it; a frame moves what is in it; a
-  resized line or arrow has its points scaled; every element touched gets its `version`
-  raised, a new `versionNonce` and `updated`.
+- What follows by itself, as when the writer drags: a shape's label moves with it (built:
+  by the same distance when the shape is only moved, as Excalidraw's drag does, and laid out
+  again only when its size or text changed, so the labels the writer drew do not drift by
+  our font metrics); the bound ends of its arrows move with it (back onto the outline at
+  the gap; a binding keeps its other fields when it names the same element); a frame moves
+  what is in it; a resized line or arrow has its points scaled; a text the writer made
+  narrower (`autoResize: false`) keeps its width and is wrapped to it again (Excalidraw's
+  `refreshTextDimensions`; a turned text keeps the corner its alignment names); every
+  element touched gets its `version` raised, a new `versionNonce` and `updated`.
+- **Built (final review):** a change that sets what an element already has is left out,
+  and each change of a request is judged against the drawing as it stood just before it,
+  so a change that sets back what another change of the same request did (a frame moved,
+  its child set back) is kept. A request that changes nothing answers "Nothing changed:
+  board:1 “Architecture” already is so." and keeps no version.
 - An id the whiteboard does not have: exit 3, with the ids it has as candidates (at most
   twenty, the nearest by name first).
 
@@ -2150,7 +2551,7 @@ innerword board new [<title>] [--in <folder>] [--create-folders] [--first|--befo
 innerword board add <board> (--content <json> | --file <path> | --stdin) [--author <name>] [--dry-run] [--json]
 innerword board update <board> (--content <json> | --file <path> | --stdin) [--author <name>] [--dry-run] [--json]
 innerword board remove <board> <id>... [--author <name>] [--dry-run] [--json]
-innerword boards [<folder>] [--json]                  (also: innerword board list)
+innerword boards [<folder>] [--json]                  (also: innerword board list; whiteboard, whiteboards)
 innerword get <board> [--format text|json] [--json]
 innerword export <board> <file.pdf> [--overwrite]
 innerword info|find|history|rename|move|duplicate|trash|restore|delete <board> ...   (as for any item)
@@ -2160,64 +2561,98 @@ All in the group "Documents" after the page commands; the four that write say "T
 command changes the library." `board new` takes the elements to start with as optional
 content, like `create`. A skeleton of type `image` names its file with `path`: with
 `--file`, a relative path is taken from that file's folder, otherwise from where the
-command runs, as for the pictures of `--file` Markdown. Outputs:
+command runs, as for the pictures of `--file` Markdown. The elements and changes are a
+JSON array given with `--content`, `--file` or standard input (a bad one is exit 2; a
+missing picture says where a relative path was looked for); the help has tables of the
+skeleton's fields and of a change's. `board new` also takes `--first`, `--before`,
+`--after`. Outputs, **as built** (run against the debug tool when this text was revised):
 
 ```
 $ innerword board new "Architecture" --in Sketches
-made board:12 “Architecture” in Sketches (empty)
+made board:1 “Architecture” in Sketches (empty)
 
-$ innerword board add board:12 --file shapes.json --author Claude
-added to board:12 “Architecture”: rectangle api (label), ellipse db (label), arrow reads (label), text title, frame backend
-kept the drawing as it was: version 34 “Before a drawing by Claude”
+$ innerword board add board:1 --file shapes.json --author Claude
+added to board:1 “Architecture”: rectangle api (label), ellipse db (label), arrow reads (label), text title, frame backend
+kept the drawing as it was: version 1 “Before a drawing by Claude”; "innerword history restore 1" brings it back
 
-$ innerword board add board:12 --author Claude --content '[{"type":"image","id":"photo","x":640,"y":80,"path":"~/Pictures/harbour.heic"}]'
-added to board:12 “Architecture”: image photo (harbour.heic, converted to JPEG, 2880 x 1920 pixels, drawn 1440 x 960)
-kept the drawing as it was: version 35 “Before a drawing by Claude”
+$ innerword board add board:1 --author Claude --content '[{"type":"image","id":"icon","x":640,"y":80,"path":"/…/icon.png"}]'
+added to board:1 “Architecture”: image icon (icon.png, PNG as it came, 40 x 30 pixels, drawn 40 x 30)
+kept the drawing as it was: version 4 “Before a drawing by Claude”; "innerword history restore 4" brings it back
 
-$ innerword board remove board:12 db --dry-run
-would remove from board:12 “Architecture”: ellipse db (label); would unbind: arrow reads
+$ innerword board update board:1 --content '[{"id":"api","dx":40}]' --dry-run
+Dry run: nothing was changed. The real run would report:
+changed on board:1 “Architecture”: api; 3 followed (labels, the ends of joined arrows, what a frame holds)
+
+$ innerword board update board:1 --content '[{"id":"api","dx":0}]'
+Nothing changed: board:1 “Architecture” already is so.
+
+$ innerword board remove board:1 db --dry-run
+Dry run: nothing was changed. The real run would report:
+removed from board:1 “Architecture”: db and 1 label; unbound (they stay): reads
 
 $ innerword boards
-board:12  Sketches/Architecture    5 elements, 0 pictures   updated 2026-11-23 10:04
-board:9   Plans/Garden (trashed)   31 elements, 2 pictures  updated 2026-11-02 18:40
+board:1  Sketches/Architecture  4 elements, 0 pictures  changed 2026-11-23T17:39Z
 ```
+
+**Built**, against the spec's examples: a dry run uses the prefix every command has, then
+the real run's line; a removal names the ids and counts the labels, because `BoardChanged`
+carries ids, not kinds; an update names the ids the request named and counts what followed
+(a label's id is noise); the version line ends with the restore command, as other
+commands' do (the MCP server makes it `restore_version`); a list line ends with `changed
+<UTC minute>` like every other list; a picture says "PNG as it came" or "converted to
+JPEG"; an untitled whiteboard is stored `""` and shown "Untitled" in every output.
 
 `innerword get board:12` (and MCP `read_document`): the **listing**, one element per line,
 ids first, a label with its container and not on a line of its own:
 
 ```
-board:12 “Architecture” in Sketches: 6 elements, 1 picture; drawn area 1980 x 1020 at (100, 20)
-text       title    at (100, 20)    228 x 35   "System overview"  28 px Excalifont
-image      photo    at (640, 80)    1440 x 960  picture stored (jpeg 2880 x 1920)
-rectangle  api      at (100, 80)    200 x 90   fill #a5d8ff solid  label "API"
-ellipse    db       at (420, 80)    160 x 90   label "Postgres"
-arrow      reads    from api to db  (300, 125) -> (420, 125)  label "reads"
-frame      backend  at (90, 70)     500 x 110  "Backend"  holds api, db, reads
+board:1 “Architecture” in Sketches: 5 elements, 1 picture; drawn area 590 x 160 at (90, 20)
+rectangle  api      at (140, 80)  200 x 90                  fill #a5d8ff solid  label "API"
+arrow      reads    from api      (341, 125) -> (419, 125)  label "reads"
+text       title    at (100, 20)  222 x 35                  "System overview"  28 px Excalifont
+frame      backend  at (90, 70)   500 x 110                 "Backend"  holds api, reads
+image      icon     at (640, 80)  40 x 30                   picture stored (png)
 ```
+
+(Built: the lines are in z-order; a picture says `picture stored (png)` or `picture
+missing`, without a pixel size, which a scene does not hold. The header's count of
+elements leaves labels out: a label is part of its shape or arrow, and `info`, `boards`,
+the status bar and the assistant count the same way, `info` naming the labels apart.)
 
 `Scene::listing()` writes it, the one function behind the tool, the MCP server, the
 assistant, the version history's preview and the app's view without an engine. `--format
-json` prints the stored scene as it is. `--json` (and the MCP tools' structured results)
+json` prints the stored scene as it is (built: unparsed, so a scene the parser refuses can
+still be printed, with `board: None`; the listing formats fail on it, exit 13).
+`--json` (and the MCP tools' structured results)
 gives `DocumentText` with `board: Some(BoardInfo { summary, elements: [{id, type, x, y,
 width, height, angle, text, label, container, start, end, points, frame, groups, style:
 {…}, link, locked, picture: "stored"|"missing"}] })`. `--format markdown` is the listing too.
-`info` adds `board: BoardInfo { summary }`; `find board:12 "reads"` finds in `Scene::text()`
-and names the element of each hit (`reads (arrow label): "reads"`).
+`info` adds `board: BoardInfo { summary }` (built, it prints "holds: 4 elements (1 arrow, 1
+frame, 1 rectangle, 1 text) with 2 labels, 0 pictures, 5 words"); `find board:12 "reads"`
+finds in `Scene::text()` and names the element of each hit (`reads (arrow label): reads`;
+built: it asks `innerword_board` for the reading order, so a hit names its element where
+one text begins another). `innerword boards --json` gives `BoardListed { board, elements,
+pictures, trashed, unreadable }` (built: a whiteboard whose scene cannot be read is listed
+with `unreadable` and why, never failing the list); every candidate of an error carries its
+reference (`Candidate.reference`: `doc:`, `page:`, `board:` or `folder:`), so no front end
+writes a prefix of its own.
 
 Hints (`innerword-cli`, `hint_in`): a text command on a whiteboard ("Here: innerword board
-add, board update and board remove change a whiteboard; innerword get board:12 lists its
-elements."), a whiteboard command on a text ("Here: innerword boards lists the
-whiteboards."), an export of a whiteboard that is not a PDF ("Here: a path that ends in
-.pdf."), an element id not found ("Here: innerword get board:12 lists the ids."). The
-overview's limit of 75 lines (`help.rs`) is raised by the five lines it gets. The help of
-exit code 15 becomes "a page or a whiteboard where a document is needed, or the reverse"
-(it keeps the words "a page where a document is needed" that the skill's test reads).
+add, board update and board remove change a whiteboard; "innerword get <board>" lists its
+elements with their ids."), a whiteboard command on a text ("Here: innerword boards lists
+the whiteboards."), an export of a whiteboard that is not a PDF ("Here: a path that ends in
+.pdf."), an element id not found (exit 3, "lists the ids"). Built: the hints say `<board>`,
+because the error report carries no id. The overview's limit of 75 lines (`help.rs`) is
+raised to 81, and its export line says "a whiteboard as PDF". The help of exit code 15
+becomes "a page or a whiteboard where a document is needed, or the reverse" (built: it
+cannot keep the old words "a page where a document is needed"; the skill's test now reads
+the new ones).
 
 ### 7.5 MCP
 
 | Tool | Effect | Arguments |
 |---|---|---|
-| `create_board` | add | `title`, `folder`, `create_folders`, `elements` (array, optional), `author`, `dry_run` |
+| `create_board` | add | `title`, `folder`, `create_folders`, `elements` (array, optional), `author`, `dry_run` (built: also `first`, `before`, `after`, as `create_document`) |
 | `add_to_board` | add | `board`, `elements` (array), `author`, `dry_run` |
 | `update_board` | change | `board`, `changes` (array), `author`, `dry_run` |
 | `remove_from_board` | change (`destructiveHint` as `delete_comment`'s) | `board`, `ids` (array of strings), `author`, `dry_run` |
@@ -2231,12 +2666,25 @@ exit code 15 becomes "a page or a whiteboard where a document is needed, or the 
 - The removal tool is not called `delete_from_board`: a test forbids listed tools that start
   with `delete_d` or `delete_f` (`tools.rs`).
 - `args.rs` gets `array_of_objects(description)` and `array_of_strings(description)`; an
-  array sent as a JSON string that parses as an array is taken (models do that).
-- `tool_text` maps "innerword board add" to `add_to_board` and the others; `tool_error_text`
-  says, for a text operation on a whiteboard, "That is add_to_board, update_board or
-  remove_from_board."
+  array sent as a JSON string that parses as an array is taken (models do that); built: a
+  single object, or a single id, counts as an array of one, and an id given as a number
+  becomes a string.
+- `tool_error_text` says, for a text operation on a whiteboard, which tools change one
+  (`BOARD_TOOLS`), and after an export that is not a PDF what a whiteboard is exported as
+  (`BOARD_FORMAT`). Built: `tool_text` has no mapping for "innerword board add" and the
+  others, since no text the server returns names those commands; the error text appends the
+  tools instead. A `pictures` argument is refused by the schema and again by the operation
+  (`PICTURES_REFUSED`). `add_to_board`'s description says an id the whiteboard has is
+  refused (7.2). An ambiguous name lists each candidate by its own prefix. `INSTRUCTIONS`
+  has one sentence about whiteboards.
 - `render.rs`: the kind's prefix (`board:12`) and noun ("whiteboard") from
-  `DocumentKind::reference_prefix()` and `noun()`; the listing for `read_document`.
+  `DocumentKind::reference_prefix()` and `noun()`; the listing for `read_document`; built:
+  `board_changed` (with `BoardDid`), `boards`, `board_info` (counted as the listing counts,
+  its kinds as plurals and its labels apart), "Untitled" for an item without a title in
+  every output, a damaged whiteboard listed with "cannot be read" and why, and `history
+  restore` of a whiteboard speaking of the drawing ("Restored version N (…) of “Plan”: the
+  drawing is as it was then.", "The drawing as it was is kept as version N"), not of the
+  text and its words.
 - **Pictures through MCP**: `create_board` and `add_to_board` take skeletons of type `image`
   with a whole `path` (the server is given no folder, as for `add_image`); the server's
   process reads and prepares the file (it is the process that was asked) and the request
@@ -2269,8 +2717,10 @@ remove_from_board / RemoveFromBoard(RemoveFromBoardRequest) -> BoardChanged
   `innerword image add` resolves one (`file_of`, the request's `base_dir` or the library's),
   read, and made by `board_picture` (`innerword_board::sniff_svg` and at most 4 MB, else
   `innerword_image::prepare_file`); the result goes into the request's `pictures`
-  (`BoardPicture { source, file, mime_type, pixels, density, data, stored }`, `data` base64
-  on the channel, as `AttachedImage`'s), one entry per distinct path, the total at most
+  (`BoardPicture { source, file, mime_type, pixels, density, untouched, data, stored }`,
+  `data` base64 on the channel, as `AttachedImage`'s; `stored` never travels, as
+  `Blob.stored`; `untouched` says the file was stored as it came; an SVG's size is read
+  from its root element), one entry per distinct path, the total at most
   `live::MAX_ATTACHED_BYTES` (32 MB). **`Prepare` always prepares again** and drops whatever
   `pictures` the request came with, as `AddPageRequest`'s does with `prepared`, and both front
   ends refuse a request that names `pictures` (the field is not an argument of the command
@@ -2282,8 +2732,9 @@ remove_from_board / RemoveFromBoard(RemoveFromBoardRequest) -> BoardChanged
   the scene, in the same write under the lock. Carried out by the app, **the listener's
   thread stores them** through its own `ImageFile` before it queues the request, as it stores
   a page's files: `live::store_page_files` learns a whiteboard's pictures beside a page's
-  blobs (a picture's bytes whose hash is not its `file` are refused with `DAMAGED_BLOB`'s
-  sentence), marks them `stored` and drops their bytes, so the main thread writes the scene
+  blobs (a picture's bytes whose hash is not their `file`, or whose type is not what they
+  are, are refused, with a sentence of their own: built, `DAMAGED_BLOB`'s names a page),
+  marks them `stored` and drops their bytes, so the main thread writes the scene
   only; `carries_page_files` is true for a request with pictures too (refused at once while
   the owner's switch is off, and nothing is stored). Both keep their names, because the
   listener of the app, the stand-in of `innerword-cli`'s harness and their tests call them;
@@ -2305,7 +2756,21 @@ remove_from_board / RemoveFromBoard(RemoveFromBoardRequest) -> BoardChanged
   256 MB a line may be.
 - The app's half: `workspace::sentence` (6.7), `take_over_open_board`, the collect before
   (6.7); a request for a whiteboard that is not open changes the library only (the sidebar
-  follows its events).
+  follows its events: `DocumentCreated`, or `VersionKept` then `DocumentText`; a rename
+  `DocumentRenamed`). The app's listener already stores a whiteboard's pictures through
+  `carries_page_files` and `store_page_files`; no other change was needed there.
+- **Built, the types** (`innerword-agent/src/types.rs`): `CreateBoardRequest { title,
+  folder, create_folders, placement: Option<Placement>, elements, pictures, base_dir
+  (skipped), write (flattened) }` (`placement` as `CreateDocumentRequest` has it),
+  `AddToBoardRequest { board, elements, pictures, base_dir, write }`, `UpdateBoardRequest {
+  board, changes, write }`, `RemoveFromBoardRequest { board, ids, write }`, and the answer
+  `BoardChanged { board, added, updated, removed, unbound, pictures: Vec<PictureAdded>,
+  version, warnings, written (flattened) }`. The spec's `changed` is `updated`: the flattened
+  `Written` has `changed: bool` already, and two "changed" keys made the app's answer
+  unreadable. `pictures` (`PictureAdded { id, source, mime_type, pixels, untouched, width,
+  height }`) lets the command line say "converted…, drawn W x H". The ids are derived from
+  the board id, the scene's `ContentStamp`, the request as JSON with its keys sorted and the
+  pictures' file ids, so the two runs of the suite store the same bytes.
 - `READERS` (the test that every public method of `Library` is in the table or a known
   reader) gets `boards`.
 
@@ -2318,6 +2783,10 @@ remove_from_board / RemoveFromBoard(RemoveFromBoardRequest) -> BoardChanged
   made, so a file that cannot be used is refused as in the real run), nothing is written
   and no picture is stored; the result says what would be added (with the ids the real run gives, since they are derived, 7.1),
   changed, removed and unbound, or "would change nothing" (`Written::would_change`).
+- **Built:** a new `Error::EmptyBoard { id, name }` for exit 9 (the PDF of an empty
+  whiteboard), `ItemKind::Element` for exit 3, and `BOARD_IS_PDF_ONLY`. The table of
+  operations has 30 rows; `seed` of the agents' suite holds a whiteboard (`seed_texts` is the
+  old one, for the schema-1 test); every operation and read runs both ways.
 - `Error::WrongKind { id, name, kind, wanted, export }`: **`id` and `name` stay** (the
   sentences name the item), `is_page` becomes `kind` (what the item is) and `wanted` (the
   kind the operation needed; `None` for "a text"). The sentences: "“Plan” is a whiteboard:
@@ -2362,12 +2831,22 @@ A paragraph "Whiteboards." after "Pages." in `crates/innerword-agent-setup/src/s
 > whiteboard is exported as a PDF only: `innerword export board:12 ~/Desktop/architecture.pdf`.
 > Its text is not edited with `edit` or `append` (exit code 15).
 
-The exit code 15 line: "a page or a whiteboard where a document is needed, or the reverse.
-A page cannot be edited; a whiteboard is changed with `board add`, `board update` and
-`board remove`." `skill_against_binary.rs` gets
+**Built:** the paragraph is as above, with two sentences more: "`innerword boards` lists the
+whiteboards." after the `--format json` sentence, and "`innerword board add --help` lists
+every field an element may have." at the end; it is followed by a block of the commands
+(where the whiteboards are listed with `innerword board list --json`, because the skill's
+test checks the help heading of every command it shows and `boards` answers as "board
+list"); "whiteboards" joins the skill's description.
+
+The exit code lines, as built: 15 "a page or a whiteboard where a document is needed, or
+the reverse. A page cannot be edited; to bring a newer copy, add it again with `page add`
+and its source address. A whiteboard is changed with `board add`, `board update` and `board
+remove`, and exported as a PDF only."; 3 names "an element of a whiteboard" among what is
+not found ("an element's id with `get`"); 9 adds "A whiteboard with nothing drawn on it has
+no PDF either." `skill_against_binary.rs` gets
 `the_examples_of_whiteboards_run_against_the_built_tool` (new, add, the picture's add with
-its path replaced by a PNG that `innerword_image::fixtures` makes in the test's temporary
-folder, update, remove, get, export to a `.pdf` with `INNER_WORD_PAGE_CHECK=fake`, on a
+its path replaced by a PNG the test writes itself into its temporary folder (built: not
+`innerword_image::fixtures`, so as to add no dependency), update, remove, get, export to a `.pdf` with `INNER_WORD_PAGE_CHECK=fake`, on a
 temporary library); the skill's text test holds the paragraph's sentences.
 
 ---
@@ -2381,8 +2860,8 @@ what closes it:
 | # | Threat | Closed by |
 |---|---|---|
 | 1 | The bundle reaches the network (fonts from a CDN, collaboration, library browsing, embeds, AI, analytics, link previews, preconnects) | The pages' isolation unchanged: the CSP on every answer, the content rule list, WebRTC and media devices off, no preconnect, one non-persistent data store. Excalidraw's CDN font fallback patched out at build (the build fails when the patch stops applying); collaboration not rendered; embeds, AI and the library browser off (4.13); tracking off in the package. A WebKit test loads the bundle and edits, exports and makes a PDF with a 127.0.0.1 server watching: no request reaches it, no CSP report, nothing missing. |
-| 2 | The bridge as a door into the app | Only a whiteboard's view has it; one name; the main frame of the whiteboard's own origin only; a string under 24 MB; a known `v` and `kind`, else dropped and counted. What it can do is bounded: replace **this** whiteboard's scene with what its page holds (compare-and-swap, 4.6), offer picture bytes, which the bytes' own type routes through `sniff_svg` or `prepare`, replace the shape library with what the page holds (read by `innerword_board::ShapeLibrary`, items with pictures or frames of the web dropped, at most 8 MB), and open the list of shortcuts (`help`). Nothing it says is run, opened, or taken as a command; every scene is read by `innerword_board` before it is saved. A page's view has no handler (a WebKit test: `window.webkit.messageHandlers.innerwordBoard` is undefined in a page). |
-| 3 | A scene carries something harmful (HTML in a text, a script link, a huge text, an embed, an `iframe` element whose `srcdoc` Excalidraw renders with `allow-scripts`), written by an agent, or pasted by the writer from Excalidraw JSON that any website can put on the clipboard, or brought back by an undo | Excalidraw draws text on a canvas and escapes it in its SVG; links open only by the reader's act and only `http`, `https`, `mailto`; `iframe`, `embeddable`, `magicframe` are deleted by the glue the moment they are on the canvas (paste, change, undo, adopt, load), dropped from every scene read and refused from agents; **the whiteboard's own policy** (4.2: `script-src 'self'`, `frame-src 'none'`, no eval) lets no inline or framed script run even before the glue deletes the element; no `alert` toast on a whiteboard; `customData` and `fileId` are refused from agents; a link with any scheme but `http`, `https`, `mailto` and the view's own (an element link) is taken out of a paste, out of every scene `innerword_board` reads (`link_is_kept`) and on the export page, since `exportToSvg` makes it a link of the PDF; a value nested deeper than 100 levels (Excalidraw keeps `customData` and unknown fields through a paste) is read as `null` with a warning instead of making the drawing unreadable (`json::parse_lenient`); the limits of section 2 and 7. The worst a bad scene does is draw badly in its own whiteboard, and every agent's change kept a version first. |
+| 2 | The bridge as a door into the app | Only a whiteboard's view has it; one name; the main frame of the whiteboard's own origin only, and **a view with the bridge loads no subframe** (every subframe navigation cancelled: WebKit reports a post a same-origin frame makes through `top.webkit.messageHandlers` as the main frame's, so the frame check alone would not do; built, B11); a string under 24 MB (after a lossy conversion that mends a lone surrogate); a known `v` and `kind`, else dropped and counted. What it can do is bounded: replace **this** whiteboard's scene with what its page holds (compare-and-swap, 4.6), offer picture bytes, which the bytes' own type routes through `sniff_svg` or `prepare`, replace the shape library with what the page holds (read by `innerword_board::ShapeLibrary`, items with pictures or frames of the web dropped, at most 8 MB), and open the list of shortcuts (`help`). Nothing it says is run, opened, or taken as a command; every scene is read by `innerword_board` before it is saved. A page's view has no handler (a WebKit test: `window.webkit.messageHandlers.innerwordBoard` is undefined in a page). |
+| 3 | A scene carries something harmful (HTML in a text, a script link, a huge text, an embed, an `iframe` element whose `srcdoc` Excalidraw renders with `allow-scripts`), written by an agent, or pasted by the writer from Excalidraw JSON that any website can put on the clipboard, or brought back by an undo | Excalidraw draws text on a canvas and escapes it in its SVG; links open only by the reader's act and only `http`, `https`, `mailto`; `iframe`, `embeddable`, `magicframe` are deleted by the glue the moment they are on the canvas (paste, change, undo, adopt, load), dropped from every scene read and refused from agents; the whiteboard's own policy (4.2: `script-src 'self'`, no eval) lets no inline script run, and **a view with the bridge loads no frame at all** (every subframe navigation cancelled), so an `iframe` element's `srcdoc` runs nothing even before the glue deletes the element (built: the policy alone would let a `srcdoc` that names one of the bundle's own scripts run it, B11); no `alert` toast on a whiteboard; `customData` and `fileId` are refused from agents; a link with any scheme but `http`, `https`, `mailto` and the view's own (an element link) is taken out of a paste, out of every scene `innerword_board` reads (`link_is_kept`) and on the export page, since `exportToSvg` makes it a link of the PDF; a value nested deeper than 100 levels (Excalidraw keeps `customData` and unknown fields through a paste) is read as `null` with a warning instead of making the drawing unreadable (`json::parse_lenient`); the limits of section 2 and 7. The worst a bad scene does is draw badly in its own whiteboard, and every agent's change kept a version first. |
 | 4 | A link opened without the reader (a script's click, a message) | The reader-only gate, unchanged (pages' ISO-4); no bridge message opens a link; the canvas's link mark opens nothing; the link popover's real `<a>` opens once, on a real click. |
 | 5 | The whiteboard's page navigates away, or is replaced, and loses what is not saved | `one_document`: no navigation after the first load; downloads cancelled; `cmd-shift-s` taken by the window before Excalidraw's "save to disk"; the open panel answers nothing. |
 | 6 | Another origin reads a whiteboard's storage, or a page reads a whiteboard's | Each whiteboard its own origin, `board-<id>-<created_at>`, never `page-…`; storage lasts only while the app runs. |
@@ -2392,8 +2871,8 @@ what closes it:
 | 10 | The user's clipboard | Only the writer's own copy and paste touch it (Excalidraw's, on their key or menu item); a scripted run never presses `cmd-c` on a whiteboard; `navigator.clipboard.read` from Excalidraw's menu shows WebKit's own Paste button, which the writer must press. |
 | 11 | WebKit in the tool, or in the MCP server's process | The PDF is made in a child (`__board-pdf`) with standard input closed, a private work directory, a time limit; `available()` asked first. Conversion and every operation are pure Rust. |
 | 16 | Mermaid as a way in: a diagram (written by the writer, pasted from anywhere, or put on the clipboard by a website) with HTML in a label, a `click` handler, an image node naming an address, an `%%{init}%%` that raises Mermaid's security level | Mermaid stays at `securityLevel: "strict"`: labels go through DOMPurify, no click callback runs, and `securityLevel` is in Mermaid's `secure` list, which a diagram's directive cannot set (read in 11.17.2). The SVG it renders lives in an off-screen `div` for the time of the conversion; the policy runs no inline script or handler in it and loads no picture from an address (`img-src`, the rule list); what stays is Excalidraw elements (text drawn on a canvas) or one SVG picture drawn through `<img>`, whose scripts never run, stored by `sniff_svg`'s rule. Nothing of Mermaid needs eval, a worker or the network (4.13), so the live view's policy is not widened for it. |
-| 12 | A whiteboard that cannot be saved (too large, a scene the parser refuses, a picture the library lost), or a request that floods the app | Strict limits for agents (`MAX_SCENE_BYTES`, `MAX_ELEMENTS`, `MAX_TEXT_CHARS`, `MAX_REQUEST_ELEMENTS`); for the writer only a hard cap far above any drawing, a lenient parser, parts for a large scene, a store that refuses only *new* missing pictures, and a recovery file for whatever still cannot be saved (4.6); `MAX_MESSAGE_BYTES` per message; the PDF's side capped at 14,400 pt. |
-| 15 | A late or forged scene writes over newer content (a post that left the page before an agent's change, a stale view after a reload, a foreign script replacing the glue's calls) | The compare-and-swap of every app save against the stamp the view's scene descends from; posts held while an outside write is adopted; the source serves the current stored scene at every load; the policy lets no script but the bundle's run in the page world, where `collect` and `adopt` live. |
+| 12 | A whiteboard that cannot be saved (too large, a scene the parser refuses, a picture the library lost), or a request that floods the app | Strict limits for agents (`MAX_SCENE_BYTES`, `MAX_ELEMENTS`, `MAX_TEXT_CHARS`, `MAX_REQUEST_ELEMENTS`); for the writer only a hard cap far above any drawing, a lenient parser, parts for a large scene, a store that refuses only *new* missing pictures, and a recovery file for whatever still cannot be saved (4.6); `MAX_MESSAGE_BYTES` per message (a picture whose `file` message would be longer is never posted and answered `missing`, so the autosave goes on); the PDF's side capped at 14,400 pt (`innerword_web::MAX_PDF_SIDE`, whatever the export page answers). |
+| 15 | A late or forged scene writes over newer content (a post that left the page before an agent's change, a stale view after a reload, a foreign script replacing the glue's calls) | The compare-and-swap of every app save against the stamp the view's scene descends from; posts held while an outside write is adopted, and dropped while a view reloads; the source serves the current stored scene at every load, and a page without a readable `board.json` never posts `ready` (`START_FAILED`); the policy and the cancelled subframes let no script but the bundle's run in the page world, where `collect` and `adopt` live. |
 | 13 | A whiteboard names stored bytes it should not see | The view's source answers `_files/<FileId>` only for ids the whiteboard names or the app stored for it. (Even so, nothing in the view can send bytes anywhere.) |
 | 14 | A stale or missing bundle | `Assets::find` refuses a folder without its `MANIFEST.json`; the app then has no whiteboard view ("The whiteboard's files are missing from Inner Word") and the tool's PDF fails with that sentence. |
 
@@ -2420,6 +2899,22 @@ wave's commits (B4's tests need B3's first `dist/`) says so.
 | B11 | The converter's cross-check | `innerword-web`'s `tests/webkit.rs` (its board corpus case only) | 2 | B2 finished (converter and corpus), B3's `convertSkeletons`, B4 | medium |
 | B9 | Tool, MCP server, skill, the assistant's tool count | `innerword-cli`, `innerword-mcp`, `innerword-agent-setup`, `innerword-assistant` (the count test of `claude/args.rs`) | 3 | B2, B3, B4, B6 | high |
 | B10 | Agents and the panel in the app; docs; bundling | `innerword-app`, `CLAUDE.md`, `docs/gpui-notes.md`, `docs/pages-design.md` (the bridge's line), `scripts/bundle.sh`, `about.hbs`, `packaging/Read Me First.txt` if it lists contents | 3 | B6, B7, B8 | xhigh |
+
+**Built:** every package was reviewed after its build; B2, B3, B8 and B10 had a fix round
+in place, and five follow-up packages took the reviews' points that touched a crate whose
+wave was over: B1f (`save_board` reads and hashes the stored scene once; the plan test of
+`boards()`), B1g (`save_board`'s doc says what a refused save still does in `images.db`),
+B6f (a damaged whiteboard listed, an untitled one stored `""`, every prefix from
+`reference_prefix`, a JSON read unparsed), B7f (`new_board_command`, `TREE_KEY_CONTEXT`),
+B11f (B3's six WebKit cases of the glue ported into `tests/webkit/bundle.rs`, the
+cross-check's slack by alignment, the kerning measured, the `srcdoc` cases). A final review
+of the whole feature then fixed what is marked "final review" in this text (the commits
+after `acd66c1`). B10 also wrote CLAUDE.md, `docs/gpui-notes.md` (the bridge, the calls,
+`park`, the fixed `NoAction` bindings, and the lesson of `cx.defer`: an app-wide action
+listener reached from a keystroke runs inside that window's update) and
+`docs/pages-design.md`'s line on the bridge. One slip of the process: B6's commit 4fd86be
+also carries three `Cargo.lock` lines of B8's (`git commit -- Cargo.lock` takes the working
+file), which matched B8's `Cargo.toml` and broke nothing.
 
 **Inside wave 1, two declared hand-offs** (reviewer's point, taken: B2 and B3 needed each
 other's work): B2's **first commit** is the crate with its public constants
@@ -2529,6 +3024,20 @@ survives the collector, duplicate, trash and restore, search finds a label's wor
 `boards()` live and trashed); the schema tests of section 2.
 Done: `CARGO_TARGET_DIR=target-pure cargo test -p innerword-store`; `cargo build -p
 innerword-app` and `CARGO_TARGET_DIR=target-pure cargo build -p innerword-cli` compile.
+
+**As built** (B1, B1f, B1g): the signatures above, and `ContentStamp` has `Display` too; the
+two page functions and the board's share private helpers (`insert_item`, `require_kind`,
+`stamp_of`); `board_files_missing(Option<DocumentId>, &[FileId])` checks only the ids it is
+given and pre-filters the row's and its snapshots' contents with `instr(lower(content),
+hex)` before `scan::files_in`; `schema.rs` has `take_steps_above_open(&Transaction)`, and
+`migrate` stops at 4; `open_read_only` and `NeedsUpgrade` use `OPEN_SCHEMA_VERSION` (section
+2). The order of refusals, and what a refused save still does in `images.db`, are in
+section 2 ("The store's half"). `tests/boards.rs` has 23 tests; the schema's unit tests
+add `an_open_migrates_to_4_and_leaves_5_alone`,
+`step_5_changes_nothing_and_goes_with_its_transaction`,
+`a_build_that_knows_schema_4_refuses_a_library_of_schema_5` and
+`the_list_of_whiteboards_does_not_read_the_scenes`. One test of `innerword-agent` asserted
+`SCHEMA_VERSION` after an open and now asserts `OPEN_SCHEMA_VERSION`.
 
 #### B2. `innerword-board` (new, pure, depends on nothing of ours)
 
@@ -2742,6 +3251,28 @@ files for the conversion of a corpus of skeletons (`tests/corpus/*.json`), which
 WebKit case also reads.
 Done: `CARGO_TARGET_DIR=target-pure cargo test -p innerword-board`.
 
+**As built** (B2 and its fix round): everything above with these signatures, and beyond
+them: `pub const SOURCE: &str = "inner-word"`; `Scene::listing_with(header, has)` and
+`listed_with(has)` (`has` tells whether `images.db` holds a picture's bytes: "picture
+missing"), `Scene::app_state()`; `ElementType::{parse, as_str, is_shape, is_linear}`; more
+getters on `Element` (`type_name`, `version_nonce`, `name`, `locked`, `index`,
+`bound_elements`, `binding`, `points`, `group_ids`, `from_json`); `ListedStyle`;
+`metrics::{FAMILIES, family_by_name, family_name, normalize_text, has_widths,
+DEFAULT_FONT_*}` and the private `line_width`; `LibraryItem::{name, created, status,
+elements}`, `ShapeLibrary::is_empty`; `Display` and `Error` for `SceneError` and
+`BoardError`. `BoardSummary` gained `labels` (serde default) and counts `elements` and
+`by_type` without labels, as the listing's header does (final review: `info` had said 7
+where `get` and `boards` said 5). `LibraryItem::title(index)` takes `index` from 0 and
+shows it from 1; `Delta::to_json` gives each file entry only `mimeType` and `file`;
+`Removed.removed` holds the labels too and `Updated.changed` what moved with a change (an
+elbow arrow left as it was is not among them); `merge` takes the canvas settings from
+`theirs` only where the writer left them as they were, and orders elements by fractional
+index, renumbering indices that do not grow. The tests: 15 unit and 75 integration tests
+after the fix round (`suite/`: scene, svg, delta, add, update, remove, library, corpus,
+robust), the corpus in `tests/corpus/*.json` with golden scenes in `tests/corpus/golden/`
+and a README for B11 (bless with `INNERWORD_BOARD_BLESS=1`); a time-limited test of 2,000
+changes on a large board. `src/metrics/font-metrics.json` is byte for byte the bundle's.
+
 #### B3. `innerword-board-web` (new: the bundle; Rust depends on nothing of ours)
 
 ```rust
@@ -2778,7 +3309,7 @@ pub mod bridge {
         ScenePart { rev: u64, index: u32, count: u32, text: String },
         File { id: String, mime_type: String, data_url: String },
         Status(Status),
-        Library { lrev: u64, items: Box<serde_json::value::RawValue> },
+        Library { lrev: u64, items: Box<serde_json::value::RawValue>, too_large: bool },   // built: too_large, items null
         Help,
         Error { message: String },
     }
@@ -2790,6 +3321,9 @@ pub mod bridge {
     }
     impl Status { pub fn holds_more(&self) -> bool; }   // rev > posted || editing || pointer_down
     pub fn parse(body: &str) -> Result<Message, String>;
+    // Built: PART_BYTES (16 MB), VERSION (1), START_FAILED ("the whiteboard could not
+    // start": an error message that begins with it is a failed start, 4.3), and
+    // Message::to_body(), which writes a message exactly as the glue does (the fake engine).
 }
 
 pub mod calls {   // bodies for innerword_web::WebPage::call_async / ScriptInput::script
@@ -2817,13 +3351,22 @@ pub mod calls {   // bodies for innerword_web::WebPage::call_async / ScriptInput
     pub struct Adopted { pub rev: u64, pub same: bool, pub conflicts: Vec<String> }
     #[derive(Debug, serde::Deserialize)]
     pub struct Center { pub x: f64, pub y: f64, pub selected: Vec<String> }
+    // Built: EXPORT_PADDING, EXPORT_MAX_SIDE; argument builders files_argument,
+    // steps_argument, zoom_argument(Zoom), search_argument, insert_pictures_argument(
+    // &[PictureToInsert], at), insert_elements_argument, mermaid_argument,
+    // library_argument(&LibraryAction), convert_skeletons_argument; answer<T>(); and the
+    // answers Revised, Zoomed, Inserted, ExportSize, LibraryAnswered (with ids).
 }
 
 pub mod keys {
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub struct BoardKey { pub keys: &'static str /* GPUI keystroke: "cmd-d" */, pub what: &'static str /* "Duplicate" */ }
-    pub const WHITEBOARD_KEYS: &[BoardKey];   // section 4.7's table
+    pub const WHITEBOARD_KEYS: &[BoardKey];   // section 4.7's table: 43 keys
+    // Built: TOOL_KEYS_ROW, is_whiteboard_key; the doc says to bind every spelling
+    // innerword_keymap::Keystroke::spellings gives (a test: only cmd-shift-, and cmd-shift-.).
 }
+// Built, beside the paths: MANIFEST, NOTICES, BUNDLE_FOLDER ("Whiteboard"); Assets::find_for
+// (executable); build.rs compiles no dist/ path into a build with INNER_WORD_BUNDLED.
 ```
 
 JavaScript (`web/src/glue/`): the page's half of 4.3 to 4.15 and of section 5 (the export
@@ -2853,6 +3396,19 @@ allows neither).
 Done: `node build.mjs --check` passes and `CARGO_TARGET_DIR=target-pure cargo test -p
 innerword-board-web` passes.
 
+**As built** (B3 and its fix round): 46 tests (`suite/`: assets, bridge, bundle, calls,
+keys); `NOTICES.txt` is held against `BUILD-INFO.json`'s `metafilePackages` and
+`carriedInside`, written straight from esbuild's metafile and the source maps (the first
+test held it against a list made from the same entries as the notices, which proved
+nothing); the no-eval test counts the allowed occurrences exactly (section 3). The glue
+departs from the spec where 4.3, 4.4 and 4.5 say "Built": the `same` rule, the restore
+with copies, every wait before the merge, `START_FAILED`, `tooLarge`, `state` outside the
+queue, `postNow({force})` on `visibilitychange` and `pagehide` (a pasted picture still on
+its way no longer delays those posts), the fonts loaded through `exportToCanvas`, and the
+keys it keeps from Excalidraw (4.7). `library.json` stays optional in the page (B4's cases
+serve none); the app always serves it. B3's six real-WebKit cases of the fix round were
+written in a scratch Swift harness and ported into `innerword-web`'s program by B11f.
+
 #### B4. `innerword-web`
 
 ```rust
@@ -2873,6 +3429,10 @@ pub struct ViewExtras {
 }
 pub const BOARD_CONTENT_SECURITY_POLICY: &str;          // 4.2
 pub const BOARD_EXPORT_CONTENT_SECURITY_POLICY: &str;   // 4.2, with 'wasm-unsafe-eval'
+// Built: BOARD_EXPORT_CONTENT_SECURITY_POLICY_BEFORE_WASM_KEYWORD ('unsafe-eval'),
+// WASM_KEYWORD_SINCE_WEBKIT = 614, pub fn board_export_policy() -> &'static str (the one
+// every caller passes), MAX_PDF_SIDE = 14_400.0, check_with_policy and
+// check_blocking_with_policy, testing::live_bridges().
 
 pub trait PageEvents: 'static {
     // … every method of today …
@@ -2887,6 +3447,8 @@ impl WebPage {
     pub fn call_async(&self, body: &str, argument_json: &str, done: impl FnOnce(Result<String, String>) + 'static);
     /// Out of sight, still drawn (4.2).
     pub fn park(&self);
+    // Built: pub fn is_parked(&self) -> bool; set_frame brings a parked view back (4.2);
+    // Drop removes every script message handler.
 }
 
 pub struct ScriptInput {
@@ -2956,6 +3518,26 @@ its own; dev-dependency `innerword-board-web`):
 Done: `CARGO_TARGET_DIR=target-pure cargo test -p innerword-web` (the program and the unit
 tests).
 
+**As built** (B4, B11, B11f): the cases are in `tests/webkit/board.rs`, `bundle.rs` and
+`crosscheck.rs` (run one alone with `INNERWORD_WEB_ONLY=<case>`: `bridge`, `park`,
+`bundle`, `bundle_glue`, `crosscheck`), and beyond the list above: a message exactly at the
+cap arrives and one over it only by its UTF-8 bytes is dropped; a lone surrogate in a post
+and in a call's answer arrives as U+FFFD; 20 MB each way through `call_async` (about 17 ms);
+`one_document` also cancels a link click and `location.reload()` while the app's reload
+works; `frames_never_reach_the_bridge` (four views: with the bridge no frame of any kind
+loads, under either policy; without it, the page policy runs every frame and the
+whiteboard's runs a `srcdoc` that names its own script, written as a note); `park` gives
+back the hidden state and the occlusion detection it found; a PDF answer of 1e7 × 200.5
+comes out 14,400 × 201; risk 12 with a Rust-made text whose version Excalidraw raises at
+load (an index out of order) taken at version 3 without a conflict; Xiaolai's 404s fail
+unless `BUILD-INFO.json` says its patch was not applied; the six glue cases of B3's fix
+round (`bundle_glue`: an adopt while a font load is held, in the middle of a freehand
+stroke, as a stroke begins, while a new text is typed; a failed start with `state`
+answering behind a waiting `collect`; a library over 25 MB), which fail 15 checks against
+the bundle before the fix; and the cross-check (B11). The final review added a picture
+longer than one message and what a paste brings (an `smb:` link, a `customData` nested 130
+deep).
+
 #### B5. Small additive changes
 
 ```rust
@@ -2976,14 +3558,17 @@ pub enum Scaling { #[default] Actual /* kPDFPrintPageScaleNone, today's */, Down
 
 // innerword-print/src/pdf.rs (a folder's PDF with its whiteboards, section 5)
 impl PdfWriter {
-    /// Adds page `page` (from 1) of the PDF `pdf` as a page of its own: its media box is
-    /// that page's, and the page is drawn into it with CGContextDrawPDFPage, so its paths,
-    /// its text with its embedded fonts and its pictures stay what they are. None (and
-    /// nothing added) for bytes that are no PDF or a page it does not have; else the size.
+    /// Adds page `page` (from 1) of the PDF `pdf` as a page of its own, of the size a
+    /// reader shows for it (its crop box, turned by /Rotate; built, where the spec said its
+    /// media box), and the page is drawn into it with CGContextDrawPDFPage, so its paths,
+    /// its text with its embedded fonts and its pictures stay what they are (not its link
+    /// annotations). None (and nothing added) for bytes that are no PDF, page 0, a page it
+    /// does not have or a page of no size; else the size.
     pub fn add_pdf_page(&mut self, pdf: &[u8], page: usize) -> Option<(f32, f32)>;
 }
 // Report gains `embedded_pages: usize` (counted in `pages` too), and `Report::line` names
-// them ("2 whiteboards") when there are any.
+// them ("2 whiteboards") when there are any; rows, fonts and images count the writer's
+// own pages only (built).
 
 // innerword-ui/src/icon.rs
 IconName::Whiteboard   // "whiteboard", icons/whiteboard.svg, the set's style (a test as the globe's)
@@ -3000,11 +3585,17 @@ Tests: `innerword-print`'s `tests/save_job.rs` prints a PDF of a 1,600 × 900 pt
 which would depend on the Mac's default printer) and a text's job as before; `add_pdf_page`
 (`tests/` of the crate's one integration binary): a PDF of two pages of different sizes
 made by `PdfWriter` with text rows, a picture and strokes, one of its pages added to a new
-writer after a text page: the new PDF has two pages, the added one of the source's size,
+writer after a text page (built: in the unit tests, `src/tests.rs`, since the crate's only
+`tests/` program is `save_job`; and a turned page, `a_page_is_added_as_a_reader_shows_it`): the new PDF has two pages, the added one of the source's size,
 the same text (`PdfFile::page_text`) and the same pixels (`page_pixels`), and the text is
 still text (`PdfFile::find` locates a word), and bytes that are no PDF add nothing; the
 icon's test;
-the assistant's prompt and context tests with a board. Done: `cargo test -p innerword-print`,
+the assistant's prompt and context tests with a board. **Built:** `OpenKind::is_board()`
+and `is_text()` beside `is_page()`; a whiteboard's tag has `kind="board"` and no
+`source=`; an empty listing is "(The whiteboard is empty.)"; a listing over 180,000
+characters goes as its beginning and its end, and with tools the assistant is told to read
+the rest with `read_document` ("board:<id>"); the quick chat's prompt does not mention
+whiteboards. Done: `cargo test -p innerword-print`,
 `cargo test -p innerword-ui`, `CARGO_TARGET_DIR=target-pure cargo test -p innerword-assistant`,
 `cargo build -p innerword-app`.
 
@@ -3017,7 +3608,7 @@ pub struct CreateBoardRequest {
     #[serde(default)] pub title: String,
     #[serde(default)] pub folder: Option<Target>,
     #[serde(default)] pub create_folders: bool,
-    #[serde(default)] pub place: Placement,
+    #[serde(default)] pub placement: Option<Placement>,   // built: as CreateDocumentRequest has it
     #[serde(default)] pub elements: Vec<innerword_board::Skeleton>,
     /// Filled by Prepare in the process that was asked, never by a caller (7.6).
     #[serde(default)] pub pictures: Vec<BoardPicture>,
@@ -3043,8 +3634,9 @@ pub struct BoardPicture {
     pub mime_type: String,           // image/png, image/jpeg, image/gif, image/svg+xml
     pub pixels: (u32, u32),
     pub density: u32,                // 72 when the file says nothing (and for an SVG)
+    pub untouched: bool,             // built: stored as it came (the output's "as it came")
     #[serde(with = "base64_bytes")] pub data: Vec<u8>,   // emptied once stored
-    pub stored: bool,                // the listener stored it (live::store_page_files)
+    #[serde(skip)] pub stored: bool, // built: never travels, as Blob.stored; the listener's mark
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct UpdateBoardRequest { pub board: Target, pub changes: Vec<innerword_board::ElementChange>, #[serde(default)] pub write: WriteOptions }
@@ -3055,22 +3647,26 @@ pub struct RemoveFromBoardRequest { pub board: Target, pub ids: Vec<String>, #[s
 pub struct BoardChanged {
     pub board: DocumentSummary,
     pub added: Vec<innerword_board::AddedElement>,
-    pub changed: Vec<String>,
+    pub updated: Vec<String>,        // built: not `changed`, which the flattened Written has
     pub removed: Vec<String>,
     pub unbound: Vec<String>,
+    pub pictures: Vec<PictureAdded>, // built: { id, source, mime_type, pixels, untouched, width, height }
     pub version: Option<VersionInfo>,
     pub warnings: Vec<String>,
-    pub written: Written,
+    #[serde(flatten)] pub written: Written,
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct BoardInfo { pub summary: innerword_board::BoardSummary, #[serde(skip_serializing_if = "Option::is_none")] pub elements: Option<Vec<innerword_board::ListedElement>> }
 // DocumentText.board, DocumentInfo.board: Option<BoardInfo> (skip when None)
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct BoardListed { pub board: DocumentSummary, pub elements: u64, pub pictures: u64, pub trashed: bool }
+pub struct BoardListed { pub board: DocumentSummary, pub elements: u64, pub pictures: u64, pub trashed: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")] pub unreadable: Option<String> }   // built (B6f)
 // Target::parse reads "board:<id>" and "whiteboard:<id>" as a DocumentId.
+// Built: DocumentSummary::is_board() and reference() ("doc:", "page:" or "board:<id>");
+// Candidate.reference: Option<String> (B6f); DocumentText no longer derives Eq (floats).
 
-// library.rs
-impl Library { pub fn boards(&self, folder: Option<&Target>) -> Result<Vec<BoardListed>>; }
+// library.rs; built: as `pages` takes its request (`BoardsRequest { folder }`)
+impl Library { pub fn boards(&self, request: &BoardsRequest) -> Result<BoardsList>; }   // BoardsList { boards }
 
 // checker.rs
 pub trait PageChecker: Send + Sync {
@@ -3087,6 +3683,7 @@ pub const BOARD_PDF_KILL_MS: u64 = 60_000;
 // error.rs
 Error::WrongKind { id: i64, name: String, kind: DocumentKind, wanted: Option<DocumentKind>, export: bool }   // exit 15; a page's sentences unchanged
 pub const BOARD_IS_PDF_ONLY: &str = "a whiteboard is exported as a PDF only";
+// Built: Error::EmptyBoard { id, name } (exit 9), ItemKind::Element (exit 3).
 
 // live/mod.rs
 pub const PROTOCOL_VERSION: u32 = 4;
@@ -3123,6 +3720,21 @@ test of a version-3 stand-in (a request with a picture among them); the operatio
 test.
 Done: `CARGO_TARGET_DIR=target-pure cargo test -p innerword-agent` (both runs).
 
+**As built** (B6, B6f and the final review): `boards.rs` holds the four operations (each
+keeping its version first: "Before a drawing / an edit / a removal by X"), `Library::boards`
+and the board branches of read, info, find (`Occurrence.element`), `read_version`,
+`restore_version`, rename and export; the agent's picture routine is `board_picture`,
+`prepare_pictures` makes one picture per distinct path; the checker's fake
+(`StaticChecker`, `INNER_WORD_PAGE_CHECK=fake`) writes one empty page of
+`Scene::pdf_size(32, 14400)`. `tests/suite/boards.rs` (16 tests, both runs) has, beyond the
+list above, a damaged whiteboard listed and printed as it is stored, a hint for each kind
+with its own prefix, and one file named by two skeletons carried once; the pictures are
+written by the test (a TIFF made with `sips`), not by `innerword_image::fixtures` alone. The
+operations table has 30 rows; `READERS` has `boards`. The final review left out a change
+that sets what an element has (no version, "would change nothing"), counted one element
+count everywhere, and judged each change of `update_board` against the drawing just before
+it (7.3).
+
 #### B7. `innerword-library`
 
 ```rust
@@ -3144,8 +3756,14 @@ impl LibraryPanel {
     pub fn new_board(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<DocumentId>;
 }
 // rows, trash rows and the drag ghost carry `kind: DocumentKind` instead of `page: bool`;
-// pub fn item_icon(kind: DocumentKind, open: bool) -> IconName  (Board: IconName::Whiteboard)
+// pub fn item_icon(kind: DocumentKind) -> IconName  (Board: IconName::Whiteboard)
+//   built: one argument; no kind of item is drawn open or closed, only a folder, which is
+//   no DocumentKind and keeps its icons through the private row_icon
 // menus: "New Whiteboard Here" (folder row), "New Whiteboard" (the library's menu, the + menu)
+// Built: LibraryPanel::makes_boards(); pub fn new_board_command() -> CommandDescriptor
+// ("New whiteboard", the library's one CATEGORY, not in commands()); pub const
+// TREE_KEY_CONTEXT ("LibraryPanel && mode == tree && !TextField"); the drag ghost has a
+// debug selector library-drag-ghost-<icon name>; set_reveal_handler's doc names new_board.
 ```
 
 `LibraryPanelEvent` gets no variant (the app's match stays whole). Tests (`tests/panel/`):
@@ -3153,6 +3771,18 @@ create and save emit their events; a whiteboard's row has its icon (live, open, 
 dragged); the three menu items are there with content set and not without; New Whiteboard
 names in place and opens with `focus_editor: true`; escape opens it "Untitled".
 Done: `cargo test -p innerword-library`.
+
+**As built** (B7, B7f): the rename's end is an internal `RenameEnd { Submit, Cancel,
+Elsewhere }` (`commit_rename` and `cancel_rename` keep their signatures): `enter` takes the
+name and opens with `focus_editor: true`, `escape` leaves "Untitled" and opens the same,
+the keyboard going elsewhere keeps the name and opens with `focus_editor: false`, and a
+whiteboard trashed while it is named ends the naming at once and does not open; new
+documents behave as before. `save_board` updates the cached entry and emits
+`DocumentSaved { title_changed: false }` only; `Stale`, `WrongKind` and `FilesMissing` emit
+nothing. Without the scene `NewBoard` passes the action on and makes nothing. The tests
+(`tests/panel/boards.rs`, eight) add a hidden sidebar shown for New Whiteboard (and one the
+host does not show, which ends the naming after the off-screen grace), the trashed case,
+and the library's command for the list.
 
 #### B8. The whiteboard in the app (`innerword-app`, wave 2)
 
@@ -3168,7 +3798,7 @@ scripted run could not see. A failure of check 1 then goes back to the design (s
 Then: sections 4 (the app's half: the compare-and-swap saves, the picture map and its
 seed, the recovery file, `end_then` and `quit::request` with the signals' change, the
 parked view, Reload whiteboard; the shape library of 4.15: `ShapeLibraryState`,
-`SaveJob::ShapeLibrary`, `library.json`, its three commands and the picker; "Mermaid to
+`SaveJob::ShapeLibrary` (built: `Saver::work_shape_library`), `library.json`, its three commands and the picker; "Mermaid to
 drawing…"), 5 (Export as PDF, the picker's row, Print with `Fit`, **a folder's PDF with its
 whiteboards** through `PdfWriter::add_pdf_page`, the folder's other exports leaving
 whiteboards out), 6.1 to 6.5 and 6.8 to 6.10;
@@ -3183,6 +3813,32 @@ hit opens and searches); the two counts of `tests/suite/pages.rs`. Internal shap
 scripted checks of 9.4 that need no agent pass in the debug build (the person checks of
 section 10 are the user's, at the end).
 
+**As built** (B8 and its fix round; the "Built" notes of sections 4 to 6 say where it
+departed): `boards.rs` (`BOARD_VIEW`, `SHAPE_LIBRARY_SETTING`, `VIEW_COLLECT_PATIENCE`,
+`ADOPT_PATIENCE`, `board_host`, `not_shown_sentence`, `assets(cx)`, `prepare_picture`,
+`picture_type`, `data_url_bytes`, `data_url_of`, `drawn_size`, `fixed_key_bindings`,
+`key_spellings`, `is_whiteboard_keys`, `is_fixed_binding`, `fake_board_pdf`,
+`stored_library`, `recovery_dir`, `BoardCell`, `SharedCell`, `LibraryBoardSource` (serving
+the bundle, `board.json`, `library.json`, `scene.json` and `_files/<hex>`), `FakeBoard`);
+`workspace/board.rs` (`BoardState`, `Picture`, `Held`, `Recovered`, `ClosingBoard`,
+`ShapeLibraryState`, `End`; the actions of the `board` namespace; `open_board`,
+`new_board(title)`, `collect_board(id) -> Task<bool>`, `adopt_outside_write(id)`,
+`draw_on_board`, `insert_board_pictures`, `end_then(End)`, `board_holds_more`,
+`describe_board`, `boards_closing()`, the public `board_save_label`,
+`board_elements_label`, `board_listing_text`; `ShapeLibraryDelegate`, the picker);
+`workspace/board_pdf.rs` (the PDF from the stored scene, WebKit or the fake);
+`board_steps.rs`; `quit.rs` (`request(cx)`, deferred); `printing.rs` (`Fit`,
+`PrintJob::fit`); `menus.rs` (`OpenItemKind`, `open_item`, `set_open_item`,
+`menu_key_bindings(keymap, open)`, `keeps_its_key_on_a_board`); `keymap.rs` (`reinstall`);
+`export.rs` (`left_out_sentence`, `ExportDelegate::for_board`); `actions.rs` (`NewBoard`,
+`board_commands()`, `CATEGORY_WHITEBOARD`); `shortcuts.rs` (`Place::Board`,
+`BOARD_KEY_NOTE`, `TOOL_KEYS_NOTE`, the fixed rows); `workspace/shortcuts.rs`
+(`BOARD_TAKES_KEYS_FIRST`, the question, `ALSO_FIXED_NOTE`); `saver.rs` (`BoardSaveJob`,
+`work_board`, `work_shape_library`, `WrittenSlot`, `view_state_at`). Library writes went
+through `Library::change_outside`, not B7's methods. Two bugs its own new tests found:
+`cmd-q` skipped the whiteboard (now `cx.defer`, 4.6), and Add Arrow between two shapes
+never worked (now `x`/`y`, 6.2).
+
 #### B9. Tool, MCP server, skill (wave 3)
 
 - `innerword-cli`: the commands of 7.4 in `spec.rs` and `run.rs`, the outputs, the hints, the
@@ -3190,8 +3846,8 @@ section 10 are the user's, at the end).
   <out.pdf>` handled in `main` before the command line is read (beside `page_check::run`),
   not in the help: `available()`, `Assets::find()`, a `PageSource` over the assets and `dir`
   (`BoardDirSource`), `run_script_blocking` with `EXPORT_ENTRY`, `calls::EXPORT_LAYOUT`,
-  `export_argument()`, `pdf: true`, `csp: BOARD_EXPORT_CONTENT_SECURITY_POLICY`, a 50 s
-  limit, the bytes to `out`; failures as one line on stderr, exit 1. (B6's
+  `export_argument()`, `pdf: true`, `csp: board_export_policy()` (built: the policy that
+  fits the WebKit it runs on, 4.2), a 50 s limit, the bytes to `out`; failures as one line on stderr, exit 1. (B6's
   `ProcessChecker::print_board` spawns it.) The hints of `main.rs` (`hint_in`: the
   whiteboard's sentences beside the page's " is a page: ") and exit code 15's words in
   `help.rs` (line 111: "a page or a whiteboard where a document is needed, or the
@@ -3220,6 +3876,20 @@ the margin within 2 pt of `Scene::pdf_size`, its text has the labels; a second s
 picture an agent added: the page has the picture, as an image of the PDF); the MCP tools
 through the server's stdio. Done: `CARGO_TARGET_DIR=target-pure cargo test -p innerword-cli
 -p innerword-mcp -p innerword-agent-setup -p innerword-assistant`.
+
+**As built** (B9 and the final review): the commands as 7.4 shows them (`board list` and
+`boards`, aliases `whiteboard` and `whiteboards`; a `Text` kind in `spec.rs` for elements
+and changes, so these commands take `--content`), the help's tables of the skeleton and of
+a change, the overview at 81 lines, the outputs and hints as 7.4 says; `page_check.rs`
+shares `Failed`, `finish` and `rules_dir` with `board_pdf.rs`; `innerword-assistant`'s
+`claude/args.rs` puts the four board tools on the denied list (41), and its tools test
+learned the prefixes `update_` and `remove_`. The command list counts 46 commands
+(`output.rs`). The real child's case reads API, Postgres, reads and Backend in the page,
+and a second whiteboard with a picture gives `/Subtype /Image`. `innerword-cli`'s
+stand-in app refuses a picture with the switch off, as the app's listener does
+(`innerword-app/src/live.rs`), whose own test holds the same. The final review added tests
+of one count, of a change that changes nothing (directly and through the app), restore,
+Untitled and a damaged whiteboard in `boards`.
 
 #### B10. Agents, the panel and the docs in the app; bundling (wave 3)
 
@@ -3259,6 +3929,17 @@ through the server's stdio. Done: `CARGO_TARGET_DIR=target-pure cargo test -p in
 Done: `cargo test -p innerword-app`, `cargo test -p innerword-assistant-ui`; the acceptance
 checks below. Then the user does the person checks of section 10 (answer 7).
 
+**As built** (B10, its fix round and the final review): `workspace::sentence`'s four
+sentences and `conflicts_sentence`; `must_wait(&mut self, first)` with the four waits of
+6.7; `take_over_open_board`; `Undo::Board` and the rule that a run must be nothing but this
+whiteboard's adopts; `Workspace::board_served(path)` and `BoardState::ready_in` for the
+tests; New Whiteboard through the panel, and the library's New whiteboard registered as a
+row (6.2); the side chat's `BoardFeed` and its collect (6.6; the hook in
+`innerword-assistant-ui` came last, `acd66c1`, `34e9953`). `scripts/bundle.sh` as section 3
+says; `about.hbs` and `packaging/Read Me First.txt` (the license file, a privacy line);
+`THIRD-PARTY-LICENSES.txt` made again for the `Cargo.lock` of the time. The measures are in
+6.7, 4.3 and section 5, and in CLAUDE.md.
+
 #### B11. The converter's cross-check (`innerword-web`'s test program, wave 2)
 
 Moved out of B4 (reviewer's point, taken: it needs B2's finished converter and corpus, and
@@ -3271,6 +3952,24 @@ Excalidraw's `convertToExcalidrawElements`, then `restoreElements(…, null,
 `seed`, `versionNonce`, `updated`, `index` (ordered the same) and `version`; text widths
 within 3 %; bound arrow ends within 1 px. Dev-dependency on `innerword-board`. Done:
 `CARGO_TARGET_DIR=target-pure cargo test -p innerword-web`.
+
+**As built** (B11, B11f, `tests/webkit/crosscheck.rs`, the case `crosscheck`): labels are
+matched by `containerId`, a label's own id translated inside `boundElements`, which are
+compared as a set; numbers within 0.001; what follows from a text's width may differ by as
+much as that width did, **by alignment**: a left-aligned free text not at all, a centred
+one by half the difference, a right one by all of it, and a label likewise within the room
+its container gives it, which starts at the container's x plus a padding and a share of its
+width (none in a rectangle, `(1 - √2/2)/2` in an ellipse, a quarter in a diamond; the room of
+an ellipse or a diamond rounded to a whole pixel), so the container's own differences count
+only by that share (final review; B11f had first allowed `dcx + dcw/2` for every left label); a shape fitted to its label by twice the label's difference; a freedraw's size,
+`pressures` and `simulatePressure` only noted. Two extensions of the agents' form are
+rewritten into Excalidraw's before its converter sees them (a frame without `children`, a
+family by name). Planted controls must be named exactly: a colour, an arrow end 2 px off
+and a missing element; three free texts moved within and beyond their slack; and (final
+review) labels in a rectangle, an ellipse and a diamond, left, centred and right. Every
+corpus file agrees (texts within 0.6 to 2.9 %, bound ends and their `focus` and `gap`
+exactly); `INNERWORD_WEB_CROSSCHECK_DUMP=<dir>` writes both conversions. The kerning
+measured beside it is in 7.1.
 
 ### 9.3 Which existing tests and counts change
 
@@ -3304,6 +4003,15 @@ Each with its owner; a package that changes a number writes what it now counts.
 - `innerword-assistant` (B9): `claude/args.rs` line 391, `allowed + denied` 37 to 41.
 - `innerword-agent-setup` (B9): the skill text, `skill_against_binary.rs` (examples of
   whiteboards; exit code 15's words).
+
+**As built:** the list of shortcuts has 442 rows and 424 entries with every part shown,
+412 and 424 without the assistant (`tests/suite/pages.rs` asserts the second pair; 6.8);
+`keyscost` counts 45 more bindings (the fixed ones, 43 keys and the two second spellings);
+`innerword-agent`'s operations table has 30 rows; `innerword-mcp` 41 tools, 12 read-only;
+`innerword-cli`'s command list 46 commands (`output.rs`); the agents' suite's `seed` holds a
+whiteboard, `seed_texts` the old seed for the schema-1 test; `innerword-agent`'s rules test
+asserts `OPEN_SCHEMA_VERSION` after an open; `innerword-assistant`'s tools test knows the
+prefixes `update_` and `remove_`.
 
 ### 9.4 Acceptance checks for the whole feature
 
@@ -3365,7 +4073,7 @@ Each with its owner; a package that changes a number writes what it now counts.
    wait:600; board:library; quit"`, then a second run on the same library with
    `keys:cmd-p; type:Flow; keys:enter; board:wait; board:library; quit`: the screenshot
    shows Excalidraw's Mermaid dialog, the listing has two shapes and an arrow from the
-   diagram, `state` says `dirty=no`, and both runs log `board: library 1 items, saved`.
+   diagram, `state` says `dirty=no`, and both runs log `board: library 1 item, saved`.
    **Drawing from the keyboard alone** (product rule 1), the same build and a fresh
    temporary library: `INNER_WORD_AUTOMATION="wait:1500; board:new:Keys; board:wait;
    keys:cmd-shift-p; type:add rectangle; keys:enter; wait:300; keys:cmd-shift-p; type:add
@@ -3377,6 +4085,25 @@ Each with its owner; a package that changes a number writes what it now counts.
    passes, `Contents/Resources/Whiteboard/` and the two notices are in the app and on the
    disk image, and the disk image's size is written into CLAUDE.md.
 5. The person checks of section 10, done by the user at the end, in one sitting (answer 7).
+
+**What the build's runs found** (B8, B10, their fix rounds; debug app and tool on
+temporary libraries, and the release build for the measures): (2) passes: the tool answered
+`added to board:2 “Architecture”` with exit 0; `board:scene` listed api, db, reads, title,
+backend and icon, the icon as `picture stored (png)` (the listing has no pixel size, 7.4);
+`state` had `board=[… elements=9 … dirty=no … pictures=1/1]` and `live=[… changes=1
+last="Claude drew on “Architecture”" offers=Undo cost=[save 0.0 ms, change 3.8 ms, window
+0.8 ms]]`; `export:wait` wrote 1 page of 734 x 244 pt; `tool.pdf` is byte for byte the
+app's PDF (146,433 bytes), its text has System overview, Backend, reads, API and Postgres,
+and its pixels the icon; the history has "Before a drawing by Claude". The folder's PDF: 3
+pages and "1 whiteboard" against 2 pages without the whiteboards, its last page the size of
+`innerword export`. Mermaid and the shape library: two shapes and an arrow, `dirty=no`,
+"library 1 item, saved" in both runs. The keyboard check failed as first built (the text
+stayed "Text": `shift-h` reached Excalidraw before the text was open) and passes since
+`HOLD_KEYS` and `OPEN_TEXT` (4.5), run exactly as written, in three runs. The `screenshot:`
+step failed in the build's environment ("could not create image from window"), so no
+screenshot of the canvas or of the Mermaid dialog was looked at: that is left to the
+person checks. (4) passed with the whiteboard's smoke test; the arm64 disk image is
+15,550,195 bytes (0.10.1: 12,495,267), the editor 7.5 MB in the app.
 
 ---
 
@@ -3397,7 +4124,10 @@ Each with its owner; a package that changes a number writes what it now counts.
 - Comments, spelling, Vim mode, the format bar and the quick chat on a whiteboard; the
   assistant changing a whiteboard; an assistant answer inserted into one.
 - Elbow arrows and inline shapes (`start: {"type": …}`) from agents; agents changing a
-  picture's file (they add pictures, 7.2); a picture from an address on the web.
+  picture's file (they add pictures, 7.2); a picture from an address on the web; element
+  links (`?element=`) from agents, and a line that binds, has arrowheads or a label (7.2);
+  kerning in the converter's text widths (7.1).
+- Moving the Add Text key hold (`HOLD_KEYS`, `OPEN_TEXT`) into the glue (4.5).
 - A zoom of the app's kept for a whiteboard (its own `view_state` is kept), Life Size.
 - Excalidraw's undo history across a reload or a relaunch (versions are the undo that lasts).
 - More than one whiteboard view at a time (one live web view, as for pages).
@@ -3463,7 +4193,15 @@ builders list in their reports what each package could not check otherwise.
     library; "Insert from shape library…" in the palette puts it at the middle with the
     keyboard alone; no "Browse libraries" and no "Publish" anywhere.
 14. **A folder's PDF** opened in Preview: after the documents, the whiteboard's page of its
-    own size; zoomed in, its lines stay sharp and its words can be selected and found.
+    own size; zoomed in, its lines stay sharp and its words can be selected and found (an
+    element's link is a link in the whiteboard's own PDF only, section 5).
+
+**Built:** what the builders' reports add to these, because no script could see it: the
+canvas and the Mermaid dialog on screen at all (the `screenshot:` step failed in the
+build's environment); Add Text while a person types fast, with a dead key or an input
+method during the 2 s hold (`HOLD_KEYS` replays held keys as synthetic events); two parked
+WebKit views at once (only the fake had them); a real crash of the WebContent process and a
+real failed adopt; Excalidraw's toolbar tooltips and its right-click menu with a pointer.
 
 ### Risks, and how the build retires each early
 
@@ -3475,7 +4213,9 @@ builders list in their reports what each package could not check otherwise.
    bar carries none of their key equivalents while a whiteboard is open, either order (the
    view first or the menu bar first) does the right thing for every key of 4.7; what could
    still go wrong is a chord neither the menu nor GPUI takes and WebKit does not pass to
-   the page. Fallback, in order: the web view subclass overrides
+   the page. (Built: the menu bar keeps the six keys of the Edit menu on a whiteboard, 4.7;
+   `menukey:` showed none of the others while a whiteboard was open and all of them after;
+   still open until check 1.) Fallback, in order: the web view subclass overrides
    `performKeyEquivalent:` and hands the page every chord of `WHITEBOARD_KEYS` before GPUI's
    view is asked; the view becomes a subview of GPUI's view.
 2. **Losing the last gesture** at a deliberate end. Retired by the posts at each gesture's
@@ -3485,24 +4225,29 @@ builders list in their reports what each package could not check otherwise.
    B4's WebKit case holds them for the pinned version; `UPGRADING.md` lists them.
 4. **The converter drifting from Excalidraw** (text widths, defaults, bindings). B11's
    cross-check against `convertToExcalidrawElements` fails on drift; Excalidraw measures
-   again at every load, so what is seen and printed is exact.
+   again at every load, so what is seen and printed is exact. (Built: the corpus agrees;
+   the one drift left is kerning, up to 15.8 % on a short kerned word, 7.1, with its fix
+   named.)
 5. **A new Excalidraw** moves keys, switches, fields, patches. Pinned exactly; the build
    fails when a patch stops applying; `UPGRADING.md`; B4's and B11's cases.
-6. **Bundle size and repository size.** About 9 MB in the app and in git (minified
-   JavaScript, 3.5 MB of it Mermaid's, and fonts), about 3 MB more on the disk image;
+6. **Bundle size and repository size.** Built: 7.44 MB in the app and in git (minified
+   JavaScript, 2.66 MB of it Mermaid's, and fonts), 3.1 MB more on the disk image;
    Xiaolai would have added 12.7 MB of fonts that do not compress (answer 1: left out).
-   `--check` keeps `dist/` honest. Mermaid's chunks are 105 files that change with every
-   Excalidraw upgrade; `dist/` is marked `-diff` so a review is not drowned in them.
+   `--check` keeps `dist/` honest. Mermaid's chunks are 100 files that change with every
+   Excalidraw upgrade; `dist/` is marked `-diff -text` so a review is not drowned in them and
+   git never changes a byte of them.
 7. **WebKit's private switches** go with pages': a macOS without them has neither.
 8. **Main-thread cost of an agent's change** to a large open whiteboard (parse, delta, the
    adopt call). B10 measures with 3,000 elements; fallback: parse the two scenes and compute
    the delta on a background task right after `carry_out` answers the agent, and adopt it in
    a later turn of the main thread (the library has the change already; only the view
-   waits).
+   waits). Measured (release, 3,000 elements, 3.0 MB): change 81 ms, window 41 ms; the
+   fallback was not needed.
 9. **The autosave of a large whiteboard** (2 MB of scene per gesture through the bridge and
    the background save). Measured by B10; the scene is parsed only in the background; the
    main thread reads the message's head (`RawValue`). Fallback: post only the changed
-   elements (a delta) and keep the whole scene in the app.
+   elements (a delta) and keep the whole scene in the app. Measured (release, 3,000
+   elements): main thread 0.00 ms, background 59 ms; the fallback was not needed.
 10. **The schema bump** makes 0.10 refuse the library once it holds a whiteboard (the step
     is lazy, section 2). Accepted, as for 0.8.0.
 11. **The whiteboard's stricter policy breaks something of Excalidraw's or Mermaid's** (a
@@ -3511,9 +4256,13 @@ builders list in their reports what each package could not check otherwise.
     (4.13: no eval that runs, no worker, no WebAssembly, no request), but under a page's
     policy only it has run. B4's bundle case loads, edits, exports, pastes and converts
     Mermaid diagrams with the policy and fails on any CSP report; fallback, decided there
-    and written into this section: `'unsafe-eval'` in the live view's `script-src`, while
+   and written into this section: `'unsafe-eval'` in the live view's `script-src`, while
     inline scripts and every frame stay blocked (the threats of section 8, rows 3 and 16,
-    are an inline or framed script, which `'unsafe-eval'` does not let in).
+    are an inline or framed script, which `'unsafe-eval'` does not let in). Built: retired;
+    B4's case runs Mermaid under the whiteboard's policy with no report, and the live view
+    keeps its policy. What the export page needed was a patch of the font subsetter (no
+    eval, section 3) and a policy chosen by the WebKit it runs on (4.2). And the policy
+    turned out not to keep a `srcdoc` frame off: the view now loads no subframe (4.2).
 13. **Joining WebKit's PDF into the folder's** (`CGContextDrawPDFPage` into `PdfWriter`'s
     context): Quartz is expected to keep the drawn page's paths, text and embedded fonts,
     which is what a PDF drawn into a PDF context does; never tried with WebKit's output.
@@ -3521,16 +4270,22 @@ builders list in their reports what each package could not check otherwise.
     and the acceptance run of 9.4 (real WebKit) read the joined page's text and pixels.
     Fallback: the whiteboard's page drawn from its SVG is not available in Rust, so the
     fallback is PDFKit (`PDFDocument.insertPage:atIndex:` on the finished folder PDF, then
-    `dataRepresentation`), at the cost of a second copy of the PDF in memory.
+    `dataRepresentation`), at the cost of a second copy of the PDF in memory. Built:
+    retired by the 9.4 run with real WebKit (the page's size and text as `innerword export`
+    makes them); what the join loses is the link annotations (section 5), the one reason
+    left to take the PDFKit fallback some day.
 14. **An agent's large picture on the main thread**: none: the listener stores the bytes
     before the request is queued (7.6), as a page's; the main thread writes the scene.
     What remains is the adopt of a scene that names it (the view fetches `_files/<id>`
-    through the source, in the background). B10 measures it with a 16 MB picture.
+    through the source, in the background). Measured (release, a 16 MB picture on the open
+    whiteboard of 3,000 elements): change 76 ms, window 38 ms, the tool 401 ms.
 12. **"Untouched" misjudged** (Excalidraw raises versions while it restores, repairs
     bindings or measures text again). Retired by the glue's own record of versions per rev
     (4.5), not the stored `baseVersion`; B4's case loads a Rust-made scene (whose texts
     Excalidraw measures again) and adopts a change to an untouched text, which must not be
-    a conflict.
+    a conflict. Built: that text was re-measured without its version raised, so B11 added
+    one whose version Excalidraw does raise at load (an index out of order: stored at 1,
+    loaded at 2); the agent's copy with `baseVersion` 1 is taken at 3, no conflict.
 
 ---
 
@@ -3551,7 +4306,7 @@ Numbers as the questions had them (the text refers to "answer N").
    stored in `images.db` `files` before the scene names it, on protocol 4 with the rest
    (sections 7.2 and 7.6).
 4. **Mermaid ships**: no stub patch; it needs nothing more of the whiteboard's strict policy
-   (section 4.13), and the bundle is about 9 MB (section 3).
+   (section 4.13), and the bundle is 7.44 MB as built (section 3).
 5. **Printing**: scaled down to fit the user's paper (the design's default).
 6. **Excalidraw's shape library ships, stored in the library**: one setting,
    `board.shape_library`, shared by every whiteboard; "Browse libraries" and publishing stay

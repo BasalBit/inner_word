@@ -26,7 +26,7 @@ names ("Working rules", "Saved names keep their old spelling").
 | `crates/innerword-page` | pure Rust | The bundler of pages: an input (one `.html` file with the local files it names, its folder never walked; or a folder, taken whole) to the files a page is served from (`read_input`, `bundle`): every reference found by a small tokenizer of HTML, SVG, CSS and JS, every piece on the web fetched once through a `Fetcher` (`CurlFetcher`: `/usr/bin/curl`, public addresses only, every redirect followed and checked by the fetcher; `CachingFetcher`, `KnownPieces` for pieces the caller has, `MapFetcher` for tests) and stored under `_external/<host>/…`, the references rewritten to relative paths. The check as data (`CheckRequest`, `CheckReport`; `static_check`, the fake check of tests), the verdict (`prepare`: whole, or `PageError::Incomplete` naming every problem), the manifest, the folder export (`write_folder`), the normal form of a source address, the limits (`limits`: 32 MB a file, 64 MB a page, 2,000 files, 500 pieces from the web, 101 HTML files). No Objective-C, no GPUI, no network in its tests (a server on 127.0.0.1). |
 | `crates/innerword-board` | pure Rust | A whiteboard's scene in Rust, the one place that reads and writes it: the stored form and the form the view posts (`Scene::from_stored`, `from_view`, `to_stored`; every element and field kept, unknown ones too; deleted elements and `iframe`, `embeddable`, `magicframe` left out), its text in reading order (what the library indexes), its listing for agents, the assistant and the version history (`Scene::listing`), its summary, bounds and PDF size (`pdf_size`); agents' skeletons made into Excalidraw 0.18.1's elements (`add`; text measured with the bundled fonts' advance widths, `metrics`, close and not exact: Excalidraw measures again at every load), changes by id (`update`), removals (`remove`), every id, seed and nonce derived from the input (`HashedMaking`, never random); the delta between two stored scenes (`Scene::delta_from`, what the view's `adopt` takes) and the merge by the base rule (`merge`); the shape library as the library keeps it (`ShapeLibrary`); `sniff_svg`, `well_formed_json`, `export_dir` (what the tool hands its PDF child); the limits (`limits`: 16 MB of scene, 20,000 elements, 20,000 characters a text, 2,000 elements a request for agents; 256 MB for the writer's own scene). Depends on nothing of ours. |
 | `crates/innerword-board-web` | pure Rust, and the JavaScript of the bundle | Everything of Excalidraw: its sources and build (`web/`: `package.json` with exact versions, the lockfile, `build.mjs`, the glue in `src/glue/`, `UPGRADING.md`), the built folder **committed** (`dist/`: `index.html`, `export.html`, `assets/`, `fonts/`, `font-metrics.json`, `MANIFEST.json`, `BUILD-INFO.json`, `NOTICES.txt`; `-diff -text` in `.gitattributes`), and a small Rust library: where the bundle is (`Assets::find`: `Contents/Resources/Whiteboard` from an app bundle, else this crate's `dist/`; a build with `INNER_WORD_BUNDLED` set compiles no other path in), the files it serves by its manifest, the bridge's messages (`bridge`), the calls into the page (`calls`), the keys Excalidraw acts on (`keys::WHITEBOARD_KEYS`). Depends on nothing of ours; no cargo build and no test needs node or the network. |
-| `crates/innerword-web` | Rust without GPUI (WebKit, AppKit) | Everything that talks to WebKit: the view of an open page (`WebPage`, a `WKWebView` subclass above GPUI's view, served by a scheme handler `innerword-page://` from a `PageSource` with ranges and a CSP on every answer, a content rule list that blocks the network, WebRTC and media devices off, a link opened only by the reader; its callbacks go to the owner's `PageEvents`, which only post), the offscreen check (`check`, `check_blocking`: every HTML file loaded with the network blocked, every blocked request named, the text read with what is not shown), the PDF of a page (`print_offscreen`, `print_blocking`, `WebPage::print_to_pdf`), `available()` (macOS 12.3 and every class and selector it sends, the private switches of WebRTC among them). A whiteboard's view is a page's view with `ViewExtras` (`WebPage::new_with`): one script message handler (`Bridge`, `innerwordBoard`: the main frame of the view's own origin only, a string under a size cap, `PageEvents::message`, counted in `ViewStats`), no navigation after the first load (`one_document`; no `alert` toast), its own policy (`BOARD_CONTENT_SECURITY_POLICY`: no inline script, no eval, no frame; the export page's adds WebAssembly); calls into the page (`call_async`, `callAsyncJavaScript` in the page world), a view out of sight and still drawn (`park`), one script offscreen and its PDF (`run_script`, `run_script_blocking`: a whiteboard's export page). A page's view has no bridge. Builds and tests in `target-pure`; `tests/webkit.rs` is a program of its own (`harness = false`), with the real bundle's cases and the converter's cross-check (`innerword_board::add` against Excalidraw's own). |
+| `crates/innerword-web` | Rust without GPUI (WebKit, AppKit) | Everything that talks to WebKit: the view of an open page (`WebPage`, a `WKWebView` subclass above GPUI's view, served by a scheme handler `innerword-page://` from a `PageSource` with ranges and a CSP on every answer, a content rule list that blocks the network, WebRTC and media devices off, a link opened only by the reader; its callbacks go to the owner's `PageEvents`, which only post), the offscreen check (`check`, `check_blocking`: every HTML file loaded with the network blocked, every blocked request named, the text read with what is not shown), the PDF of a page (`print_offscreen`, `print_blocking`, `WebPage::print_to_pdf`), `available()` (macOS 12.3 and every class and selector it sends, the private switches of WebRTC among them). A whiteboard's view is a page's view with `ViewExtras` (`WebPage::new_with`): one script message handler (`Bridge`, `innerwordBoard`: the main frame of the view's own origin only, a string under a size cap, `PageEvents::message`, counted in `ViewStats`), no navigation after the first load (`one_document`; no `alert` toast), its own policy (`BOARD_CONTENT_SECURITY_POLICY`: no inline script, no eval; the export page's adds WebAssembly, `board_export_policy()` choosing `'wasm-unsafe-eval'` or, on a WebKit before 614, `'unsafe-eval'`), and no subframe at all (every subframe navigation of a view with the bridge is cancelled: the policy alone lets a `srcdoc` frame run a script of the view's own origin); calls into the page (`call_async`, `callAsyncJavaScript` in the page world), a view out of sight and still drawn (`park`), one script offscreen and its PDF (`run_script`, `run_script_blocking`: a whiteboard's export page). A page's view has no bridge. Builds and tests in `target-pure`; `tests/webkit.rs` is a program of its own (`harness = false`), with the real bundle's cases and the converter's cross-check (`innerword_board::add` against Excalidraw's own). |
 | `crates/innerword-print` | Rust without GPUI (CoreGraphics, CoreText, PDFKit, AppKit) | Printing, after the layout: what a printed page is as data (`Page`: rectangles, strokes, rows of text with the place of every glyph, single-line labels, pictures; points from the top left corner), the PDF writer (`PdfWriter`: CoreText's glyphs at the places the editor's layout names, in the fonts the layout asked for, found the way GPUI finds them and never by a PostScript name; `Report::rows_off` counts the rows whose glyphs CoreText spaces otherwise than the layout, pair of clusters by pair inside the row, which is how a wrong face shows), a PDF reader for tests and for looking (`PdfFile`: page count, page sizes, the text of a page, where a word stands, a page as pixels or as a PNG), and the macOS print operation (`run_sheet`: the print panel as a sheet on a window; `run_save_job`: the same operation into a file, no panel and no printer; `check_selectors`: every class and selector the two send, asked of the runtime; `PrintRequest::paper` and `Scaling::{Actual, DownToFit}`: a whiteboard's page put on the user's paper, turned and scaled down to fit). `PdfWriter::add_pdf_page` draws a page of another PDF in as a page of its own (`CGContextDrawPDFPage`: paths, text and its fonts, pictures kept), which is how a folder's PDF holds its whiteboards. Builds and tests in `target/` although it has no GPUI ("Working rules"). |
 | `crates/innerword-export` | pure Rust | Markdown, DOCX and plain-text exporters over `innerword-core`, and the Markdown importer (Markdown text to a document or a fragment). Pictures come from whoever exports (`ImageSource`, `ExportSource::with_images`): a DOCX embeds them, Markdown names them `![description](image:<id>)` or, for a file, links picture files that are returned beside the text (`export_package`, `MarkdownImages::Files`), plain text has the description. The importer asks an `ImageResolver` which stored image each image of the Markdown is; `KnownImages` answers for the images a document already holds, with their width and alignment. |
 | `crates/innerword-vim` | pure Rust | Vim emulation engine over `innerword-core`'s editing engine plus a small visual-layout trait. |
@@ -462,9 +462,12 @@ its buttons is pressed. Every message spends the user's own plan in the engine.
   page posts; a pointer is compared, the scene is parsed only at the send); the keyboard
   coming into the side chat by any way (`cmd-3`, a click in the composer, `tab`) asks the
   page for a gesture it has not posted
-  (`Workspace::collect_as_the_side_chat_takes_the_keyboard`, as a frame is built). The
-  side chat has no hook before a message leaves, so a send does not wait for the page
-  itself (the spec's collect before each message is the one part of 6.6 left out). Too long a listing goes as
+  (`Workspace::collect_as_the_side_chat_takes_the_keyboard`, as a frame is built), and a
+  message waits for it too: `AssistantPanel::set_before_send` (a task of the host's that a
+  message waits for before the open document is read; more messages wait behind it in
+  order; Stop and another document give the text back to the composer) runs
+  `Workspace::collect_for_a_message` when the page holds more than it posted, at most
+  `VIEW_COLLECT_PATIENCE` (1 s), and the message then goes with what the app holds. Too long a listing goes as
   its beginning and its end. Insert at Caret and Replace Selection are off, Copy works; the
   conversation is the whiteboard's own; the assistant reads other whiteboards with the
   same read-only tools (`read_document` gives the listing). The quick chat does not open
@@ -796,8 +799,13 @@ open" below).
   `create_board`, `add_to_board`, `update_board`, `remove_from_board` and the hidden
   `list_boards`. Elements come as Excalidraw's own element skeletons
   (`[{"type":"rectangle","id":"api","x":100,"y":80,"label":{"text":"API"}}, {"type":"arrow",
-  "start":{"id":"api"},"end":{"id":"db"}}]`; a text has no size, a shape comes 100 x 100,
-  an arrow is bound to the edges of the shapes it names) and changes as `[{"id":"api","dx":40}]`;
+  "start":{"id":"api"},"end":{"id":"db"}}]`; a text has no size, a shape comes 100 x 100
+  or fitted to its label, an arrow is bound to the edges of the shapes it names, a line
+  binds nothing, an id the whiteboard has is refused, a link is `http`, `https` or
+  `mailto`) and changes as `[{"id":"api","dx":40}]` (a change that sets what an element
+  has is left out, and a request left with nothing says "Nothing changed" and keeps no
+  version; an elbow arrow the writer drew keeps its route, and its ends and points are not
+  changed by agents);
   they are made into elements **in pure Rust** (`innerword_board::add`, `update`, `remove`),
   in the tool and on the app's main thread alike, every id, seed and nonce derived from
   the request, so a dry run names the ids the real run gives. A picture is an element too
@@ -1264,7 +1272,9 @@ Keymap facts that bite (details in `docs/gpui-notes.md`):
   whiteboard becomes or stops being the open item: while one is open the menu bar carries
   no key equivalent that is one of its own keys (`menus::menu_key_bindings(.., open)`,
   `OpenItemKind::Board`), or AppKit would run the comments' `cmd-alt-c` from the menu bar
-  over Excalidraw's.
+  over Excalidraw's; the Edit menu's Undo, Redo, Cut, Copy, Paste and Select All keep
+  theirs (`menus::keeps_its_key_on_a_board`), which is how `cmd-c` and `cmd-v` reach
+  Excalidraw, and a whiteboard that is not drawn keeps every key.
 - **The keymap GPUI has is one the app built** (`crates/innerword-app/src/keymap.rs`). Every
   crate binds its keys in its `init`; at the end of `innerword_app::init` they are taken as
   the defaults, and from then on every change clears the keymap and binds it again in the
@@ -1718,7 +1728,8 @@ operation), `crates/innerword-app/src/printing.rs` (the job and where it goes),
   whiteboard's PDF as Export as PDF… makes it (WebKit on the export page, `run_script`,
   on the main thread between two awaits, one whiteboard at a time after the documents'
   slices; the fake engine's fixed page in tests) drawn in by `PdfWriter::add_pdf_page`, so
-  its lines stay paths and its words text. What is exported is each stored scene when the
+  its lines stay paths and its words text (its link annotations are not kept: an element's
+  link is a link only in the whiteboard's own PDF). What is exported is each stored scene when the
   export is chosen (the open whiteboard of the folder is asked for its last gesture and
   saved first). An empty whiteboard is left out and the toast names it ("“Plan” is empty
   and was left out."); one whose PDF cannot be made ends the export with nothing written;
@@ -2256,7 +2267,8 @@ the shape library, closing and quitting), `workspace/board_pdf.rs` (its PDF),
   Comic Shanns, Liberation Sans, Cascadia Code and the interface's Assistant; the CJK font
   Xiaolai is left out). In the app it is 7.5 MB, and the disk image of the arm64 build grew
   by 3.1 MB with it (12.5 MB for 0.10.1, 15.6 MB with whiteboards). `node build.mjs` makes it from `web/` with exact
-  versions and patches that each apply once or fail the build (no font CDN, no Xiaolai);
+  versions and patches that each apply once or fail the build (no font CDN, no Xiaolai,
+  no locales but English, no eval in the font subsetter);
   `node build.mjs --check` holds it byte for byte; `web/UPGRADING.md` says what a new
   Excalidraw needs. The app and the tool find it with `Assets::find`:
   `Contents/Resources/Whiteboard/` in the app bundle (one copy for both executables,
@@ -2269,7 +2281,9 @@ the shape library, closing and quitting), `workspace/board_pdf.rs` (its PDF),
   under 24 MB a message), calls into the page (`call_async`: `collect`, `adopt`, `undo`,
   `zoom`, `search`, `insertElements`, `insertPictures`, `mermaid`, `library` and the
   others of `innerword_board_web::calls`), no navigation after the first load, and the
-  whiteboard's own policy (no inline script, no eval, no frame). The source serves the
+  whiteboard's own policy (no inline script, no eval), and no subframe at all (a view with
+  the bridge cancels every subframe navigation; the policy alone would let a `srcdoc`
+  frame run a script of the view's own origin). The source serves the
   bundle, `board.json` (the stored scene, its stamp and the view state **as they are now**:
   a reload never starts from an older scene), `library.json` and `_files/<FileId>` (only the
   pictures the whiteboard names). The theme follows the app's; the zoom commands zoom
@@ -2294,7 +2308,11 @@ the shape library, closing and quitting), `workspace/board_pdf.rs` (its PDF),
   the system starts (log out, the Dock) reaches `on_app_quit` alone and saves what the app
   holds. A scene that cannot be read or saved goes to a recovery file,
   `<data directory>/Recovered/whiteboard-<id>-<ms>.json`, never dropped; the save state
-  says so with Show in Finder.
+  says so with Show in Finder. Every end of the session (another item, closing the
+  whiteboard or the window, quitting, the quit hook) writes there what could not be saved,
+  once per scene and again for a newer one; Reload whiteboard does not load over a drawing
+  it could not save first. A picture whose store fails (the library busy) stays on its way
+  and is stored again, not refused.
 - **Keys** (key context `BoardView`, a place where text is typed). Keys without `cmd` are
   Excalidraw's (tool letters, digits, `escape`, the arrows, typing); of the `cmd` chords the
   window keeps its own (palette, quick open, library, settings, save, export, zoom, the
@@ -2309,7 +2327,10 @@ the shape library, closing and quitting), `workspace/board_pdf.rs` (its PDF),
   Hide Comments, Next and Previous Comment or Vim Mode answers with a toast. The list of
   shortcuts has them as fixed rows "On a whiteboard", and a key the user gives a window
   command that is one of them gets "the whiteboard sees it first". The Edit menu's Undo,
-  Redo and Select All go to the glue, Copy, Cut and Paste to the view. `ctrl-enter` and
+  Redo and Select All go to the glue, Copy, Cut and Paste to the view, and those six keep
+  their key equivalents on a whiteboard (`menus::keeps_its_key_on_a_board`: Excalidraw 0.18.1
+  takes copy and paste only as the `copy:` and `paste:` the items send); a whiteboard that
+  is not drawn (no engine, a page that failed to start) keeps every key in the menu bar. `ctrl-enter` and
   `shift-f10` open the app's menu of the whiteboard; Excalidraw's `?` opens the list of
   shortcuts at "On a whiteboard".
 - **Drawing without the pointer**: "Add text", "Add rectangle", "Add ellipse", "Add
@@ -2337,8 +2358,10 @@ the shape library, closing and quitting), `workspace/board_pdf.rs` (its PDF),
 - **What does not apply** says so in a toast, from its key and the menu bar, and is left
   out of the palette: document settings, take title from text, spelling language,
   comments, Vim mode, the quick chat, Life Size and Automatic ("A whiteboard has no
-  paper size: Zoom to Fit shows the whole drawing."). The text's commands have no handler
-  (greyed). Find Next and Previous have none either: `cmd-g` is Excalidraw's group.
+  paper size: Zoom to Fit shows the whole drawing."); without the assistant `cmd-j` is left
+  alone. The text's commands have no handler (greyed). Find Next and Previous have none
+  either: `cmd-g` is Excalidraw's group. On a whiteboard that is not drawn the drawing
+  commands say: This whiteboard could not be shown, so nothing can be added to it.
 - **PDF, Print, Export**: one code path from the **stored** scene (the zoom, the theme and
   a selection change nothing): the bundle's export page loaded offscreen in WebKit,
   Excalidraw's `exportToSvg` (light colours, a 32 pt margin, its fonts inlined), one PDF
@@ -2404,8 +2427,10 @@ the shape library, closing and quitting), `workspace/board_pdf.rs` (its PDF),
 - **Not in this version**: text to diagram and the AI tools, web embeds, collaboration,
   `.excalidraw` and `.excalidrawlib` files, a library per whiteboard, agents and the shape
   library, exports other than one PDF, a dark PDF, a whiteboard in a Markdown, DOCX or
-  plain-text export, the assistant changing a whiteboard, elbow arrows and inline shapes
-  from agents, a picture from an address on the web, a zoom of the app's kept for a
+  plain-text export, the assistant changing a whiteboard, elbow arrows, inline shapes,
+  element links and a line that binds from agents, kerning in the converter's text widths
+  (a shape fitted to a short kerned label is a few pixels too wide until Excalidraw
+  measures again; design 7.1), a picture from an address on the web, a zoom of the app's kept for a
   whiteboard, Excalidraw's undo across a reload or a relaunch (versions are the undo that
   lasts), more than one whiteboard view at a time, whiteboards below macOS 12.3.
 - **Checked by hand only, or by nothing** (the design's section 10, checks 1 to 14, for a

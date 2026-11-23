@@ -581,4 +581,112 @@ fn a_text_is_the_default_kind() {
     assert_eq!(OpenKind::default(), OpenKind::Text);
     assert!(!OpenKind::Text.is_page());
     assert!(OpenKind::Page { source_url: None }.is_page());
+    assert!(OpenKind::Text.is_text());
+    assert!(!OpenKind::Board.is_text());
+    assert!(!OpenKind::Board.is_page());
+    assert!(OpenKind::Board.is_board());
+    assert!(!OpenKind::Page { source_url: None }.is_board());
+}
+
+fn board(listing: &str) -> OpenDocument {
+    OpenDocument {
+        id: Some(57),
+        title: "Architecture".into(),
+        path: "Plans/Architecture".into(),
+        markdown: listing.into(),
+        kind: OpenKind::Board,
+    }
+}
+
+/// A whiteboard is sent with the sentence that says what it is, the listing of its
+/// elements in place of the Markdown, and its own id, `board:<id>`.
+#[test]
+fn an_open_whiteboard_is_sent_as_the_listing_of_its_elements() {
+    let listing = "rectangle api at (100, 80) 200 x 90 \"API\"\n\
+                   ellipse db at (420, 80) 160 x 90 \"Postgres\"";
+    let open = board(listing);
+    let prompt = side_prompt(
+        "What does the API read from?",
+        DocumentPart::Current(&open),
+        AttachedPart::None,
+        true,
+    );
+    assert!(
+        prompt.starts_with(
+            "The open item is a whiteboard: a drawing of shapes, arrows, text and pictures. \
+             It is changed only by its owner, in the app. Its elements, one per line, with \
+             their ids, positions, sizes and text:\n\n"
+        ),
+        "{prompt}"
+    );
+    assert!(prompt.starts_with(innerword_assistant::BOARD_PREFACE));
+    assert!(
+        prompt.contains(&format!(
+            "<open_document title=\"Architecture\" path=\"Plans/Architecture\" \
+             id=\"board:57\" kind=\"board\">\n{listing}\n</open_document>"
+        )),
+        "{prompt}"
+    );
+    assert!(prompt.ends_with("What does the API read from?"));
+    assert!(!prompt.contains("This is the document I have open"));
+    assert!(!prompt.contains(innerword_assistant::PAGE_PREFACE));
+    assert!(!prompt.contains("source="));
+    assert_eq!(open.reference().as_deref(), Some("board:57"));
+
+    // An empty whiteboard says so.
+    let prompt = side_prompt(
+        "?",
+        DocumentPart::Current(&board("")),
+        AttachedPart::None,
+        false,
+    );
+    assert!(
+        prompt.contains("kind=\"board\">\n(The whiteboard is empty.)\n"),
+        "{prompt}"
+    );
+}
+
+/// The whiteboard is not sent again while it is the same, and the line says
+/// "whiteboard"; the same id as a page is another item.
+#[test]
+fn an_unchanged_whiteboard_is_named_as_a_whiteboard() {
+    let mut context = SideContext::new();
+    let open = board("text title at (100, 20) \"System overview\"");
+    let first = context.compose("One?", Some(&open), &[], true);
+    assert!(first.contains("System overview"));
+    let second = context.compose("Two?", Some(&open), &[], true);
+    assert_eq!(
+        second,
+        "(The open whiteboard, \"Architecture\", has not changed since my last message.)\n\nTwo?"
+    );
+    let mut as_page = open.clone();
+    as_page.kind = OpenKind::Page { source_url: None };
+    let third = context.compose("Three?", Some(&as_page), &[], true);
+    assert!(
+        third.starts_with(innerword_assistant::PAGE_PREFACE),
+        "{third}"
+    );
+}
+
+/// A listing too long to send whole goes as its beginning and its end, as a page's text
+/// does, and with the tools the assistant is told to read the rest by `board:<id>`.
+#[test]
+fn a_long_whiteboard_goes_as_its_beginning_and_its_end() {
+    let listing = "rectangle box at (0, 0) 100 x 50 \"A step of the process\"\n".repeat(4_000);
+    assert!(listing.chars().count() > WHOLE_DOCUMENT_LIMIT);
+    let open = board(&listing);
+    let with_tools = side_prompt("?", DocumentPart::Current(&open), AttachedPart::None, true);
+    assert!(with_tools.starts_with(innerword_assistant::BOARD_PREFACE));
+    assert!(with_tools.contains("kind=\"board\""));
+    assert!(with_tools.contains("whole=\"false\""));
+    assert!(with_tools.contains("<beginning>\nrectangle box"));
+    assert!(with_tools.contains("</end>\n</open_document>"));
+    assert!(
+        with_tools.contains("Read the rest with the read_document tool (document \"board:57\")"),
+        "{with_tools}"
+    );
+    assert!(with_tools.chars().count() < WHOLE_DOCUMENT_LIMIT + 2_000);
+    let without = side_prompt("?", DocumentPart::Current(&open), AttachedPart::None, false);
+    assert!(without.contains("Say so when a question needs a part you cannot see."));
+    assert!(!without.contains("read_document"));
 }

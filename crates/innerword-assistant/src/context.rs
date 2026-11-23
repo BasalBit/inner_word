@@ -55,8 +55,9 @@ pub fn quick_prompt(question: &str, selection: Option<&str>) -> String {
     )
 }
 
-/// What the open item is: a text, or a page (a web page kept in the library as it was
-/// made, which cannot be changed).
+/// What the open item is: a text, a page (a web page kept in the library as it was
+/// made, which cannot be changed) or a whiteboard (a drawing, which only its owner
+/// changes, in the app).
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub enum OpenKind {
     /// A document of the library: its text is Markdown, and answers can go into it.
@@ -67,12 +68,34 @@ pub enum OpenKind {
         /// The address the page came from, when it has one.
         source_url: Option<String>,
     },
+    /// A whiteboard: its "text" is the listing of its elements, one per line, and
+    /// nothing can be put into it.
+    Board,
 }
 
 impl OpenKind {
     /// Whether the open item is a page.
     pub fn is_page(&self) -> bool {
         matches!(self, OpenKind::Page { .. })
+    }
+
+    /// Whether the open item is a whiteboard.
+    pub fn is_board(&self) -> bool {
+        matches!(self, OpenKind::Board)
+    }
+
+    /// Whether the open item is a text, which answers can go into.
+    pub fn is_text(&self) -> bool {
+        matches!(self, OpenKind::Text)
+    }
+
+    /// What the item is called in a sentence: "document", "page", "whiteboard".
+    fn noun(&self) -> &'static str {
+        match self {
+            OpenKind::Text => "document",
+            OpenKind::Page { .. } => "page",
+            OpenKind::Board => "whiteboard",
+        }
     }
 }
 
@@ -81,7 +104,14 @@ impl OpenKind {
 pub const PAGE_PREFACE: &str = "The open item is a page: a web page saved in the library, \
 shown as it was made. It cannot be changed. Its text, as the page showed it:";
 
-/// The document that is open beside the side chat (or the page: [`OpenKind`]).
+/// What the side chat is told before the listing of an open whiteboard's elements, in
+/// place of the line that introduces a document.
+pub const BOARD_PREFACE: &str = "The open item is a whiteboard: a drawing of shapes, \
+arrows, text and pictures. It is changed only by its owner, in the app. Its elements, one \
+per line, with their ids, positions, sizes and text:";
+
+/// The document that is open beside the side chat (or the page, or the whiteboard:
+/// [`OpenKind`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OpenDocument {
     /// Its id in the library, when it has one.
@@ -90,17 +120,20 @@ pub struct OpenDocument {
     pub title: String,
     /// Its path in the library: "The Salt Road/Part one/Chapter 1".
     pub path: String,
-    /// Its text as Markdown, as it is now; for a page, the text the page showed.
+    /// Its text as Markdown, as it is now; for a page, the text the page showed; for a
+    /// whiteboard, the listing of its elements.
     pub markdown: String,
-    /// A text or a page.
+    /// A text, a page or a whiteboard.
     pub kind: OpenKind,
 }
 
 impl OpenDocument {
     /// The id as the tools take it (`doc:12`), when the document has one. A page keeps
-    /// `doc:<id>` too: the tools read `page:` and `doc:` alike.
+    /// `doc:<id>` too: the tools read `page:` and `doc:` alike. A whiteboard is
+    /// `board:<id>` (read alike with the other two as well).
     pub fn reference(&self) -> Option<String> {
-        self.id.map(|id| format!("doc:{id}"))
+        let prefix = if self.kind.is_board() { "board" } else { "doc" };
+        self.id.map(|id| format!("{prefix}:{id}"))
     }
 
     fn fingerprint(&self) -> u64 {
@@ -150,11 +183,7 @@ pub fn side_prompt(
         DocumentPart::Current(document) => parts.push(document_block(document, tools)),
         DocumentPart::Unchanged(document) => parts.push(format!(
             "(The open {}, \"{}\", has not changed since my last message.)",
-            if document.kind.is_page() {
-                "page"
-            } else {
-                "document"
-            },
+            document.kind.noun(),
             document.title
         )),
     }
@@ -181,12 +210,19 @@ fn document_block(document: &OpenDocument, tools: bool) -> String {
     if let Some(reference) = document.reference() {
         header.push_str(&format!(" id={}", attribute(&reference)));
     }
-    if let OpenKind::Page { source_url } = &document.kind {
-        header.push_str(" kind=\"page\"");
-        if let Some(source_url) = source_url {
-            header.push_str(&format!(" source={}", attribute(source_url)));
+    match &document.kind {
+        OpenKind::Text => {}
+        OpenKind::Page { source_url } => {
+            header.push_str(" kind=\"page\"");
+            if let Some(source_url) = source_url {
+                header.push_str(&format!(" source={}", attribute(source_url)));
+            }
+            return unchangeable_block(document, header, tools);
         }
-        return page_block(document, header, tools);
+        OpenKind::Board => {
+            header.push_str(" kind=\"board\"");
+            return unchangeable_block(document, header, tools);
+        }
     }
     let markdown = document.markdown.trim_matches('\n');
     let chars = markdown.chars().count();
@@ -244,20 +280,25 @@ fn document_block(document: &OpenDocument, tools: bool) -> String {
     }
 }
 
-/// The open page as a block of the message: the sentence that says what a page is, then
-/// its text. A page too long to send whole is sent as its beginning and its end (with
-/// the tools, the assistant is told to read the rest with read_document): a page's text
-/// has no headings to make an outline of.
-fn page_block(document: &OpenDocument, header: String, tools: bool) -> String {
+/// The open page or whiteboard as a block of the message: the sentence that says what
+/// it is, then its text (a whiteboard's: the listing of its elements). One too long to
+/// send whole is sent as its beginning and its end (with the tools, the assistant is
+/// told to read the rest with read_document): neither has headings to make an outline
+/// of.
+fn unchangeable_block(document: &OpenDocument, header: String, tools: bool) -> String {
+    let (preface, nothing) = match document.kind {
+        OpenKind::Board => (BOARD_PREFACE, "(The whiteboard is empty.)"),
+        _ => (PAGE_PREFACE, "(The page shows no text.)"),
+    };
     let text = document.markdown.trim_matches('\n');
     let chars = text.chars().count();
     if chars <= WHOLE_DOCUMENT_LIMIT {
         let body = if text.trim().is_empty() {
-            "(The page shows no text.)"
+            nothing
         } else {
             text
         };
-        return format!("{PAGE_PREFACE}\n\n{header}>\n{body}\n</open_document>");
+        return format!("{preface}\n\n{header}>\n{body}\n</open_document>");
     }
     let words = text.split_whitespace().count();
     let edge = WHOLE_DOCUMENT_LIMIT / 2;
@@ -276,7 +317,7 @@ fn page_block(document: &OpenDocument, header: String, tools: bool) -> String {
         ),
     };
     format!(
-        "{PAGE_PREFACE}\n\n{how}\n\n{header}>\n<beginning>\n{beginning}\n</beginning>\n\
+        "{preface}\n\n{how}\n\n{header}>\n<beginning>\n{beginning}\n</beginning>\n\
          <end>\n{end}\n</end>\n</open_document>"
     )
 }

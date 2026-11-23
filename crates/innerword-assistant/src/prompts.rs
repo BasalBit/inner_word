@@ -64,6 +64,12 @@ or a path to a file.
 library as it was made, whose tag says kind=\"page\". It cannot be changed: you are given \
 the text it showed. Answer about it, quote it and sum it up as you would any text you \
 read, and do not offer text to put into it.
+- Sometimes the open item is a whiteboard: a drawing of shapes, arrows, text and pictures, \
+whose tag says kind=\"board\". You are given its elements, one per line, with their ids, \
+positions, sizes and text; you cannot see the drawing itself, nor the pictures on it. It \
+cannot be changed by you: only its owner draws on it, in the app. Answer about it, sum it \
+up and suggest changes in words, and do not offer text to put into it. Another \
+whiteboard of the library (board:12) reads the same way with read_document.
 - Sometimes a list of other documents and folders of the user's library that they attached \
 as context, inside <attached> tags, with ids and paths.
 - Tools that read the library: list_library and search_library to look around, \
@@ -152,5 +158,20 @@ changed";
         assert!(SIDE_SYSTEM_PROMPT.contains(SENTENCE));
         assert!(side_system_prompt(false).contains(SENTENCE));
         assert!(!QUICK_SYSTEM_PROMPT.contains("page:"));
+    }
+
+    /// The side chat is told that the open item may be a whiteboard, read as a list of
+    /// its elements, which it cannot change, with and without the tools; the quick chat
+    /// never sees one.
+    #[test]
+    fn the_side_chat_is_told_what_a_whiteboard_is() {
+        const SENTENCE: &str = "Sometimes the open item is a whiteboard: a drawing of shapes, \
+arrows, text and pictures, whose tag says kind=\"board\". You are given its elements, one \
+per line, with their ids, positions, sizes and text; you cannot see the drawing itself, nor \
+the pictures on it. It cannot be changed by you: only its owner draws on it, in the app.";
+        assert!(SIDE_SYSTEM_PROMPT.contains(SENTENCE));
+        assert!(side_system_prompt(true).contains(SENTENCE));
+        assert!(side_system_prompt(false).contains(SENTENCE));
+        assert!(!QUICK_SYSTEM_PROMPT.contains("whiteboard"));
     }
 }

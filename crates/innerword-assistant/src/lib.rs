@@ -70,9 +70,9 @@ pub use backend::{
 };
 pub use claude::ClaudeCode;
 pub use context::{
-    AttachedPart, DocumentPart, HISTORY_LIMIT, OpenDocument, OpenKind, OutlineEntry, PAGE_PREFACE,
-    SELECTION_LIMIT, SideContext, WHOLE_DOCUMENT_LIMIT, bounded_history, outline, quick_prompt,
-    side_prompt, with_history,
+    AttachedPart, BOARD_PREFACE, DocumentPart, HISTORY_LIMIT, OpenDocument, OpenKind, OutlineEntry,
+    PAGE_PREFACE, SELECTION_LIMIT, SideContext, WHOLE_DOCUMENT_LIMIT, bounded_history, outline,
+    quick_prompt, side_prompt, with_history,
 };
 pub use events::{EventSink, EventStream, event_channel};
 pub use fake::{FakeBackend, FakeReply, FakeSent, fake_catalog, fake_info};

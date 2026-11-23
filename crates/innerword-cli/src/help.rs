@@ -33,7 +33,7 @@ address on the web stays a link.
 ";
 
 /// What the help of a command that takes a whiteboard's elements says about them.
-const SKELETONS: &str = "\
+const SKELETONS: &str = "
 The elements are a JSON array of Excalidraw's element skeletons, in Excalidraw's camelCase:
   rectangle, ellipse, diamond  x, y; width, height (100 each), label {\"text\": \"API\"}
   text                         x, y, text; fontSize (20), fontFamily, textAlign (never a size)
@@ -51,7 +51,7 @@ folder of --file, else from where the command runs.
 ";
 
 /// What the help of a command that takes changes of a whiteboard's elements says about them.
-const CHANGES: &str = "\
+const CHANGES: &str = "
 The changes are a JSON array of objects, each with the id of an element and what changes:
 x, y (where it is) or dx, dy (how far it moves), width, height, angle, text (of a text, or of
 the label of a shape or an arrow; a shape without one gets one), the style fields of an

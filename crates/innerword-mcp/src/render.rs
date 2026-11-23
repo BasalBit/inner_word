@@ -840,6 +840,7 @@ pub fn board_changed(did: BoardDid, changed: &BoardChanged, named: &[String]) ->
 ///
 /// ```text
 /// board:12  Sketches/Architecture  5 elements, 0 pictures  changed 2026-11-23T10:04Z
+/// board:9  Plans/Garden  cannot be read (…)  changed 2026-11-02T18:40Z  (in the trash)
 /// ```
 pub fn boards(list: &BoardsList) -> String {
     if list.boards.is_empty() {
@@ -848,12 +849,19 @@ pub fn boards(list: &BoardsList) -> String {
     let mut out = String::new();
     for listed in &list.boards {
         let board = &listed.board;
+        let holds = match &listed.unreadable {
+            // Damaged, or written by a newer version: listed all the same, and said so.
+            Some(why) => format!("cannot be read ({})", one_line(why)),
+            None => format!(
+                "{}, {}",
+                plural(listed.elements, "element", "elements"),
+                plural(listed.pictures, "picture", "pictures")
+            ),
+        };
         out.push_str(&format!(
-            "{}  {}  {}, {}  changed {}",
+            "{}  {}  {holds}  changed {}",
             reference(board),
             board.path,
-            plural(listed.elements, "element", "elements"),
-            plural(listed.pictures, "picture", "pictures"),
             time(board.updated_at)
         ));
         if listed.trashed {
@@ -1747,6 +1755,39 @@ mod tests {
             ),
             "{}",
             image_line(&escaped)
+        );
+    }
+
+    #[test]
+    fn a_whiteboard_that_cannot_be_read_is_listed_and_said_to_be_so() {
+        let board = |id: i64, title: &str, unreadable: Option<&str>| {
+            serde_json::from_value::<innerword_agent::BoardListed>(serde_json::json!({
+                "board": {
+                    "id": id, "title": title, "path": format!("Plans/{title}"),
+                    "folder_id": 1, "folder": "Plans", "words": 0, "characters": 0,
+                    "created_at": 1_709_208_000_000i64, "updated_at": 1_709_208_000_000i64,
+                    "trashed_at": null, "kind": "board"
+                },
+                "elements": 3, "pictures": 1, "trashed": unreadable.is_some(),
+                "unreadable": unreadable,
+            }))
+            .unwrap()
+        };
+        let list = BoardsList {
+            boards: vec![
+                board(4, "Plan", None),
+                board(9, "Garden", Some("its scene is not JSON\nat line 1")),
+            ],
+        };
+        assert_eq!(
+            boards(&list),
+            "board:4  Plans/Plan  3 elements, 1 picture  changed 2024-02-29T12:00Z\n\
+             board:9  Plans/Garden  cannot be read (its scene is not JSON at line 1)  changed \
+             2024-02-29T12:00Z  (in the trash)\n"
+        );
+        assert_eq!(
+            boards(&BoardsList { boards: Vec::new() }),
+            "No whiteboards.\n"
         );
     }
 

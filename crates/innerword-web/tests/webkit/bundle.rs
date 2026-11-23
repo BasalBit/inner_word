@@ -2807,8 +2807,23 @@ pub(super) fn the_pdf_is_the_screen(report: &mut Report, rules: &Path) {
         ]
     });
     let line = hole.map(|(x, y, _, h)| darkest(&page, SCALE, (x - 6.0, y - 6.0, 5.0, h + 12.0)));
+    // "Nothing is drawn" in the room is "lighter than halfway from the line to the paper",
+    // not "white": WebKit puts a mask into the PDF as a picture of it (an image with
+    // `/Interpolate true` under a luminosity soft mask) made at the device scale of the
+    // display, two pixels a point on a Retina Mac (301 by 90 for 150.5 by 45 points) and,
+    // by its readings, one on CI's runner, which has no Retina display. At one pixel a
+    // point the interpolated edge of the hole lends the room's first pixel, half a point
+    // inside it, a part of the line's grey: 181 left and 240 right on macos-15 with the
+    // line at 30, where a Retina Mac reads 255 and 255 (a linear ramp over the mask's
+    // pixel across the hole's edge at x 245.37 and 308.43 gives about 205 and 243). A
+    // line that runs into the room shows its core there, as dark as the line beside it,
+    // and so does a hole grown by less than the room is wide; the export without the grown
+    // hole reads 30 and 30 (its hole is the label's box, so the room is on the letters and
+    // the line runs up to them).
+    let paper_side = |d: u8, line: u8| u16::from(d) * 2 > u16::from(line) + 255;
     report.check(
-        ring.is_some_and(|r| r.iter().all(|&d| d == 255)) && line.is_some_and(|d| d < 100),
+        line.is_some_and(|l| l < 100)
+            && ring.is_some_and(|r| r.iter().all(|&d| paper_side(d, line.unwrap_or(255)))),
         &format!(
             "the arrow's line stops {} pt short of its label, as on the canvas (hole {hole:?}: darkest in the room left and right {ring:?}, the line beside it {line:?})",
             5

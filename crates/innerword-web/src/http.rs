@@ -2,7 +2,9 @@
 //! a request asks for, the status and the headers of every answer. No Objective-C
 //! here, so all of it is tested without WebKit.
 
-use crate::{CONTENT_SECURITY_POLICY, SCHEME, ServedFile};
+#[cfg(test)]
+use crate::CONTENT_SECURITY_POLICY;
+use crate::{SCHEME, ServedFile};
 
 /// The part of a file a request asks for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -91,24 +93,33 @@ pub(crate) struct Answer {
     pub text: &'static str,
 }
 
-/// The headers every answer carries, whatever its type: the page's policy (on HTML so
+/// The headers every answer carries, whatever its type: the policy `csp` (on HTML so
 /// that the page has it, on scripts so that a worker has it, on SVG and XML because
 /// such a document in a frame runs script) and no DNS prefetching.
-fn common_headers() -> Vec<(&'static str, String)> {
+fn common_headers(csp: &str) -> Vec<(&'static str, String)> {
     vec![
-        (
-            "Content-Security-Policy",
-            CONTENT_SECURITY_POLICY.to_string(),
-        ),
+        ("Content-Security-Policy", csp.to_string()),
         ("X-DNS-Prefetch-Control", "off".to_string()),
         ("Accept-Ranges", "bytes".to_string()),
         ("Cache-Control", "no-store".to_string()),
     ]
 }
 
-/// The answer to a request for a file (`None`: the page has no such file).
+/// The answer to a request for a file (`None`: the page has no such file), with a
+/// page's policy.
+#[cfg(test)]
 pub(crate) fn answer(file: Option<&ServedFile>, range: Option<&str>, head: bool) -> Answer {
-    let mut headers = common_headers();
+    answer_with(file, range, head, CONTENT_SECURITY_POLICY)
+}
+
+/// The answer to a request for a file, every answer with the policy `csp`.
+pub(crate) fn answer_with(
+    file: Option<&ServedFile>,
+    range: Option<&str>,
+    head: bool,
+    csp: &str,
+) -> Answer {
+    let mut headers = common_headers(csp);
     let Some(file) = file else {
         const TEXT: &str = "This file is not among the files of the page.";
         headers.push(("Content-Type", "text/plain; charset=utf-8".to_string()));
@@ -364,6 +375,31 @@ mod tests {
             );
             assert_eq!(header(&answer, "X-DNS-Prefetch-Control"), Some("off"));
             assert_eq!(header(&answer, "Accept-Ranges"), Some("bytes"));
+        }
+    }
+
+    #[test]
+    fn a_whiteboards_answers_carry_its_own_policy() {
+        let script = file("text/javascript; charset=utf-8", b"export {}");
+        for answer in [
+            answer_with(
+                Some(&script),
+                None,
+                false,
+                crate::BOARD_CONTENT_SECURITY_POLICY,
+            ),
+            answer_with(None, None, false, crate::BOARD_CONTENT_SECURITY_POLICY),
+            answer_with(
+                Some(&script),
+                Some("bytes=0-1"),
+                false,
+                crate::BOARD_CONTENT_SECURITY_POLICY,
+            ),
+        ] {
+            assert_eq!(
+                header(&answer, "Content-Security-Policy"),
+                Some(crate::BOARD_CONTENT_SECURITY_POLICY)
+            );
         }
     }
 

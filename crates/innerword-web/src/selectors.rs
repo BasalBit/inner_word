@@ -27,6 +27,8 @@ const USED: &[(&str, bool, &str)] = &[
     ("NSString", true, "string"),
     ("NSString", false, "initWithData:encoding:"),
     ("NSString", false, "UTF8String"),
+    ("NSString", false, "length"),
+    ("NSString", false, "dataUsingEncoding:allowLossyConversion:"),
     ("NSObject", false, "isKindOfClass:"),
     ("NSObject", false, "respondsToSelector:"),
     ("NSObject", false, "description"),
@@ -42,6 +44,8 @@ const USED: &[(&str, bool, &str)] = &[
     ("NSNumber", false, "boolValue"),
     ("NSNumber", false, "stringValue"),
     ("NSData", true, "dataWithBytes:length:"),
+    ("NSData", false, "length"),
+    ("NSData", false, "bytes"),
     ("NSJSONSerialization", true, "isValidJSONObject:"),
     (
         "NSJSONSerialization",
@@ -244,6 +248,17 @@ const USED: &[(&str, bool, &str)] = &[
         "evaluateJavaScript:inFrame:inContentWorld:completionHandler:",
     ),
     ("WKWebView", false, "printOperationWithPrintInfo:"),
+    (
+        "WKWebView",
+        false,
+        "callAsyncJavaScript:arguments:inFrame:inContentWorld:completionHandler:",
+    ),
+    (
+        "WKWebView",
+        false,
+        "createPDFWithConfiguration:completionHandler:",
+    ),
+    ("WKPDFConfiguration", false, "setRect:"),
     ("WKUserContentController", false, "addContentRuleList:"),
     ("WKUserContentController", false, "addUserScript:"),
     (
@@ -263,6 +278,7 @@ const USED: &[(&str, bool, &str)] = &[
         "initWithSource:injectionTime:forMainFrameOnly:inContentWorld:",
     ),
     ("WKContentWorld", true, "worldWithName:"),
+    ("WKContentWorld", true, "pageWorld"),
     ("WKContentWorld", true, "defaultClientWorld"),
     ("WKContentRuleListStore", true, "storeWithURL:"),
     (
@@ -295,6 +311,10 @@ const USED: &[(&str, bool, &str)] = &[
     ("WKNavigationResponse", false, "canShowMIMEType"),
     ("WKScriptMessage", false, "body"),
     ("WKScriptMessage", false, "frameInfo"),
+    ("WKScriptMessage", false, "name"),
+    ("WKFrameInfo", false, "securityOrigin"),
+    ("WKSecurityOrigin", false, "protocol"),
+    ("WKSecurityOrigin", false, "host"),
 ];
 
 /// What a scheme task is asked for: a protocol, so asked of the protocol.

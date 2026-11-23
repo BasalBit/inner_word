@@ -34,6 +34,11 @@ pub(crate) trait Host {
     }
     /// The reader's link was handed to the browser.
     fn link_opened(&self) {}
+    /// Whether the main frame may load `url`, which the policy allows (a file of the
+    /// page's own): false cancels it, as a navigation the policy cancelled.
+    fn main_frame_may_load(&self, _url: &str) -> bool {
+        true
+    }
     fn finished(&self, navigation: Id);
     fn failed(&self, navigation: Id, message: String);
     fn terminated(&self);
@@ -247,14 +252,17 @@ extern "C" fn decide_action(
         let link = kind == LINK_ACTIVATED;
         let reader = link && reader_opened(&*host, action, &url);
         let own_host = host.own_host();
-        let decision = policy::decide(&Navigation {
+        let decision = match policy::decide(&Navigation {
             url: &url,
             own_host: &own_host,
             main_frame,
             link,
             download,
             reader,
-        });
+        }) {
+            Decision::Allow if main_frame && !host.main_frame_may_load(&url) => Decision::Cancel,
+            decision => decision,
+        };
         match decision {
             Decision::Allow => decide(handler, POLICY_ALLOW),
             Decision::Cancel => {

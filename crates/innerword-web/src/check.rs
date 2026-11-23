@@ -266,10 +266,10 @@ const TEXT: &str = r#"(() => {
   });
 })()"#;
 
-/// The engine, as the manifest records it: "WebKit 621.1".
-pub(crate) fn engine() -> String {
+/// WebKit's bundle version: "21621.1.15.11.4" on macOS 27.
+fn bundle_version() -> String {
     // SAFETY: Foundation's own; the bundle of WKWebView is WebKit's.
-    let version = unsafe {
+    unsafe {
         let bundle: Id = msg_send![class!(NSBundle), bundleForClass: class!(WKWebView)];
         if bundle.is_null() {
             String::new()
@@ -278,21 +278,38 @@ pub(crate) fn engine() -> String {
                 msg_send![bundle, objectForInfoDictionaryKey: nsstring("CFBundleVersion")];
             string_of(version)
         }
-    };
-    let mut parts = version.split('.');
+    }
+}
+
+/// WebKit's major version and minor version from its bundle version: the major leads
+/// with the system's own number (21621 is 621 of macOS 27's WebKit, 17613 is 613 of
+/// macOS 12.3's).
+fn version_of(bundle_version: &str) -> Option<(String, String)> {
+    let mut parts = bundle_version.split('.');
     match (parts.next(), parts.next()) {
         (Some(major), Some(minor)) if !major.is_empty() => {
-            // WebKit's bundle version leads with the system's own number (21621 is
-            // 621 of macOS 27's WebKit).
             let major = if major.len() > 3 {
                 &major[major.len() - 3..]
             } else {
                 major
             };
-            format!("WebKit {major}.{minor}")
+            Some((major.to_string(), minor.to_string()))
         }
-        _ => "WebKit".to_string(),
+        _ => None,
     }
+}
+
+/// The engine, as the manifest records it: "WebKit 621.1".
+pub(crate) fn engine() -> String {
+    match version_of(&bundle_version()) {
+        Some((major, minor)) => format!("WebKit {major}.{minor}"),
+        None => "WebKit".to_string(),
+    }
+}
+
+/// WebKit's major version (621 on macOS 27), when its bundle says.
+pub(crate) fn engine_major() -> Option<u32> {
+    version_of(&bundle_version()).and_then(|(major, _)| major.parse().ok())
 }
 
 // ---------------------------------------------------------------------------
@@ -305,9 +322,15 @@ const OUT_OF_THE_WAY: usize = (1 << 3) | (1 << 6);
 /// every other window so that WebKit draws into it, never key, never in the Windows
 /// menu or in window cycling.
 pub(crate) unsafe fn offscreen_window() -> Id {
+    // SAFETY: as `offscreen_window_of`.
+    unsafe { offscreen_window_of(WINDOW) }
+}
+
+/// [`offscreen_window`] of a size of the caller's.
+pub(crate) unsafe fn offscreen_window_of(size: (f64, f64)) -> Id {
     // SAFETY: AppKit's own selectors with the types its headers declare.
     unsafe {
-        let rect = NSRect::new(-20_000., -20_000., WINDOW.0, WINDOW.1);
+        let rect = NSRect::new(-20_000., -20_000., size.0, size.1);
         let window: Id = msg_send![class!(NSWindow), alloc];
         let window: Id = msg_send![window,
             initWithContentRect: rect
@@ -326,7 +349,7 @@ pub(crate) unsafe fn offscreen_window() -> Id {
 /// A web view of the check's configuration (owned by the caller: +1) in `window`'s
 /// content view, with occlusion detection off where WebKit has the switch (an
 /// offscreen window is occluded, and an occluded page runs no animation frames).
-unsafe fn checked_web_view(window: Id, configuration: Id) -> Id {
+pub(crate) unsafe fn checked_web_view(window: Id, configuration: Id) -> Id {
     // SAFETY: AppKit's and WebKit's own; the private switch only where it answers.
     unsafe {
         let content: Id = msg_send![window, contentView];
@@ -342,7 +365,7 @@ unsafe fn checked_web_view(window: Id, configuration: Id) -> Id {
     }
 }
 
-unsafe fn tear_down(window: Id, web_view: Id, delegate_object: Id) {
+pub(crate) unsafe fn tear_down(window: Id, web_view: Id, delegate_object: Id) {
     // SAFETY: the references their makers took, given back once.
     unsafe {
         if !web_view.is_null() {
@@ -694,6 +717,18 @@ fn take_message(run: &Weak<RefCell<CheckRun>>, body: &str, frame_url: &str) {
 /// crashed is in its `LoadOutcome`, and when the limit runs out the loads not done
 /// are missing from `loads` (an entry still loading is there, not finished).
 pub fn check(input: CheckInput, done: impl FnOnce(CheckOutcome) + 'static) {
+    check_with_policy(input, crate::CONTENT_SECURITY_POLICY, done);
+}
+
+/// [`check`] with every answer carrying `csp` in place of a page's policy: a
+/// whiteboard's bundle is checked under the whiteboard's own
+/// ([`crate::BOARD_CONTENT_SECURITY_POLICY`], [`crate::board_export_policy`]), so that
+/// what it would ask for under that policy is reported as blocked.
+pub fn check_with_policy(
+    input: CheckInput,
+    csp: &'static str,
+    done: impl FnOnce(CheckOutcome) + 'static,
+) {
     let started = Instant::now();
     let fail = move |why: String, done: Box<dyn FnOnce(CheckOutcome)>| {
         let outcome = CheckOutcome {
@@ -761,7 +796,8 @@ pub fn check(input: CheckInput, done: impl FnOnce(CheckOutcome) + 'static) {
         // types their headers declare; what is made here is held by the run and
         // released by `finish`.
         unsafe {
-            let handler = scheme::new_handler(SchemeState::new(source, HOST, &entry, log));
+            let handler =
+                scheme::new_handler(SchemeState::new(source, HOST, &entry, log).with_policy(csp));
             let store = config::fresh_data_store();
             let configuration = config::configuration(handler, store);
             release(store);
@@ -999,11 +1035,18 @@ fn finish(run: &Run) {
 /// activation policy "prohibited" (no Dock icon, no menu), the check run on this
 /// thread's run loop, returned when it is done. Call it on the main thread.
 pub fn check_blocking(input: CheckInput) -> CheckOutcome {
+    check_blocking_with_policy(input, crate::CONTENT_SECURITY_POLICY)
+}
+
+/// [`check_blocking`] for [`check_with_policy`].
+pub fn check_blocking_with_policy(input: CheckInput, csp: &'static str) -> CheckOutcome {
     ns::program_application();
     let limit = input.limit;
     let slot: Rc<RefCell<Option<CheckOutcome>>> = Rc::new(RefCell::new(None));
     let answer = slot.clone();
-    check(input, move |outcome| *answer.borrow_mut() = Some(outcome));
+    check_with_policy(input, csp, move |outcome| {
+        *answer.borrow_mut() = Some(outcome)
+    });
     ns::run_until(limit + Duration::from_secs(10), || slot.borrow().is_some());
     let outcome = slot.borrow_mut().take();
     outcome.unwrap_or_else(|| CheckOutcome {
@@ -1224,6 +1267,24 @@ pub fn print_blocking(input: PdfInput) -> Result<PrintedPdf, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn webkit_versions_are_read_from_the_bundle_version() {
+        assert_eq!(
+            version_of("21621.1.15.11.4"),
+            Some(("621".to_string(), "1".to_string()))
+        );
+        assert_eq!(
+            version_of("17613.1.17.1.13"),
+            Some(("613".to_string(), "1".to_string()))
+        );
+        assert_eq!(
+            version_of("614.1"),
+            Some(("614".to_string(), "1".to_string()))
+        );
+        assert_eq!(version_of(""), None);
+        assert_eq!(version_of("621"), None);
+    }
 
     #[test]
     fn frames_of_xml_types_are_watched() {

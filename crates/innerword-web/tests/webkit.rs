@@ -31,7 +31,7 @@ use std::{
 
 use innerword_web::{
     Appearance, CheckInput, CheckOutcome, EditCommand, KeyPress, MemorySource, MenuEntry,
-    PageEvents, PageSource, PdfInput, Rect, ServedFile, ViewConfig, WebPage, available,
+    PageEvents, PageSource, PdfInput, Rect, ServedFile, ViewConfig, ViewExtras, WebPage, available,
     check_blocking, check_selectors, menu, print_offscreen, testing,
 };
 use objc::{
@@ -44,6 +44,9 @@ use objc::{
 
 type Id = *mut Object;
 const NIL: Id = std::ptr::null_mut();
+
+#[path = "webkit/board.rs"]
+mod board;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
@@ -330,6 +333,7 @@ struct Events {
     alerts: RefCell<Vec<String>>,
     menu_asked: RefCell<Vec<Option<String>>>,
     chosen: RefCell<Vec<u32>>,
+    messages: RefCell<Vec<String>>,
 }
 
 impl PageEvents for Events {
@@ -376,6 +380,9 @@ impl PageEvents for Events {
     fn menu_chosen(&self, id: u32) {
         self.chosen.borrow_mut().push(id);
     }
+    fn message(&self, body: String) {
+        self.messages.borrow_mut().push(body);
+    }
 }
 
 /// A window far off screen with a stand-in for GPUI's view filling its content view.
@@ -419,6 +426,47 @@ impl Host {
         rules: &Path,
     ) -> (WebPage, Rc<Events>) {
         self.page_at("page-12", files, entry, rules)
+    }
+
+    /// A view with what only a whiteboard's view has, at `view_host`, on the whole content
+    /// view, loaded.
+    fn board(
+        &self,
+        view_host: &str,
+        files: Vec<(&str, ServedFile)>,
+        extras: ViewExtras,
+        rules: &Path,
+    ) -> (WebPage, Rc<Events>) {
+        let events = Rc::new(Events::default());
+        let page = unsafe {
+            WebPage::new_with(
+                self.gpui.cast(),
+                ViewConfig {
+                    host: view_host.to_string(),
+                    entry: "index.html".to_string(),
+                    source: source(files),
+                    rules_dir: rules.to_path_buf(),
+                    appearance: Appearance::Light,
+                    background: (1., 1., 1.),
+                },
+                extras,
+                events.clone(),
+            )
+        };
+        page.set_frame(Rect {
+            x: 0.,
+            y: 0.,
+            width: 1280.,
+            height: self.content_height(),
+        });
+        let loaded = testing::run_until(Duration::from_secs(15), || events.loaded.get() > 0);
+        if !loaded {
+            println!(
+                "webkit: note: the board's view did not report loaded ({:?})",
+                events.failed.borrow()
+            );
+        }
+        (page, events)
     }
 
     /// The same at a host of its own (`page-<id>`: the origin of the page).
@@ -621,6 +669,28 @@ fn main() -> ExitCode {
     }
     if wanted("storage") {
         storage_is_the_pages_own_and_not_kept(&mut report, &rules);
+    }
+    // A whiteboard's view and its export page (`docs/whiteboard-design.md`, 4.2).
+    if wanted("bridge") {
+        board::the_bridge(&mut report, &rules);
+    }
+    if wanted("call") {
+        board::call_async(&mut report, &rules);
+    }
+    if wanted("one_document") {
+        board::one_document(&mut report, &rules);
+    }
+    if wanted("board_policy") {
+        board::the_board_policy(&mut report, &server, &rules);
+    }
+    if wanted("park") {
+        board::park(&mut report, &rules);
+    }
+    if wanted("run_script") {
+        board::run_script(&mut report, &rules);
+    }
+    if wanted("bundle") {
+        board::the_bundle(&mut report, &server, &rules);
     }
 
     report.check(

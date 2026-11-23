@@ -83,6 +83,15 @@ pub(crate) struct ViewShared {
     /// The navigation of the last load of the entry.
     pub navigation: Cell<Id>,
     pub last_alert: Cell<Option<Instant>>,
+    /// A whiteboard's view (`ViewExtras::one_document`): no main-frame navigation but
+    /// the view's own loads of its entry, no alert.
+    pub one_document: Cell<bool>,
+    /// The view itself asked for its entry (`load_entry`) and the policy has not been
+    /// asked about that navigation yet.
+    pub own_load: Cell<bool>,
+    /// Messages of the bridge handed on, and dropped.
+    pub messages_received: Cell<u64>,
+    pub messages_dropped: Cell<u64>,
 }
 
 impl ViewShared {
@@ -112,6 +121,10 @@ impl ViewShared {
             blocked_navigations: Cell::new(0),
             navigation: Cell::new(NIL),
             last_alert: Cell::new(None),
+            one_document: Cell::new(false),
+            own_load: Cell::new(false),
+            messages_received: Cell::new(0),
+            messages_dropped: Cell::new(0),
         }
     }
 }
@@ -164,7 +177,21 @@ impl Host for ViewHost {
         self.0.events.open_externally(url);
     }
 
+    fn main_frame_may_load(&self, url: &str) -> bool {
+        if !self.0.one_document.get() {
+            return true;
+        }
+        // Only the view's own load of its entry (the first one, a reload): the page's
+        // own `location =`, reload, link or form would throw away what is not saved.
+        let entry =
+            crate::http::split_url(url) == Some((self.0.host.clone(), self.0.entry.clone()));
+        entry && self.0.own_load.replace(false)
+    }
+
     fn alert(&self, message: String) {
+        if self.0.one_document.get() {
+            return;
+        }
         let now = Instant::now();
         let recent = self
             .0

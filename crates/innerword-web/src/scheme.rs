@@ -70,6 +70,8 @@ pub(crate) struct SchemeState {
     pub host: String,
     /// The file `innerword-page://<host>/` stands for.
     pub entry: String,
+    /// The policy of every answer.
+    pub csp: &'static str,
     pub log: Rc<RequestLog>,
     /// Tasks started and neither stopped nor answered yet (their addresses; each is
     /// retained meanwhile).
@@ -87,9 +89,16 @@ impl SchemeState {
             source,
             host: host.to_ascii_lowercase(),
             entry: entry.trim_start_matches('/').to_string(),
+            csp: crate::CONTENT_SECURITY_POLICY,
             log,
             live: RefCell::new(HashSet::new()),
         }
+    }
+
+    /// The same, every answer with the policy `csp`.
+    pub(crate) fn with_policy(mut self, csp: &'static str) -> SchemeState {
+        self.csp = csp;
+        self
     }
 }
 
@@ -227,12 +236,12 @@ unsafe fn finish(
 ) {
     // SAFETY: on the main thread; `task` is retained by `start_task`.
     unsafe {
-        let live = match state_of(handler) {
-            Some(state) => state.live.borrow_mut().remove(&(task as usize)),
-            None => false,
+        let (live, csp) = match state_of(handler) {
+            Some(state) => (state.live.borrow_mut().remove(&(task as usize)), state.csp),
+            None => (false, crate::CONTENT_SECURITY_POLICY),
         };
         if live {
-            let answer = http::answer(file.as_ref(), range.as_deref(), head);
+            let answer = http::answer_with(file.as_ref(), range.as_deref(), head, csp);
             respond(task, &answer, file.as_ref());
             if let Some(state) = state_of(handler) {
                 let log = &state.log;

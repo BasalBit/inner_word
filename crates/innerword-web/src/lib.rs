@@ -24,8 +24,13 @@
 //!   second before ([`PageEvents::open_externally`]); no window, download, panel,
 //!   camera, microphone, link preview, full screen or inspector;
 //! * no autoplay; the check's media are muted;
-//! * no bridge to the app in the view: no script message handler, no user script (the
-//!   check has both, in a content world of its own).
+//! * no bridge to the app in a page's view: no script message handler, no user script
+//!   (the check has both, in a content world of its own). A whiteboard's view
+//!   ([`ViewExtras`]) has one handler ([`Bridge`]), checked for every message: its name,
+//!   the main frame, the view's own origin, a string under the size cap; whatever fails is
+//!   dropped and counted, and what passes only reaches [`PageEvents::message`]. It also
+//!   loads no other document after its entry and has a stricter policy
+//!   ([`BOARD_CONTENT_SECURITY_POLICY`]).
 //!
 //! Everything runs on the main thread, except [`PageSource::file`], which is called on
 //! a background queue. Every callback from WebKit or AppKit reaches the owner on the
@@ -37,6 +42,7 @@
 
 use std::{collections::HashMap, fmt, path::PathBuf, sync::Arc, time::Duration};
 
+mod bridge;
 mod check;
 mod config;
 mod delegate;
@@ -50,11 +56,16 @@ mod policy;
 mod print;
 mod rules;
 mod scheme;
+mod script;
 mod selectors;
 mod view;
 
-pub use check::{check, check_blocking, print_blocking, print_offscreen};
+pub use check::{
+    check, check_blocking, check_blocking_with_policy, check_with_policy, print_blocking,
+    print_offscreen,
+};
 pub use page::WebPage;
+pub use script::{run_script, run_script_blocking};
 pub use selectors::{available, check_selectors};
 
 /// The scheme a page's files are served under: `innerword-page://page-12/index.html` in
@@ -63,6 +74,46 @@ pub const SCHEME: &str = "innerword-page";
 
 /// The policy on every answer of the scheme handler, whatever its type.
 pub const CONTENT_SECURITY_POLICY: &str = "default-src 'self' data: blob: 'unsafe-inline' 'unsafe-eval'; form-action 'none'; base-uri 'self'";
+
+/// The policy of every answer of a whiteboard's view (`ViewExtras::csp`): the bundle is
+/// our own code and needs neither an inline script nor eval, so neither runs, nor does
+/// any frame (an `iframe` element of a pasted scene renders its `srcdoc` as a frame,
+/// which inherits this policy and could run nothing even before the glue deletes it).
+pub const BOARD_CONTENT_SECURITY_POLICY: &str = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' data: blob:; worker-src 'self' blob:; frame-src 'none'; child-src 'none'; object-src 'none'; form-action 'none'; base-uri 'self'";
+
+/// The policy of the whiteboard's export page: the board's, with WebAssembly allowed
+/// for Excalidraw's font subsetter (`'wasm-unsafe-eval'`, which allows WebAssembly and
+/// not eval). Where WebKit does not know that keyword (before Safari 16's WebKit, 614,
+/// which a Mac of macOS 12.3 can still have) it is ignored and WebAssembly is refused:
+/// [`board_export_policy`] then answers
+/// [`BOARD_EXPORT_CONTENT_SECURITY_POLICY_BEFORE_WASM_KEYWORD`].
+pub const BOARD_EXPORT_CONTENT_SECURITY_POLICY: &str = "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' data: blob:; worker-src 'self' blob:; frame-src 'none'; child-src 'none'; object-src 'none'; form-action 'none'; base-uri 'self'";
+
+/// The export page's policy for a WebKit that does not know `'wasm-unsafe-eval'`:
+/// `'unsafe-eval'` in its place (an older WebKit governs WebAssembly by that keyword).
+/// Only the export page ever has it; it loads a stored scene that `innerword_board` read
+/// and filtered, and has no bridge.
+pub const BOARD_EXPORT_CONTENT_SECURITY_POLICY_BEFORE_WASM_KEYWORD: &str = "default-src 'self'; script-src 'self' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' data: blob:; worker-src 'self' blob:; frame-src 'none'; child-src 'none'; object-src 'none'; form-action 'none'; base-uri 'self'";
+
+/// The first WebKit (Safari 16's) that knows the keyword `'wasm-unsafe-eval'`.
+pub const WASM_KEYWORD_SINCE_WEBKIT: u32 = 614;
+
+/// The export page's policy for the WebKit of this Mac:
+/// [`BOARD_EXPORT_CONTENT_SECURITY_POLICY`] from WebKit 614 on, else
+/// [`BOARD_EXPORT_CONTENT_SECURITY_POLICY_BEFORE_WASM_KEYWORD`]. Asked of WebKit's
+/// bundle (no web view is made).
+pub fn board_export_policy() -> &'static str {
+    export_policy_for(check::engine_major())
+}
+
+fn export_policy_for(webkit_major: Option<u32>) -> &'static str {
+    match webkit_major {
+        Some(major) if major < WASM_KEYWORD_SINCE_WEBKIT => {
+            BOARD_EXPORT_CONTENT_SECURITY_POLICY_BEFORE_WASM_KEYWORD
+        }
+        _ => BOARD_EXPORT_CONTENT_SECURITY_POLICY,
+    }
+}
 
 /// The content rule list: every load of another kind of address is blocked.
 pub const BLOCK_RULES: &str = r#"[
@@ -245,6 +296,31 @@ pub struct ViewConfig {
     pub background: (f64, f64, f64),
 }
 
+/// A whiteboard's view: its one script message handler (`docs/whiteboard-design.md`,
+/// section 4.2), under `name`, in the page world, for the main frame of the view's own
+/// origin only, for a string of at most `max_bytes` UTF-8 bytes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Bridge {
+    pub name: &'static str,
+    pub max_bytes: usize,
+}
+
+/// What only a whiteboard's view has. `Default` is a page's view, made exactly as
+/// [`WebPage::new`] makes it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ViewExtras {
+    /// The one script message handler; `None`: no bridge (a page's view).
+    pub bridge: Option<Bridge>,
+    /// No main-frame navigation but the view's own loads of its entry (the first one,
+    /// [`WebPage::reload`]): a page's `location =`, `location.reload()`, a link, a form,
+    /// `window.open` into the view, also to its own files, are cancelled. No
+    /// [`PageEvents::alert`] either.
+    pub one_document: bool,
+    /// The policy of every answer of the view's scheme handler, in place of
+    /// [`CONTENT_SECURITY_POLICY`].
+    pub csp: Option<&'static str>,
+}
+
 /// What the view tells its owner, on the main thread, from inside AppKit's callbacks.
 /// The owner never enters GPUI in any of these: the notifying ones only post to a
 /// channel; `takes_key` and `menu_items` answer from a snapshot the owner keeps
@@ -277,6 +353,10 @@ pub trait PageEvents: 'static {
     /// the menu draws it as the item's key.
     fn menu_items(&self, link: Option<&str>) -> Vec<MenuEntry>;
     fn menu_chosen(&self, id: u32);
+    /// A message of the bridge ([`ViewExtras::bridge`]) that passed every check, as the
+    /// page posted it. Only posts; nothing it says is run. A view without a bridge never
+    /// calls it.
+    fn message(&self, _body: String) {}
 }
 
 /// A key as AppKit reported it.
@@ -340,6 +420,43 @@ pub struct ViewStats {
     pub missing: usize,
     /// Navigations the policy cancelled.
     pub blocked_navigations: usize,
+    /// Messages of the bridge that passed every check and reached
+    /// [`PageEvents::message`].
+    pub messages_received: u64,
+    /// Messages of the bridge that failed a check (another name, a frame that is not
+    /// the main one, another origin, too large, not a string) and were dropped.
+    pub messages_dropped: u64,
+}
+
+// ----- one script, offscreen
+
+/// What [`run_script`] loads and runs: the source's `entry` offscreen at a host of its
+/// own (`board-export`), every answer with `csp`, then one `callAsyncJavaScript` in the
+/// page world with `script` as its body and `argument_json` as its argument `arg` (a
+/// string: the script parses it).
+#[derive(Clone)]
+pub struct ScriptInput {
+    pub source: Arc<dyn PageSource>,
+    pub entry: String,
+    /// A body for `callAsyncJavaScript`: it may `await`, reads `arg`, and returns a
+    /// string (or anything WebKit hands back: written out as `WebPage::evaluate` does).
+    pub script: String,
+    pub argument_json: String,
+    /// The script answers `{"width": w, "height": h}` (CSS pixels): after the fonts and
+    /// two animation frames, a one-page PDF of `(0, 0, ceil(w), ceil(h))` is made.
+    pub pdf: bool,
+    pub csp: &'static str,
+    /// For everything together: the load, the script, the PDF.
+    pub limit: Duration,
+    /// Where the rule list is compiled and kept.
+    pub rules_dir: PathBuf,
+}
+
+/// What [`run_script`] answers: the script's value as text, and the PDF when asked.
+#[derive(Clone, Debug)]
+pub struct ScriptOutput {
+    pub value: String,
+    pub pdf: Option<PrintedPdf>,
 }
 
 /// Starts compiling (or looking up) the rule list of `rules_dir` in the background, so
@@ -395,6 +512,12 @@ pub mod testing {
         crate::ns::program_application();
     }
 
+    /// How many handlers of a whiteboard's bridge are alive in this process (each goes
+    /// with its view).
+    pub fn live_bridges() -> usize {
+        crate::page::live_bridges()
+    }
+
     /// The system's uptime: the clock of `NSEvent.timestamp`.
     pub fn uptime() -> f64 {
         crate::ns::uptime()
@@ -423,6 +546,55 @@ pub mod testing {
         // thread (the test program's).
         let persistent: BOOL = unsafe { msg_send![crate::config::view_data_store(), isPersistent] };
         persistent == objc::runtime::NO
+    }
+}
+
+#[cfg(test)]
+mod policy_tests {
+    use super::*;
+
+    #[test]
+    fn the_export_page_takes_unsafe_eval_only_where_webkit_does_not_know_the_wasm_keyword() {
+        assert_eq!(
+            export_policy_for(Some(613)),
+            BOARD_EXPORT_CONTENT_SECURITY_POLICY_BEFORE_WASM_KEYWORD
+        );
+        assert_eq!(
+            export_policy_for(Some(614)),
+            BOARD_EXPORT_CONTENT_SECURITY_POLICY
+        );
+        assert_eq!(
+            export_policy_for(Some(621)),
+            BOARD_EXPORT_CONTENT_SECURITY_POLICY
+        );
+        assert_eq!(
+            export_policy_for(None),
+            BOARD_EXPORT_CONTENT_SECURITY_POLICY
+        );
+    }
+
+    #[test]
+    fn the_board_policies_differ_only_in_what_runs_webassembly() {
+        assert_eq!(
+            BOARD_EXPORT_CONTENT_SECURITY_POLICY.replace(" 'wasm-unsafe-eval'", ""),
+            BOARD_CONTENT_SECURITY_POLICY
+        );
+        assert_eq!(
+            BOARD_EXPORT_CONTENT_SECURITY_POLICY_BEFORE_WASM_KEYWORD.replace(" 'unsafe-eval'", ""),
+            BOARD_CONTENT_SECURITY_POLICY
+        );
+        for policy in [
+            BOARD_CONTENT_SECURITY_POLICY,
+            BOARD_EXPORT_CONTENT_SECURITY_POLICY,
+        ] {
+            // Inline styles only (Excalidraw and Mermaid set them); no inline script.
+            assert_eq!(policy.matches("'unsafe-inline'").count(), 1);
+            assert!(policy.contains("style-src 'self' 'unsafe-inline'"));
+            assert!(policy.contains("script-src 'self'"));
+            assert!(policy.contains("frame-src 'none'"));
+            assert!(!policy.contains("http"));
+        }
+        assert!(!BOARD_CONTENT_SECURITY_POLICY.contains("eval"));
     }
 }
 

@@ -10,8 +10,8 @@ use objc::{
 };
 
 use crate::{
-    Appearance, Bitmap, EditCommand, PageEvents, PrintedPdf, Rect, ViewConfig, ViewStats, config,
-    delegate, frame, http,
+    Appearance, Bitmap, EditCommand, PageEvents, PrintedPdf, Rect, ViewConfig, ViewExtras,
+    ViewStats, bridge, config, delegate, frame, http,
     ns::{
         self, Id, NIL, NSAppearanceNameAqua, NSAppearanceNameDarkAqua, NSRect, describe,
         error_text, guarded, is_boolean, is_kind, kCAFillRuleEvenOdd, nsstring, release, retain,
@@ -28,6 +28,9 @@ unsafe extern "C" {
     fn CGPathAddRect(path: *mut c_void, transform: *const c_void, rect: NSRect);
     fn CGPathRelease(path: *mut c_void);
 }
+
+/// Where a parked view lies: far to the left of any window's content.
+const PARKED_X: f64 = -100_000.;
 
 /// `NSWindowAbove`.
 const ABOVE: isize = 1;
@@ -62,6 +65,23 @@ impl WebPage {
         config: ViewConfig,
         events: Rc<dyn PageEvents>,
     ) -> WebPage {
+        // SAFETY: the caller's promise, passed on.
+        unsafe { WebPage::new_with(gpui_view, config, ViewExtras::default(), events) }
+    }
+
+    /// As [`WebPage::new`], with what only a whiteboard's view has ([`ViewExtras`]): the
+    /// bridge's handler (added before the web view is made), no navigation after the
+    /// entry, the view's own policy. `ViewExtras::default()` is a page's view.
+    ///
+    /// # Safety
+    ///
+    /// As [`WebPage::new`].
+    pub unsafe fn new_with(
+        gpui_view: *mut c_void,
+        config: ViewConfig,
+        extras: ViewExtras,
+        events: Rc<dyn PageEvents>,
+    ) -> WebPage {
         let gpui_view = gpui_view as Id;
         // SAFETY: the caller's promise: a live NSView, on the main thread; WebKit's
         // and AppKit's own selectors with the types their headers declare.
@@ -75,14 +95,16 @@ impl WebPage {
                 log.clone(),
             ));
             shared.gpui_view.set(gpui_view);
-            let handler = scheme::new_handler(SchemeState::new(
-                config.source.clone(),
-                &config.host,
-                &config.entry,
-                log,
-            ));
+            shared.one_document.set(extras.one_document);
+            let handler = scheme::new_handler(
+                SchemeState::new(config.source.clone(), &config.host, &config.entry, log)
+                    .with_policy(extras.csp.unwrap_or(crate::CONTENT_SECURITY_POLICY)),
+            );
             let configuration = config::configuration(handler, config::view_data_store());
             release(handler);
+            if let Some(bridge) = extras.bridge {
+                bridge::install(configuration, bridge, &shared);
+            }
             let web_view =
                 view::new_web_view(NSRect::default(), configuration, Some(shared.clone()));
             release(configuration);
@@ -466,7 +488,57 @@ impl WebPage {
             served: self.shared.log.served.get(),
             missing: self.shared.log.missing_count.get(),
             blocked_navigations: self.shared.blocked_navigations.get(),
+            messages_received: self.shared.messages_received.get(),
+            messages_dropped: self.shared.messages_dropped.get(),
         }
+    }
+
+    /// Runs `body` as an async function in the page world
+    /// (`callAsyncJavaScript:arguments:inFrame:inContentWorld:completionHandler:`), with
+    /// one argument, `arg`: `argument_json` as a string (WebKit passes values, so nothing
+    /// is pasted into the script's source; the body parses it). WebKit awaits the
+    /// function's promise. `done` gets the answer as text (a string as it is; anything
+    /// else written out as [`WebPage::evaluate`] does), or `Err` with the exception's
+    /// message; on the main thread, inside WebKit's block, guarded.
+    pub fn call_async(
+        &self,
+        body: &str,
+        argument_json: &str,
+        done: impl FnOnce(Result<String, String>) + 'static,
+    ) {
+        // SAFETY: the live web view, on the main thread.
+        unsafe { call_async_in(self.web_view, body, argument_json, Box::new(done)) }
+    }
+
+    /// Out of sight, still drawn (a whiteboard's view whose last scene is being
+    /// collected while another item opens): its frame moves out of the window's visible
+    /// content (x = -100,000, its size kept) and its window occlusion detection is
+    /// turned off, so that its timers and animation frames run on. It is not hidden (a
+    /// hidden view stops animation frames, throttles timers and tells the page
+    /// `visibilitychange`). The first responder goes to GPUI's view, when the web view
+    /// has it. [`WebPage::set_frame`] brings it back.
+    pub fn park(&self) {
+        // SAFETY: AppKit's own selectors on a live view; the private switch only where
+        // it answers.
+        unsafe {
+            if ns::responds(self.web_view, sel!(_setWindowOcclusionDetectionEnabled:)) {
+                let _: () = msg_send![self.web_view, _setWindowOcclusionDetectionEnabled: NO];
+            }
+            let current: NSRect = msg_send![self.web_view, frame];
+            let parked = NSRect::new(
+                PARKED_X,
+                current.origin.y,
+                current.size.width,
+                current.size.height,
+            );
+            let _: () = msg_send![self.web_view, setFrame: parked];
+            // WebKit reads the switch when it next asks whether the view is visible: in a
+            // window that is occluded already, that is now (hidden and shown again in one
+            // turn of the run loop, which WebKit hands its page as one change).
+            let _: () = msg_send![self.web_view, setHidden: YES];
+            let _: () = msg_send![self.web_view, setHidden: NO];
+        }
+        self.unfocus();
     }
 
     /// The web view itself (an `NSView *`), for tests that hit-test it or send it
@@ -484,6 +556,7 @@ fn load_entry(shared: &ViewShared) {
         return;
     }
     let url = http::url_of(&shared.host, &shared.entry);
+    shared.own_load.set(true);
     // SAFETY: Foundation's and WebKit's own; the navigation is retained while it is
     // the last one.
     unsafe {
@@ -498,6 +571,81 @@ fn load_entry(shared: &ViewShared) {
         let navigation: Id = msg_send![web_view, loadRequest: request];
         let previous = shared.navigation.replace(retain(navigation));
         release(previous);
+    }
+}
+
+/// How many bridge handlers are alive in this process.
+pub(crate) fn live_bridges() -> usize {
+    bridge::live()
+}
+
+/// What a call hands its answer to.
+pub(crate) type CallDone = Box<dyn FnOnce(Result<String, String>)>;
+
+/// `callAsyncJavaScript` in the page world of `web_view`'s main frame, `arg` being
+/// `argument_json` as a string (see [`WebPage::call_async`]).
+pub(crate) unsafe fn call_async_in(web_view: Id, body: &str, argument_json: &str, done: CallDone) {
+    let slot = RefCell::new(Some(done));
+    let block = ConcreteBlock::new(move |result: Id, error: Id| {
+        let answer = if error.is_null() {
+            // SAFETY: what WebKit hands over: a property-list value or nil.
+            Ok(unsafe { answer_text(result) })
+        } else {
+            // SAFETY: an NSError.
+            Err(unsafe { exception_message(error) })
+        };
+        let done = slot.borrow_mut().take();
+        if let Some(done) = done {
+            guarded("a call's end", move || done(answer));
+        }
+    })
+    .copy();
+    // SAFETY: WebKit's own (macOS 11), asked for by `check_selectors`; the dictionary
+    // and its strings are autoreleased and copied by WebKit.
+    unsafe {
+        let keys = [nsstring("arg")];
+        let values = [nsstring(argument_json)];
+        let arguments: Id = msg_send![class!(NSDictionary),
+            dictionaryWithObjects: values.as_ptr()
+            forKeys: keys.as_ptr()
+            count: 1usize];
+        let world: Id = msg_send![class!(WKContentWorld), pageWorld];
+        let _: () = msg_send![web_view,
+            callAsyncJavaScript: nsstring(body)
+            arguments: arguments
+            inFrame: NIL
+            inContentWorld: world
+            completionHandler: &*block];
+    }
+}
+
+/// The answer of a call as text: a string exactly as it is (a NUL in it included),
+/// anything else as [`js_text`] writes it.
+unsafe fn answer_text(value: Id) -> String {
+    // SAFETY: questions every NSObject answers, then the class's own.
+    unsafe {
+        if is_kind(value, "NSString") {
+            return bridge::utf8_of(value, true).unwrap_or_default();
+        }
+        js_text(value)
+    }
+}
+
+/// The message of the exception a script threw (`WKJavaScriptExceptionMessage`), else
+/// the error's own words.
+pub(crate) unsafe fn exception_message(error: Id) -> String {
+    // SAFETY: NSError's own selectors; `userInfo` is a dictionary.
+    unsafe {
+        let info: Id = msg_send![error, userInfo];
+        if !info.is_null() {
+            let message: Id =
+                msg_send![info, objectForKey: nsstring("WKJavaScriptExceptionMessage")];
+            let message = string_of(message);
+            if !message.is_empty() {
+                return message;
+            }
+        }
+        error_text(error)
     }
 }
 
@@ -552,6 +700,10 @@ impl Drop for WebPage {
             let _: () = msg_send![self.web_view, setNavigationDelegate: NIL];
             let _: () = msg_send![self.web_view, setUIDelegate: NIL];
             let _: () = msg_send![self.web_view, stopLoading];
+            // The bridge's handler goes with the view (the controller holds it).
+            let configuration: Id = msg_send![self.web_view, configuration];
+            let controller: Id = msg_send![configuration, userContentController];
+            let _: () = msg_send![controller, removeAllScriptMessageHandlers];
             let window: Id = msg_send![self.web_view, window];
             if !window.is_null() {
                 let first: Id = msg_send![window, firstResponder];

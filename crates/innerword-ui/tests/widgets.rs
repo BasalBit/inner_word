@@ -869,6 +869,52 @@ fn modal_layer_moves_and_restores_focus(cx: &mut TestAppContext) {
     assert!(editor_focused(&root, cx));
 }
 
+/// Where the modal was drawn: what a native view over the window cuts a hole for.
+/// Known once the modal was drawn, its own bounds and not the backdrop's, and only for
+/// the modal that is open (not one it took the place of).
+#[gpui::test]
+fn the_modal_layer_says_where_its_modal_was_drawn(cx: &mut TestAppContext) {
+    let (root, cx) = root_window(cx);
+    let layer = root.read_with(cx, |root, _| root.layer.clone());
+    assert_eq!(layer.read_with(cx, |layer, _| layer.modal_bounds()), None);
+    // Shows a picker and says what the layer knows before the frame that draws it.
+    let show = |cx: &mut VisualTestContext| {
+        cx.update(|window, cx| {
+            layer.update(cx, |layer, cx| {
+                let picker = cx.new(|cx| Picker::modal(Names::new(DOCS), window, cx));
+                layer.show(picker, window, cx);
+                layer.modal_bounds()
+            })
+        })
+    };
+    assert_eq!(show(cx), None, "not drawn yet: not known");
+    cx.run_until_parked();
+    let drawn = layer
+        .read_with(cx, |layer, _| layer.modal_bounds())
+        .expect("drawn once, known");
+    assert_eq!(Some(drawn), cx.debug_bounds("modal"));
+    let window = cx.update(|window, _| window.viewport_size());
+    assert!(
+        drawn.size.width < window.width && drawn.size.height < window.height,
+        "the modal's own bounds, not the backdrop's: {drawn:?} in {window:?}"
+    );
+    // Another modal in its place: not known until it was drawn.
+    assert_eq!(
+        show(cx),
+        None,
+        "the other modal's bounds are not this one's"
+    );
+    cx.run_until_parked();
+    assert!(
+        layer
+            .read_with(cx, |layer, _| layer.modal_bounds())
+            .is_some()
+    );
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    assert_eq!(layer.read_with(cx, |layer, _| layer.modal_bounds()), None);
+}
+
 #[gpui::test]
 fn modal_layer_escape_fallback_for_any_view(cx: &mut TestAppContext) {
     struct Plain {

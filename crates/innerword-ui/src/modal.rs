@@ -35,11 +35,12 @@
 //! `escape` itself (binding `modal::Dismiss` in the `"ModalLayer"` context). A
 //! click on the backdrop dismisses too.
 
-use std::any::TypeId;
+use std::{any::TypeId, cell::Cell, rc::Rc};
 
 use gpui::{
-    AnyView, Context, DismissEvent, Entity, Focusable, KeyBinding, ManagedView, MouseButton,
-    Subscription, WeakFocusHandle, Window, actions, div, prelude::*, px, relative,
+    AnyView, Bounds, Context, DismissEvent, Entity, EntityId, Focusable, KeyBinding, ManagedView,
+    MouseButton, Pixels, Subscription, WeakFocusHandle, Window, actions, div, prelude::*, px,
+    relative,
 };
 
 use crate::theme::ActiveTheme;
@@ -81,6 +82,8 @@ struct ActiveModal {
 #[derive(Default)]
 pub struct ModalLayer {
     active: Option<ActiveModal>,
+    /// Where the modal was drawn in the last frame, with the modal it was.
+    drawn: Rc<Cell<Option<(EntityId, Bounds<Pixels>)>>>,
 }
 
 impl ModalLayer {
@@ -159,6 +162,19 @@ impl ModalLayer {
         self.active.is_some()
     }
 
+    /// Where the open modal was drawn in the last frame, in window coordinates: its own
+    /// bounds, without the backdrop around it. `None` without a modal, and for a modal
+    /// that was not drawn yet (also when it took the place of another one). What a
+    /// native view over the window cuts a hole for, so that the modal above it can be
+    /// seen.
+    pub fn modal_bounds(&self) -> Option<Bounds<Pixels>> {
+        let active = self.active.as_ref()?;
+        self.drawn
+            .get()
+            .filter(|(id, _)| *id == active.view.entity_id())
+            .map(|(_, bounds)| bounds)
+    }
+
     /// Whether a modal of type `V` is open.
     pub fn is_open<V: 'static>(&self) -> bool {
         self.active
@@ -181,10 +197,17 @@ impl ModalLayer {
 impl Render for ModalLayer {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let Some(active) = self.active.as_ref() else {
+            self.drawn.set(None);
             return div().into_any_element();
         };
         let backdrop = cx.theme().colors.overlay_backdrop;
+        let drawn = self.drawn.clone();
+        let shown = active.view.entity_id();
         div()
+            // The modal is the last child (after the space above it, for the top).
+            .on_children_prepainted(move |bounds, _, _| {
+                drawn.set(bounds.last().map(|bounds| (shown, *bounds)));
+            })
             .id("modal-layer")
             .key_context(KEY_CONTEXT)
             .on_action(cx.listener(Self::on_dismiss))
@@ -204,7 +227,13 @@ impl Render for ModalLayer {
                 ModalPlacement::Center => el.justify_center(),
             })
             .px(px(16.))
-            .child(div().occlude().max_w_full().child(active.view.clone()))
+            .child(
+                div()
+                    .debug_selector(|| "modal".into())
+                    .occlude()
+                    .max_w_full()
+                    .child(active.view.clone()),
+            )
             .into_any_element()
     }
 }

@@ -20,7 +20,8 @@ use crate::ns::{Id, OsVersion};
 /// makes WebKit connect to its host before the policy is asked). Optional ones, asked
 /// with `respondsToSelector:` where they are sent: `setInspectable:`, `_setPageMuted:`,
 /// `_setWindowOcclusionDetectionEnabled:` and its getter `_windowOcclusionDetectionEnabled`,
-/// `_isUserInitiated`, `absoluteLinkURL`, `_setDNSPrefetchingEnabled:`.
+/// `_isUserInitiated`, `absoluteLinkURL`, `_setDNSPrefetchingEnabled:`,
+/// `_setIgnoresAllEvents:`.
 const USED: &[(&str, bool, &str)] = &[
     // Foundation
     ("NSString", true, "alloc"),
@@ -118,6 +119,10 @@ const USED: &[(&str, bool, &str)] = &[
     ("NSView", false, "setAppearance:"),
     ("NSView", false, "willOpenMenu:withEvent:"),
     ("NSView", false, "hitTest:"),
+    ("NSView", false, "performKeyEquivalent:"),
+    ("NSView", false, "initWithFrame:"),
+    ("NSColor", false, "CGColor"),
+    ("CALayer", false, "setBackgroundColor:"),
     ("NSResponder", false, "keyDown:"),
     ("NSResponder", false, "keyUp:"),
     ("NSResponder", false, "mouseUp:"),
@@ -357,7 +362,7 @@ unsafe extern "C" {
 /// exception, not a compile error), as `innerword_print::check_selectors` does: the
 /// required ones, the private WebRTC switches among them. The optional ones
 /// (`_setWindowOcclusionDetectionEnabled:`, `_windowOcclusionDetectionEnabled`,
-/// `_isUserInitiated`, `_setPageMuted:`, `inspectable`) are asked with `respondsToSelector:` where they are sent, not here.
+/// `_isUserInitiated`, `_setPageMuted:`, `inspectable`, `_setIgnoresAllEvents:`) are asked with `respondsToSelector:` where they are sent, not here.
 /// `Err` names what is missing, comma separated (`_setPeerConnectionEnabled:`,
 /// `WKContentWorld`).
 pub fn check_selectors() -> Result<(), String> {

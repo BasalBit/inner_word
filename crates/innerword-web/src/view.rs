@@ -9,7 +9,10 @@
 //! * `mouseDown:`: asks which link lies under the pointer (the gate of links);
 //!   `mouseUp:` stamps the time of the reader's click;
 //! * `hitTest:` and `mouseMoved:`: a point inside a hole is not the web view's, so
-//!   AppKit hit-tests the next sibling, GPUI's view (a toast over the page);
+//!   AppKit hit-tests the next sibling, GPUI's view (a toast over the page); while a
+//!   GPUI overlay covers the view (`WebPage::set_cover`) no point is, and no pointer
+//!   move reaches the page;
+//! * `performKeyEquivalent:`: none is the page's while it is covered;
 //! * `becomeFirstResponder`: `PageEvents::wants_focus` for a focus that did not come
 //!   from `WebPage::focus`;
 //! * `willOpenMenu:withEvent:`: WebKit's right-click menu cut down
@@ -67,6 +70,8 @@ pub(crate) struct ViewShared {
     pub reader_asked: Cell<u64>,
     /// Holes, in the view's own points from its top left.
     pub holes: RefCell<Vec<Rect>>,
+    /// A GPUI overlay is over the view (`WebPage::set_cover`): it takes no event.
+    pub covered: Cell<bool>,
     /// The link under the pointer, as WebKit reported it last.
     pub hovered_link: RefCell<Option<String>>,
     /// The link under the pointer when the right button (or a control-click) went down,
@@ -116,6 +121,7 @@ impl ViewShared {
             reader_link: RefCell::new(None),
             reader_asked: Cell::new(0),
             holes: RefCell::new(Vec::new()),
+            covered: Cell::new(false),
             hovered_link: RefCell::new(None),
             pointed_link: RefCell::new(None),
             menu_link: RefCell::new(None),
@@ -253,6 +259,10 @@ fn web_view_class() -> &'static Class {
             decl.add_method(
                 sel!(hitTest:),
                 hit_test as extern "C" fn(&Object, Sel, NSPoint) -> Id,
+            );
+            decl.add_method(
+                sel!(performKeyEquivalent:),
+                perform_key_equivalent as extern "C" fn(&Object, Sel, Id) -> BOOL,
             );
             decl.add_method(
                 sel!(becomeFirstResponder),
@@ -598,7 +608,7 @@ extern "C" fn hit_test(this: &Object, _: Sel, point: NSPoint) -> Id {
     // SAFETY: NSView's own; nil sends AppKit on to the next sibling.
     unsafe {
         if let Some(shared) = shared_of(this)
-            && in_a_hole(this, &shared, point, false)
+            && (shared.covered.get() || in_a_hole(this, &shared, point, false))
         {
             return NIL;
         }
@@ -611,12 +621,25 @@ extern "C" fn mouse_moved(this: &Object, _: Sel, event: Id) {
     // sets no cursor there: GPUI's view, under the hole, has the pointer.
     unsafe {
         if let Some(shared) = shared_of(this) {
+            if shared.covered.get() {
+                return;
+            }
             let point: NSPoint = msg_send![event, locationInWindow];
             if in_a_hole(this, &shared, point, true) {
                 return;
             }
         }
         let _: () = msg_send![super(this, class!(WKWebView)), mouseMoved: event];
+    }
+}
+
+extern "C" fn perform_key_equivalent(this: &Object, _: Sel, event: Id) -> BOOL {
+    // SAFETY: NSView's own; NO lets AppKit offer the key to the next view and the menu.
+    unsafe {
+        if shared_of(this).is_some_and(|shared| shared.covered.get()) {
+            return NO;
+        }
+        msg_send![super(this, class!(WKWebView)), performKeyEquivalent: event]
     }
 }
 

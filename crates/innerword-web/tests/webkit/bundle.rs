@@ -1430,6 +1430,106 @@ pub(super) fn the_glue_keeps_what_the_writer_does(report: &mut Report, rules: &P
     what_a_paste_brings_is_kept_within_bounds(report, &assets, rules);
 }
 
+/// A GPUI modal or context menu over a whiteboard covers its view
+/// (`WebPage::set_cover`): the view is not hidden, so its page is not told
+/// `visibilitychange` (on which the glue posts what it holds), posts nothing, and
+/// keeps drawing (its animation frames run on). Hiding the view, as the app did
+/// before, tells the page it is hidden and stops its frames; a snapshot of the canvas
+/// to stand in for it is timed for the record.
+pub(super) fn a_covered_whiteboard_is_told_nothing(report: &mut Report, rules: &Path) {
+    let case = "a covered whiteboard";
+    let assets = match Assets::find() {
+        Ok(assets) => assets,
+        Err(why) => {
+            report.check(false, &format!("the whiteboard's bundle is found ({why})"));
+            return;
+        }
+    };
+    let source = BundleSource::new(&assets);
+    three_rectangles(&source);
+    let host = Host::new();
+    let Some((view, events)) =
+        ready_view(report, &host, case, "board-49-1700000000000", source, rules)
+    else {
+        return;
+    };
+    let _ = page_json(
+        &view,
+        "window.__seen = [];
+         document.addEventListener('visibilitychange', () => window.__seen.push(document.visibilityState));
+         window.__frames = 0;
+         const tick = () => { window.__frames++; requestAnimationFrame(tick); };
+         requestAnimationFrame(tick);
+         return JSON.stringify(1);",
+    );
+    wait(Duration::from_millis(200));
+    let frames = |view: &WebPage| page_json(view, "return JSON.stringify(window.__frames);");
+    let before = events.messages.borrow().len();
+    let at_cover = frames(&view).as_u64().unwrap_or(0);
+    view.set_cover(Some((0., 0., 0., 0.45)));
+    wait(Duration::from_millis(600));
+    let covered = page_json(
+        &view,
+        "return JSON.stringify({ seen: window.__seen, state: document.visibilityState, frames: window.__frames });",
+    );
+    let drawn = covered["frames"]
+        .as_u64()
+        .unwrap_or(0)
+        .saturating_sub(at_cover);
+    report.check(
+        covered["seen"] == json!([]) && covered["state"] == "visible",
+        &format!(
+            "{case}: its page is not told it is hidden ({})",
+            short_json(&covered)
+        ),
+    );
+    report.check(
+        events.messages.borrow().len() == before,
+        &format!(
+            "{case}: it posts nothing ({:?})",
+            messages(&events, before)
+                .iter()
+                .map(kind_of)
+                .collect::<Vec<_>>()
+        ),
+    );
+    report.check(
+        drawn >= 10,
+        &format!("{case}: it keeps drawing ({drawn} animation frames in 600 ms)"),
+    );
+    view.set_cover(None);
+    // What hiding the view did instead (the app's way before the cover), for the record.
+    let at_hide = frames(&view).as_u64().unwrap_or(0);
+    view.set_hidden(true);
+    wait(Duration::from_millis(600));
+    let hidden = page_json(
+        &view,
+        "return JSON.stringify({ seen: window.__seen, frames: window.__frames });",
+    );
+    view.set_hidden(false);
+    report.note(&format!(
+        "{case}: hidden instead, its page was told {} and drew {} animation frames in 600 ms",
+        short_json(&hidden["seen"]),
+        hidden["frames"]
+            .as_u64()
+            .unwrap_or(0)
+            .saturating_sub(at_hide)
+    ));
+    let picture: Rc<RefCell<Option<Option<innerword_web::Bitmap>>>> = Rc::new(RefCell::new(None));
+    let answer = picture.clone();
+    let started = Instant::now();
+    view.snapshot(move |bitmap| *answer.borrow_mut() = Some(bitmap));
+    testing::run_until(Duration::from_secs(5), || picture.borrow().is_some());
+    let size = picture
+        .borrow()
+        .as_ref()
+        .and_then(|bitmap| bitmap.as_ref().map(|b| (b.width, b.height)));
+    report.note(&format!(
+        "{case}: a snapshot of its canvas took {:?} ({size:?} pixels)",
+        started.elapsed()
+    ));
+}
+
 /// Three rectangles, r1 to r3, as `board.json` serves them.
 fn three_rectangles(source: &BundleSource) {
     let scene = stored_scene(json!([
@@ -2038,7 +2138,10 @@ fn a_library_change_waiting_its_post(report: &mut Report, assets: &Assets, rules
     let before = page_json(&view, calls::STATE);
     report.check(
         before["libraryWaiting"] == false,
-        &format!("{case}: nothing waits at the start ({})", short_json(&before)),
+        &format!(
+            "{case}: nothing waits at the start ({})",
+            short_json(&before)
+        ),
     );
     // Excalidraw's own updateLibrary: onLibraryChange, as a change in its sidebar makes it.
     let change = |id: &str| {
@@ -2075,9 +2178,15 @@ fn a_library_change_waiting_its_post(report: &mut Report, assets: &Assets, rules
     let collected = answered["collected"].clone();
     report.check(
         state["libraryWaiting"] == true,
-        &format!("{case}: the state call says it waits ({})", short_json(&answered["state"])),
+        &format!(
+            "{case}: the state call says it waits ({})",
+            short_json(&answered["state"])
+        ),
     );
-    let items = collected["library"]["items"].as_array().cloned().unwrap_or_default();
+    let items = collected["library"]["items"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
     report.check(
         items.len() == 1
             && items[0]["id"] == "first"
@@ -2103,7 +2212,10 @@ fn a_library_change_waiting_its_post(report: &mut Report, assets: &Assets, rules
     wait(Duration::from_millis(700));
     let library_posts = posted(&events, "library");
     let after = page_json(&view, calls::STATE);
-    let last_status = posted(&events, "status").last().cloned().unwrap_or_default();
+    let last_status = posted(&events, "status")
+        .last()
+        .cloned()
+        .unwrap_or_default();
     report.check(
         waiting["libraryWaiting"] == true
             && library_posts.last().is_some_and(|p| p["items"][0]["id"] == "second")
@@ -2160,8 +2272,12 @@ fn a_picture_longer_than_one_message(report: &mut Report, assets: &Assets, rules
             files_posted.len()
         ),
     );
-    let answer = call(&view, calls::FILES, &calls::files_argument(&[id.to_string()]))
-        .and_then(|text| calls::answer::<calls::FilesPosted>(&text));
+    let answer = call(
+        &view,
+        calls::FILES,
+        &calls::files_argument(&[id.to_string()]),
+    )
+    .and_then(|text| calls::answer::<calls::FilesPosted>(&text));
     report.check(
         matches!(&answer, Ok(a) if a.posted.is_empty() && a.missing == [id.to_string()]),
         &format!("{case}: the files call answers it as missing ({answer:?})"),
@@ -2242,10 +2358,13 @@ fn what_a_paste_brings_is_kept_within_bounds(report: &mut Report, assets: &Asset
             && !pasted_links.iter().any(|l| l.as_str().is_some_and(|l| l.starts_with("smb:"))),
         &format!("{case}: an smb link comes without it, a web link with it ({pasted:?}, {pasted_links:?})"),
     );
-    let scene = messages(&events, from).into_iter().rev().find_map(|m| match m {
-        Ok(Message::Scene { scene, .. }) => Some(scene.get().to_string()),
-        _ => None,
-    });
+    let scene = messages(&events, from)
+        .into_iter()
+        .rev()
+        .find_map(|m| match m {
+            Ok(Message::Scene { scene, .. }) => Some(scene.get().to_string()),
+            _ => None,
+        });
     let read = scene
         .as_deref()
         .map(|scene| innerword_board::Scene::from_view(scene, &|_: &str| None));
@@ -2253,7 +2372,9 @@ fn what_a_paste_brings_is_kept_within_bounds(report: &mut Report, assets: &Asset
         matches!(&read, Some(Ok(parsed)) if parsed.scene.elements().len() == 6),
         &format!(
             "{case}: the posted scene is read, deep data and all ({:?})",
-            read.as_ref().map(|r| r.as_ref().map(|p| (p.scene.elements().len(), p.warnings.clone())))
+            read.as_ref().map(|r| r
+                .as_ref()
+                .map(|p| (p.scene.elements().len(), p.warnings.clone())))
         ),
     );
 }
@@ -2430,7 +2551,10 @@ fn pdf_greys(bytes: &[u8], scale: f64) -> Option<(usize, usize, Vec<u8>)> {
 /// The darkest grey in a rectangle of points (x, y from the top left, at `scale`).
 fn darkest(page: &(usize, usize, Vec<u8>), scale: f64, rect: (f64, f64, f64, f64)) -> u8 {
     let (width, height, pixels) = page;
-    let (x0, y0) = ((rect.0 * scale).floor().max(0.) as usize, (rect.1 * scale).floor().max(0.) as usize);
+    let (x0, y0) = (
+        (rect.0 * scale).floor().max(0.) as usize,
+        (rect.1 * scale).floor().max(0.) as usize,
+    );
     let x1 = (((rect.0 + rect.2) * scale).ceil() as usize).min(*width);
     let y1 = (((rect.1 + rect.3) * scale).ceil() as usize).min(*height);
     let mut out = 255;
@@ -2445,7 +2569,12 @@ fn darkest(page: &(usize, usize, Vec<u8>), scale: f64, rect: (f64, f64, f64, f64
 /// A rectangle `[x, y, width, height]` the export's measure answered under `key`.
 fn svg_rect(answer: &Value, key: &str) -> Option<(f64, f64, f64, f64)> {
     let r = &answer[key];
-    Some((r[0].as_f64()?, r[1].as_f64()?, r[2].as_f64()?, r[3].as_f64()?))
+    Some((
+        r[0].as_f64()?,
+        r[1].as_f64()?,
+        r[2].as_f64()?,
+        r[3].as_f64()?,
+    ))
 }
 
 /// What Excalidraw's canvas shows, the PDF shows (`docs/whiteboard-design.md`, section 5):
@@ -2476,7 +2605,10 @@ pub(super) fn the_pdf_is_the_screen(report: &mut Report, rules: &Path) {
     let (answer, pdf) = match export_pdf(&assets, rules, &stored) {
         Ok(made) => made,
         Err(why) => {
-            report.check(false, &format!("the export page makes a PDF of a frame ({why})"));
+            report.check(
+                false,
+                &format!("the export page makes a PDF of a frame ({why})"),
+            );
             return;
         }
     };
@@ -2508,8 +2640,15 @@ pub(super) fn the_pdf_is_the_screen(report: &mut Report, rules: &Path) {
         return;
     };
     let frame = svg_rect(&answer, "frame");
-    let below = frame.map(|(x, y, w, h)| darkest(&page, SCALE, (x, y + h + 2.0, w, pdf.paper.1 - (y + h + 2.0))));
-    let inside = frame.map(|(x, y, w, h)| darkest(&page, SCALE, (x + 2.0, y + 2.0, w - 4.0, h - 4.0)));
+    let below = frame.map(|(x, y, w, h)| {
+        darkest(
+            &page,
+            SCALE,
+            (x, y + h + 2.0, w, pdf.paper.1 - (y + h + 2.0)),
+        )
+    });
+    let inside =
+        frame.map(|(x, y, w, h)| darkest(&page, SCALE, (x + 2.0, y + 2.0, w - 4.0, h - 4.0)));
     report.check(
         below == Some(255) && inside.is_some_and(|d| d < 100),
         &format!(
@@ -2523,7 +2662,11 @@ pub(super) fn the_pdf_is_the_screen(report: &mut Report, rules: &Path) {
         let pad = 5.0;
         [
             darkest(&page, SCALE, (x + 0.5, y + pad, pad - 1.5, h - 2.0 * pad)),
-            darkest(&page, SCALE, (x + w - pad + 1.0, y + pad, pad - 1.5, h - 2.0 * pad)),
+            darkest(
+                &page,
+                SCALE,
+                (x + w - pad + 1.0, y + pad, pad - 1.5, h - 2.0 * pad),
+            ),
         ]
     });
     let line = hole.map(|(x, y, _, h)| darkest(&page, SCALE, (x - 6.0, y - 6.0, 5.0, h + 12.0)));
@@ -2556,7 +2699,10 @@ struct OwnPasteboard {
 
 #[link(name = "objc")]
 unsafe extern "C" {
-    fn class_getClassMethod(cls: *const objc::runtime::Class, sel: Sel) -> *mut objc::runtime::Method;
+    fn class_getClassMethod(
+        cls: *const objc::runtime::Class,
+        sel: Sel,
+    ) -> *mut objc::runtime::Method;
     fn method_setImplementation(
         method: *mut objc::runtime::Method,
         imp: objc::runtime::Imp,
@@ -2656,7 +2802,9 @@ impl OwnPasteboard {
                 return String::new();
             }
             let utf8: *const std::os::raw::c_char = msg_send![string, UTF8String];
-            std::ffi::CStr::from_ptr(utf8).to_string_lossy().into_owned()
+            std::ffi::CStr::from_ptr(utf8)
+                .to_string_lossy()
+                .into_owned()
         }
     }
 }
@@ -2687,7 +2835,9 @@ unsafe fn name_of(board: Id) -> String {
             return String::new();
         }
         let utf8: *const std::os::raw::c_char = msg_send![name, UTF8String];
-        std::ffi::CStr::from_ptr(utf8).to_string_lossy().into_owned()
+        std::ffi::CStr::from_ptr(utf8)
+            .to_string_lossy()
+            .into_owned()
     }
 }
 
@@ -2803,15 +2953,20 @@ pub(super) fn the_edit_menu_on_a_whiteboard(report: &mut Report, rules: &Path) {
     });
     let pasted = pasted.into_inner();
     let clip = page_json(&view, "return JSON.stringify(window.__clip);");
-    let read_ours = clip
-        .as_array()
-        .is_some_and(|list| list.iter().any(|e| e["kind"] == "paste" && e["text"] == words));
+    let read_ours = clip.as_array().is_some_and(|list| {
+        list.iter()
+            .any(|e| e["kind"] == "paste" && e["text"] == words)
+    });
     let events: Vec<String> = clip
         .as_array()
         .map(|list| {
             list.iter()
                 .map(|e| match e["text"].as_str() {
-                    Some(text) => format!("{} ({})", e["kind"].as_str().unwrap_or("?"), told(text, words)),
+                    Some(text) => format!(
+                        "{} ({})",
+                        e["kind"].as_str().unwrap_or("?"),
+                        told(text, words)
+                    ),
                     None => e["kind"].as_str().unwrap_or("?").to_string(),
                 })
                 .collect()
@@ -2826,13 +2981,18 @@ pub(super) fn the_edit_menu_on_a_whiteboard(report: &mut Report, rules: &Path) {
     );
     report.check(
         pasted == vec![words.to_string()],
-        &format!("{case}: Excalidraw puts the pasted text on the canvas ({})", told_all(&pasted, words)),
+        &format!(
+            "{case}: Excalidraw puts the pasted text on the canvas ({})",
+            told_all(&pasted, words)
+        ),
     );
     if read_ours {
         // The pasted text is selected: copy: writes Excalidraw's clipboard of it.
         let before = pasteboard.change_count();
         view.edit(EditCommand::Copy);
-        testing::run_until(Duration::from_secs(5), || pasteboard.change_count() != before);
+        testing::run_until(Duration::from_secs(5), || {
+            pasteboard.change_count() != before
+        });
         let copied = pasteboard.text();
         let clip = page_json(&view, "return JSON.stringify(window.__clip);");
         report.check(

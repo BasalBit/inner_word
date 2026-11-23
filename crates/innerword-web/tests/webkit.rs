@@ -714,6 +714,10 @@ fn main() -> ExitCode {
     if wanted("bundle_glue") {
         bundle::the_glue_keeps_what_the_writer_does(&mut report, &rules);
     }
+    // A GPUI overlay over a whiteboard: the page is told nothing and keeps drawing.
+    if wanted("board_cover") {
+        bundle::a_covered_whiteboard_is_told_nothing(&mut report, &rules);
+    }
     // A whiteboard's PDF against what the screen shows.
     if wanted("board_pdf") {
         bundle::the_pdf_is_the_screen(&mut report, &rules);
@@ -1649,6 +1653,97 @@ fn the_view(report: &mut Report, server: &Server, rules: &Path) {
         "with the holes cleared the page is hit there again",
     );
 
+    // A cover (a GPUI modal or context menu over the view): the view stays shown and
+    // live under the backdrop's colour, takes no event, and its page is not told that
+    // it is hidden.
+    let _ = eval(
+        &view,
+        "window.__seen = [];
+         document.addEventListener('visibilitychange', () => window.__seen.push(document.visibilityState));
+         for (const kind of ['pointerdown', 'pointerup', 'mousedown', 'click']) {
+           window.addEventListener(kind, () => window.__seen.push(kind), true);
+         }
+         1",
+    );
+    // (An offscreen window is occluded: its page may be hidden already. What counts is
+    // that the cover changes nothing of it.)
+    let visibility = eval(&view, "document.visibilityState");
+    let started = Instant::now();
+    view.set_cover(Some((0., 0., 0., 0.45)));
+    let took = started.elapsed();
+    report.check(
+        hit(&host, 600., 300.) == host.gpui && hit(&host, 200., 630.) == host.gpui,
+        "a covered view is hit nowhere: GPUI's view is",
+    );
+    host.mouse(1, 600., 300.); // left mouse down
+    host.mouse(2, 600., 300.); // left mouse up
+    wait(Duration::from_millis(300));
+    let seen = eval(&view, "JSON.stringify(window.__seen)");
+    let visibility_now = eval(&view, "document.visibilityState");
+    report.check(
+        seen.as_deref() == Ok("[]") && visibility_now == visibility,
+        &format!(
+            "a covered page gets no press and no visibilitychange ({seen:?}, {visibility:?} then {visibility_now:?})"
+        ),
+    );
+    let (hidden, dim_alpha) = unsafe {
+        let hidden: BOOL = msg_send![web_view, isHidden];
+        let subviews: Id = msg_send![web_view, subviews];
+        let last: Id = msg_send![subviews, lastObject];
+        let layer: Id = msg_send![last, layer];
+        let colour: *const c_void = if layer.is_null() {
+            std::ptr::null()
+        } else {
+            msg_send![layer, backgroundColor]
+        };
+        let alpha = if colour.is_null() {
+            0.
+        } else {
+            CGColorGetAlpha(colour)
+        };
+        (hidden != NO, alpha)
+    };
+    report.check(
+        !hidden && (dim_alpha - 0.45).abs() < 0.01,
+        &format!(
+            "a covered view stays shown, its topmost subview the cover's colour (hidden {hidden}, alpha {dim_alpha})"
+        ),
+    );
+    report.check(
+        view.cover() == Some((0., 0., 0., 0.45)),
+        "the view says what it is covered with",
+    );
+    report.note(&format!("covering the view took {took:?}"));
+    view.set_cover(None);
+    host.mouse(1, 600., 300.);
+    host.mouse(2, 600., 300.);
+    wait(Duration::from_millis(300));
+    let seen = eval(&view, "JSON.stringify(window.__seen)");
+    let topmost_is_ours = unsafe {
+        let subviews: Id = msg_send![web_view, subviews];
+        let last: Id = msg_send![subviews, lastObject];
+        let layer: Id = if last.is_null() {
+            NIL
+        } else {
+            msg_send![last, layer]
+        };
+        let colour: *const c_void = if layer.is_null() {
+            std::ptr::null()
+        } else {
+            msg_send![layer, backgroundColor]
+        };
+        !colour.is_null() && (CGColorGetAlpha(colour) - 0.45).abs() < 0.01
+    };
+    report.check(
+        is_within(hit(&host, 600., 300.), web_view) && !topmost_is_ours,
+        "uncovered, the page is hit again and the cover's colour is gone",
+    );
+    report.check(
+        seen.as_deref()
+            .is_ok_and(|seen| seen.contains("pointerdown")),
+        &format!("uncovered, a press reaches the page again ({seen:?})"),
+    );
+
     // The right-click menu, where WebKit can be driven to open it.
     testing::record_menus(true);
     testing::choose_in_menus(Some("Open Link in Browser"));
@@ -2016,6 +2111,11 @@ fn find(view: &WebPage, query: &str, backwards: bool) -> Option<bool> {
     view.find(query, backwards, move |found| answer.set(Some(found)));
     testing::run_until(Duration::from_secs(5), || slot.get().is_some());
     slot.get()
+}
+
+#[link(name = "CoreGraphics", kind = "framework")]
+unsafe extern "C" {
+    fn CGColorGetAlpha(color: *const c_void) -> f64;
 }
 
 /// What the content view hits at a point of the page (from the top left).

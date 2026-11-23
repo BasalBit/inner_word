@@ -34,6 +34,9 @@ const PARKED_X: f64 = -100_000.;
 
 /// `NSWindowAbove`.
 const ABOVE: isize = 1;
+/// `NSViewWidthSizable | NSViewHeightSizable`: a subview that is always as large as its
+/// superview.
+const SIZE_WITH_SUPERVIEW: usize = 2 | 16;
 /// `NSViewMinYMargin` and `NSViewMaxYMargin`: the margin that grows when the superview
 /// grows, so that the view keeps its distance from the top.
 const MIN_Y_MARGIN: usize = 8;
@@ -51,12 +54,17 @@ pub struct WebPage {
     /// While the view is parked ([`WebPage::park`]): what it was before, which
     /// [`WebPage::set_frame`] gives back.
     parked: std::cell::Cell<Option<Parked>>,
+    /// What [`WebPage::set_cover`] was given last.
+    cover: std::cell::Cell<Option<(f64, f64, f64, f64)>>,
+    /// The subview that draws the cover's colour over the page (nil without one; held
+    /// by the web view as its subview).
+    dim_view: std::cell::Cell<Id>,
 }
 
 /// What [`WebPage::park`] found and changed, given back when the view is brought back.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Parked {
-    /// The view was hidden (the app hides it under a snapshot of an overlay); a view
+    /// The view was hidden (the app hides it when its page stopped working); a view
     /// hidden while it is parked counts as found hidden.
     hidden: bool,
     /// Its window occlusion detection was on (`Some(true)`), off (a scripted run's view,
@@ -134,6 +142,8 @@ impl WebPage {
                 delegate,
                 shared: shared.clone(),
                 parked: std::cell::Cell::new(None),
+                cover: std::cell::Cell::new(None),
+                dim_view: std::cell::Cell::new(NIL),
             };
             page.set_appearance(config.appearance, config.background);
             let superview: Id = msg_send![gpui_view, superview];
@@ -222,6 +232,82 @@ impl WebPage {
             *current = holes.to_vec();
         }
         self.apply_holes();
+    }
+
+    /// A GPUI overlay that takes the keyboard (a modal, a context menu) is over the view
+    /// (`Some(colour)`), or no longer is (`None`). Covered, the view stays shown and live:
+    /// it is drawn under `colour` (sRGB with alpha: the overlay's backdrop; alpha 0 draws
+    /// nothing over it) and takes no event: `hitTest:` answers nil everywhere, so a
+    /// press, the wheel and the pointer reach GPUI's view under it (a press outside the
+    /// overlay closes it there), pointer moves and key equivalents are not the page's,
+    /// and WebKit's `_setIgnoresAllEvents:` is on where this WebKit has it. The overlay
+    /// itself is seen through the view's holes ([`WebPage::set_holes`]), which cut the
+    /// colour too. The same cover again sends nothing to AppKit.
+    ///
+    /// The view is never hidden for an overlay: a hidden view tells its page
+    /// `visibilitychange` (a whiteboard's page then posts what it holds) and stops
+    /// drawing, and a snapshot to stand in for it took WebKit 170 ms and more on a
+    /// whiteboard's canvas.
+    pub fn set_cover(&self, colour: Option<(f64, f64, f64, f64)>) {
+        if self.cover.get() == colour {
+            return;
+        }
+        self.cover.set(colour);
+        self.shared.covered.set(colour.is_some());
+        // SAFETY: AppKit's, CoreAnimation's and WebKit's own selectors on live views;
+        // the private switch only where it answers. The subview made here is held by the
+        // web view once added (its own reference is given back at once), and forgotten
+        // when it is taken out again.
+        unsafe {
+            if ns::responds(self.web_view, sel!(_setIgnoresAllEvents:)) {
+                let _: () = msg_send![self.web_view,
+                    _setIgnoresAllEvents: ns::yes_no(colour.is_some())];
+            }
+            match colour {
+                Some((r, g, b, a)) if a > 0. => {
+                    let mut dim = self.dim_view.get();
+                    if dim.is_null() {
+                        let bounds: NSRect = msg_send![self.web_view, bounds];
+                        let made: Id = msg_send![class!(NSView), alloc];
+                        let made: Id = msg_send![made, initWithFrame: bounds];
+                        if made.is_null() {
+                            return;
+                        }
+                        let _: () = msg_send![made, setAutoresizingMask: SIZE_WITH_SUPERVIEW];
+                        let _: () = msg_send![made, setWantsLayer: YES];
+                        // Above everything of WebKit's in the web view, under its mask.
+                        let _: () = msg_send![self.web_view,
+                            addSubview: made
+                            positioned: ABOVE
+                            relativeTo: NIL];
+                        release(made);
+                        self.dim_view.set(made);
+                        dim = made;
+                    }
+                    let layer: Id = msg_send![dim, layer];
+                    if !layer.is_null() {
+                        let color: Id = msg_send![class!(NSColor),
+                            colorWithSRGBRed: r
+                            green: g
+                            blue: b
+                            alpha: a];
+                        let cg: *const c_void = msg_send![color, CGColor];
+                        let _: () = msg_send![layer, setBackgroundColor: cg];
+                    }
+                }
+                _ => {
+                    let dim = self.dim_view.replace(NIL);
+                    if !dim.is_null() {
+                        let _: () = msg_send![dim, removeFromSuperview];
+                    }
+                }
+            }
+        }
+    }
+
+    /// The cover [`WebPage::set_cover`] was given last.
+    pub fn cover(&self) -> Option<(f64, f64, f64, f64)> {
+        self.cover.get()
     }
 
     fn apply_holes(&self) {

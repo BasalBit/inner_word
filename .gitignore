@@ -11,3 +11,5 @@ CLAUDE.local.md
 *.orig
 *.dmg
 .env*
+# The whiteboard bundle's build: npm ci installs here (dist/ is committed, node_modules is not).
+crates/innerword-board-web/web/node_modules/

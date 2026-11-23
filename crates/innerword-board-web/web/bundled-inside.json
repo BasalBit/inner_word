@@ -1,0 +1,70 @@
+{
+  "about": "Packages whose own files carry other packages that esbuild's metafile never shows: for each carrier (name@version), those it carries. fromNodeModules: their license texts come from their own folders in node_modules (which the lockfile must have); withATextOfOurs: a package that is not in node_modules, with its text in licenses/. build.mjs reads the source maps of the carriers' files and fails when they carry a package not listed here. Read the carriers' dist again after an upgrade (UPGRADING.md). textsOfOurs: packages in the bundle that ship no license file (by name, or a scope as \"@radix-ui/*\"), with the license text of their repository in licenses/.",
+  "carriers": {
+    "@mermaid-js/parser@1.2.1": {
+      "fromNodeModules": [
+        "@chevrotain/gast",
+        "@chevrotain/regexp-to-ast",
+        "@chevrotain/utils",
+        "chevrotain",
+        "chevrotain-allstar",
+        "langium",
+        "lodash-es",
+        "vscode-jsonrpc",
+        "vscode-languageserver-protocol",
+        "vscode-languageserver-textdocument",
+        "vscode-languageserver-types"
+      ],
+      "withATextOfOurs": {
+        "path-browserify": {
+          "version": "1.0.1",
+          "license": "MIT",
+          "text": "licenses/path-browserify.txt"
+        }
+      }
+    },
+    "mermaid@11.17.2": {
+      "withATextOfOurs": {
+        "js-yaml": {
+          "version": "4.3.0",
+          "license": "MIT",
+          "text": "licenses/js-yaml.txt"
+        }
+      }
+    },
+    "@excalidraw/excalidraw@0.18.1": {
+      "withATextOfOurs": {
+        "fonteditor-core": {
+          "version": "2.4.0",
+          "license": "MIT",
+          "text": "licenses/fonteditor-core.txt",
+          "note": "built into Excalidraw's font subsetter as WebAssembly"
+        },
+        "harfbuzzjs": {
+          "version": "0.3.6",
+          "license": "MIT",
+          "text": "licenses/harfbuzzjs.txt",
+          "note": "built into Excalidraw's font subsetter as WebAssembly; its text says which of its parts are under Apache-2.0"
+        }
+      }
+    }
+  },
+  "textsOfOurs": {
+    "@excalidraw/excalidraw": {
+      "license": "MIT",
+      "text": "licenses/excalidraw.txt"
+    },
+    "@radix-ui/*": {
+      "license": "MIT",
+      "text": "licenses/radix-ui.txt"
+    },
+    "fastdom": {
+      "license": "MIT",
+      "text": "licenses/fastdom.txt"
+    },
+    "react-remove-scroll-bar": {
+      "license": "MIT",
+      "text": "licenses/react-remove-scroll-bar.txt"
+    }
+  }
+}

@@ -2918,6 +2918,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "innerword-board"
+version = "0.10.1"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+]
+
+[[package]]
+name = "innerword-board-web"
+version = "0.10.1"
+dependencies = [
+ "innerword-board",
+ "innerword-keymap",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+]
+
+[[package]]
 name = "innerword-cli"
 version = "0.10.1"
 dependencies = [

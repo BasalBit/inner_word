@@ -1,0 +1,15 @@
+{
+  "name": "innerword-board-web",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "dependencies": {
+    "@excalidraw/excalidraw": "0.18.1",
+    "react": "19.2.9",
+    "react-dom": "19.2.9"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2",
+    "fontkit": "2.0.4"
+  }
+}

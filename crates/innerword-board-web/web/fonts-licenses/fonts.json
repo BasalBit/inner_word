@@ -1,0 +1,61 @@
+{
+  "about": "The fonts of dist/fonts/: for each folder, the family, its license and the copyright lines its files' name table carries (build.mjs reads every file and fails when a line is missing). Xiaolai is left out of the bundle (docs/whiteboard-design.md, answer 1).",
+  "folders": {
+    "Assistant": {
+      "family": "Assistant",
+      "use": "the interface of the editor",
+      "license": "OFL-1.1",
+      "copyright": [
+        "Copyright 2020 The Assistant Project Authors (https://github.com/hafontia/Assistant). Copyright 2010 The Source Sans Pro Authors (https://github.com/adobe-fonts/source-sans-pro), with Reserved Font Name 'Source'. Source is a trademark of Adobe Systems Incorporated in the United States and/or other countries."
+      ]
+    },
+    "Cascadia": {
+      "family": "Cascadia Code",
+      "use": "Excalidraw's code font (family 3)",
+      "license": "OFL-1.1",
+      "copyright": ["© 2020 Microsoft Corporation. All Rights Reserved."]
+    },
+    "ComicShanns": {
+      "family": "Comic Shanns",
+      "use": "Excalidraw's family 8",
+      "license": "MIT",
+      "copyright": [
+        "Copyright (c) 2018 Shannon Miwa",
+        "Copyright (c) 2023 Jesus Gonzalez",
+        "Copyright (c) 2023 Rodrigo Batista de Moraes",
+        "Copyright (c) 2024 Fini Jastrow",
+        "Copyright (c) 2024 Kyle Beechly"
+      ]
+    },
+    "Excalifont": {
+      "family": "Excalifont",
+      "use": "Excalidraw's hand-drawn font (family 5, the default)",
+      "license": "OFL-1.1",
+      "copyright": ["Copyright (c) 2024 by Excalidraw. All rights reserved."]
+    },
+    "Liberation": {
+      "family": "Liberation Sans",
+      "use": "Excalidraw's family 9",
+      "license": "OFL-1.1",
+      "copyright": ["Digitized data `2007 Ascender Corporation. All rights reserved."]
+    },
+    "Lilita": {
+      "family": "Lilita One",
+      "use": "Excalidraw's family 7",
+      "license": "OFL-1.1",
+      "copyright": ["Copyright (c) 2011 Juan Montoreano (juan@remolacha.biz), with Reserved Font Names \"Lilita One\""]
+    },
+    "Nunito": {
+      "family": "Nunito",
+      "use": "Excalidraw's family 6",
+      "license": "OFL-1.1",
+      "copyright": ["Copyright 2014 The Nunito Project Authors (https://github.com/googlefonts/nunito)"]
+    },
+    "Virgil": {
+      "family": "Virgil",
+      "use": "Excalidraw's first hand-drawn font (family 1)",
+      "license": "OFL-1.1",
+      "copyright": ["Copyright (c) 2011 by Your Own Font Foundry. All rights reserved."]
+    }
+  }
+}

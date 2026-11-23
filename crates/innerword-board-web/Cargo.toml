@@ -1,0 +1,35 @@
+[package]
+name = "innerword-board-web"
+description = "Whiteboards for Inner Word: the real Excalidraw built into one offline folder, the glue around it, and the Rust half of its contract (where the folder is, the bridge's messages, the calls, the keys)."
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+# No GPUI and no WebKit: a pure crate (`CARGO_TARGET_DIR=target-pure`), linked by the app
+# and the `innerword` tool. It depends on nothing of ours. Its JavaScript is built by
+# `node build.mjs` in `web/` into `dist/`, which is committed: no cargo build and no test
+# needs node or the network.
+[lib]
+# Every test is in tests/main.rs (one test binary); the library has no unit tests and
+# no examples in its docs.
+test = false
+doctest = false
+
+[dependencies]
+serde.workspace = true
+# The bridge's scene and the shape library travel as raw JSON: the main thread reads a
+# message's head and hands the scene on unparsed.
+serde_json = { workspace = true, features = ["raw_value"] }
+
+[dev-dependencies]
+tempfile.workspace = true
+# Its constants are this crate's contract too (the scene file of the export page, the
+# version of Excalidraw, the PDF's margin), and it keeps a copy of dist/font-metrics.json.
+innerword-board.workspace = true
+# MANIFEST.json and BUILD-INFO.json name files with their SHA-256: the tests hold them.
+sha2 = "0.10"
+# The whiteboard's own keys are read as the keymap reads a key, in GPUI's spelling.
+innerword-keymap.workspace = true

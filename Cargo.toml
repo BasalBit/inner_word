@@ -52,6 +52,9 @@ innerword-web = { path = "crates/innerword-web" }
 # Whiteboards: the stored scene of a whiteboard (Excalidraw's form), agents' skeletons made
 # into Excalidraw's elements, the delta and the merge (no GPUI, no WebKit, nothing of ours).
 innerword-board = { path = "crates/innerword-board" }
+# Whiteboards: the real Excalidraw built into one offline folder (`dist/`, committed), the
+# glue around it, and the Rust half of its contract (no GPUI; depends on nothing of ours).
+innerword-board-web = { path = "crates/innerword-board-web" }
 
 # Shared third-party crates. Crate-specific dependencies are declared in the
 # crate's own Cargo.toml, not here.

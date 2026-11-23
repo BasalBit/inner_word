@@ -1,7 +1,7 @@
 //! What is read of a scene: its text, summary, listing and bounds (`docs/whiteboard-design.md`,
 //! sections 2 and 7.4).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use serde::{Deserialize, Serialize};
 
@@ -121,6 +121,7 @@ impl Scene {
     /// the top edge of the element, a label by its container's, then by the left edge), one
     /// per line, empty texts left out. What the library indexes and counts.
     pub fn text(&self) -> String {
+        let by_id = self.by_id();
         let mut entries: Vec<(f64, f64, usize, String)> = Vec::new();
         for (n, element) in self.elements.iter().enumerate() {
             let text = match element.kind() {
@@ -133,7 +134,7 @@ impl Scene {
             }
             let anchor = element
                 .container_id()
-                .and_then(|c| self.element(c))
+                .and_then(|c| by_id.get(c).copied())
                 .unwrap_or(element);
             let (top, left) = match element_bounds(anchor) {
                 Some(b) => (b[1], b[0]),
@@ -238,7 +239,20 @@ impl Scene {
             out.push_str(" in ");
             out.push_str(folder);
         }
-        let listed: Vec<&Element> = self.elements.iter().filter(|e| !self.is_label(e)).collect();
+        let by_id = self.by_id();
+        let mut children: HashMap<&str, Vec<&str>> = HashMap::new();
+        for element in &self.elements {
+            if let Some(frame) = element.frame_id()
+                && !is_label(element, &by_id)
+            {
+                children.entry(frame).or_default().push(element.id());
+            }
+        }
+        let listed: Vec<&Element> = self
+            .elements
+            .iter()
+            .filter(|e| !is_label(e, &by_id))
+            .collect();
         if listed.is_empty() {
             out.push_str(": empty");
             return out;
@@ -262,7 +276,10 @@ impl Scene {
                 whole(b.y)
             ));
         }
-        let rows: Vec<Vec<String>> = listed.iter().map(|e| self.row(e, has)).collect();
+        let rows: Vec<Vec<String>> = listed
+            .iter()
+            .map(|e| self.row(e, has, &by_id, &children))
+            .collect();
         let columns = 4;
         let mut widths = [0usize; 4];
         for row in &rows {
@@ -288,18 +305,9 @@ impl Scene {
         out
     }
 
-    /// A label: a text bound to a container that is on the whiteboard.
-    fn is_label(&self, element: &Element) -> bool {
-        element.kind() == ElementType::Text
-            && element
-                .container_id()
-                .is_some_and(|c| self.element(c).is_some())
-    }
-
-    fn label_text(&self, element: &Element) -> Option<String> {
-        let id = label_id(element)?;
-        let label = self.element(&id)?;
-        Some(original_text(label))
+    /// Every element by its id.
+    fn by_id(&self) -> HashMap<&str, &Element> {
+        self.elements.iter().map(|e| (e.id(), e)).collect()
     }
 
     fn picture_state(
@@ -317,7 +325,13 @@ impl Scene {
         }
     }
 
-    fn row(&self, element: &Element, has: &dyn Fn(&FileHex) -> bool) -> Vec<String> {
+    fn row(
+        &self,
+        element: &Element,
+        has: &dyn Fn(&FileHex) -> bool,
+        by_id: &HashMap<&str, &Element>,
+        children: &HashMap<&str, Vec<&str>>,
+    ) -> Vec<String> {
         let kind = element.kind();
         let mut row = vec![element.type_name().to_string(), element.id().to_string()];
         let at = format!("at ({}, {})", whole(element.x()), whole(element.y()));
@@ -379,14 +393,8 @@ impl Scene {
                 if let Some(name) = element.name().filter(|n| !n.trim().is_empty()) {
                     rest.push(quote(name));
                 }
-                let children: Vec<&str> = self
-                    .elements
-                    .iter()
-                    .filter(|e| e.frame_id() == Some(element.id()) && !self.is_label(e))
-                    .map(Element::id)
-                    .collect();
-                if !children.is_empty() {
-                    rest.push(format!("holds {}", children.join(", ")));
+                if let Some(held) = children.get(element.id()) {
+                    rest.push(format!("holds {}", held.join(", ")));
                 }
             }
             ElementType::Freedraw => {
@@ -402,7 +410,7 @@ impl Scene {
                 push_stroke(element, &mut rest);
             }
         }
-        if let Some(label) = self.label_text(element) {
+        if let Some(label) = label_text(element, by_id) {
             rest.push(format!("label {}", quote(&label)));
         }
         let degrees = element.angle().to_degrees();
@@ -436,6 +444,7 @@ impl Scene {
     /// The elements as agents read them, with `has` saying whether the library has a
     /// picture's bytes.
     pub fn listed_with(&self, has: &dyn Fn(&FileHex) -> bool) -> Vec<ListedElement> {
+        let by_id = self.by_id();
         self.elements
             .iter()
             .map(|element| {
@@ -493,7 +502,7 @@ impl Scene {
                     } else {
                         None
                     },
-                    label: self.label_text(element),
+                    label: label_text(element, &by_id),
                     container: element.container_id().map(str::to_string),
                     start: element.binding("start").map(str::to_string),
                     end: element.binding("end").map(str::to_string),
@@ -515,6 +524,21 @@ impl Scene {
 }
 
 use serde_json::Value;
+
+/// A label: a text bound to a container that is on the whiteboard.
+fn is_label(element: &Element, by_id: &HashMap<&str, &Element>) -> bool {
+    element.kind() == ElementType::Text
+        && element
+            .container_id()
+            .is_some_and(|c| by_id.contains_key(c))
+}
+
+/// The text of the label of a container.
+fn label_text(element: &Element, by_id: &HashMap<&str, &Element>) -> Option<String> {
+    let id = label_id(element)?;
+    let label = by_id.get(id.as_str())?;
+    Some(original_text(label))
+}
 
 fn push_fill(element: &Element, rest: &mut Vec<String>) {
     let background = element

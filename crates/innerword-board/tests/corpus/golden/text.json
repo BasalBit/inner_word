@@ -76,7 +76,7 @@
       "version": 1,
       "versionNonce": 1881989913,
       "verticalAlign": "top",
-      "width": 176.76000000000002,
+      "width": 176.76,
       "x": 0,
       "y": 60
     },
@@ -91,7 +91,7 @@
       "fontSize": 24,
       "frameId": null,
       "groupIds": [],
-      "height": 32.400000000000006,
+      "height": 32.4,
       "id": "nunito",
       "index": "a2",
       "isDeleted": false,
@@ -150,7 +150,7 @@
       "version": 1,
       "versionNonce": 1912946156,
       "verticalAlign": "top",
-      "width": 81.17999999999999,
+      "width": 81.18,
       "x": 300,
       "y": 120
     },
@@ -187,7 +187,7 @@
       "version": 1,
       "versionNonce": 1141826465,
       "verticalAlign": "top",
-      "width": 99.0,
+      "width": 99,
       "x": 300,
       "y": 180
     },
@@ -335,7 +335,7 @@
       "version": 1,
       "versionNonce": 516911160,
       "verticalAlign": "top",
-      "width": 126.45999999999998,
+      "width": 126.46,
       "x": 573.54,
       "y": 200
     }

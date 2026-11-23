@@ -102,7 +102,7 @@ fn every_common_field_is_taken() {
           "link":"https://example.com/x","locked":true}]"##,
     );
     let d = scene.element("d").unwrap().json();
-    assert!((d["angle"].as_f64().unwrap() - 3.0 * std::f64::consts::FRAC_PI_2).abs() < 1e-12);
+    assert!((d["angle"].as_f64().unwrap() - 3.0 * std::f64::consts::FRAC_PI_2).abs() < 1e-9);
     assert_eq!(d["strokeColor"], "#e03131");
     assert_eq!(d["backgroundColor"], "#ffc9c9");
     assert_eq!(d["fillStyle"], "cross-hatch");

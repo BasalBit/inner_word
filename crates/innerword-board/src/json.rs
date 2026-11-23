@@ -76,10 +76,20 @@ fn hex4(bytes: &[u8], at: usize) -> Option<u32> {
 /// A number as Excalidraw writes it: a whole number without a fraction (`100`, not
 /// `100.0`), anything else as the shortest text that reads back as the same `f64`. A value
 /// that is not finite is written as `null`, as `JSON.stringify` writes `NaN`.
+///
+/// A number this crate works out is first rounded to nine decimals (a billionth of a
+/// pixel), so that its text reads back as the same `f64` with `serde_json`'s fast parser,
+/// which is exact for such a number and can be one unit off for a longer one: a scene
+/// written, read and written again is the same bytes.
 pub(crate) fn num(value: f64) -> Value {
     if !value.is_finite() {
         return Value::Null;
     }
+    let value = if value.abs() < 1.0e6 {
+        (value * 1.0e9).round() / 1.0e9
+    } else {
+        value
+    };
     if value == value.trunc() && value.abs() < 9.0e15 {
         // -0.0 is written 0, as JavaScript writes it.
         return Value::Number(Number::from(value as i64));
@@ -193,7 +203,9 @@ mod tests {
         assert_eq!(num(-0.0).to_string(), "0");
         assert_eq!(num(0.5).to_string(), "0.5");
         assert_eq!(num(f64::NAN), Value::Null);
-        assert_eq!(num(322.82403564453125).to_string(), "322.82403564453125");
+        assert_eq!(num(322.82403564453125).to_string(), "322.824035645");
+        assert_eq!(num(116.86000000000001).to_string(), "116.86");
+        assert_eq!(num(-3.9720546451956367e-16).to_string(), "0");
     }
 
     #[test]

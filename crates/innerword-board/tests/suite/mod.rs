@@ -4,6 +4,7 @@ mod corpus;
 mod delta;
 mod library;
 mod remove;
+mod robust;
 mod scene;
 mod svg;
 mod update;

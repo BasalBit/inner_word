@@ -365,6 +365,13 @@ pub(crate) struct BoardState {
     /// How long the last load took until the page posted `ready` (what a
     /// scripted run's `board:wait` reports).
     pub ready_in: Option<Duration>,
+    /// An answer's drawing was asked for and its adopt is not sent yet
+    /// (`docs/assistant-draws-design.md`, 5.1): a second press meanwhile
+    /// draws nothing.
+    pub(crate) drawing_pending: bool,
+    /// The adopt of an answer's drawing that the view has not answered
+    /// (5.4): its answer moves the keyboard and says what was drawn.
+    pub(crate) assistant_drawing: Option<super::assistant_draw::PendingDrawing>,
 }
 
 impl BoardState {
@@ -376,6 +383,17 @@ impl BoardState {
         self.adopt_before = None;
         self.adopt_writer = None;
         self.pending_post = None;
+        // An answer's drawing whose adopt is never answered now: what was
+        // drawn is in the stored scene the page loads.
+        if let Some(pending) = self.assistant_drawing.take() {
+            pending.answered(super::assistant_draw::DrawAnswered::Forgotten);
+        }
+    }
+
+    /// This session's number: a task that outlives the session acts on it
+    /// alone, not on the next session of the same whiteboard.
+    pub(crate) fn session(&self) -> u64 {
+        self.session
     }
 
     /// The number of the adopt the view is asked and has not answered.
@@ -601,6 +619,33 @@ impl Workspace {
         self.board().is_some_and(|board| board.ready)
     }
 
+    /// Where the writer is looking on the open whiteboard, in the scene's
+    /// coordinates (`docs/assistant-draws-design.md`, 5.3): Excalidraw's
+    /// scroll and zoom from the page's last status, and the size of the page
+    /// element in the last frame. Excalidraw's scene point at the view's top
+    /// left is `(-scrollX, -scrollY)`. `None` before the page posted a status
+    /// or while the element has no size.
+    pub(crate) fn board_view_bounds(&self) -> Option<innerword_board::Bounds> {
+        let page = self.page.as_ref()?;
+        let board = self.board()?;
+        let zoom = board.status.zoom;
+        if !(zoom.is_finite() && zoom > 0.0) {
+            return None;
+        }
+        let bounds = page.bounds.get()?;
+        let width = f64::from(f32::from(bounds.size.width));
+        let height = f64::from(f32::from(bounds.size.height));
+        if width <= 0.0 || height <= 0.0 {
+            return None;
+        }
+        Some(innerword_board::Bounds {
+            x: -board.status.scroll_x,
+            y: -board.status.scroll_y,
+            width: width / zoom,
+            height: height / zoom,
+        })
+    }
+
     /// The scene of the open whiteboard as the app holds it: the newest
     /// post, else the stored scene it descends from (the view's form or the
     /// stored form; both read with `Scene::from_view`).
@@ -793,6 +838,8 @@ impl Workspace {
             source: None,
             loading_since: Instant::now(),
             ready_in: None,
+            drawing_pending: false,
+            assistant_drawing: None,
         };
         let mut board = Box::new(board);
         board.seed_pictures(&scene);
@@ -1725,24 +1772,25 @@ impl Workspace {
     }
 
     /// Takes the stored scene `content` (written by someone else: an agent,
-    /// a restored version, a write the app did not take over) into
-    /// whiteboard `id`'s view by the base rule, one step of its undo when
-    /// `undoable`. From here until the view answers, its posts wait.
+    /// a restored version, an answer's drawing, a write the app did not take
+    /// over) into whiteboard `id`'s view by the base rule, one step of its
+    /// undo when `undoable`. From here until the view answers, its posts
+    /// wait. Returns the number of the adopt it sent (`None` when it sent
+    /// none: no such whiteboard, a scene it cannot read, no element that
+    /// changed).
     pub(crate) fn adopt_stored_scene(
         &mut self,
         id: DocumentId,
         content: &str,
         undoable: bool,
         cx: &mut Context<Self>,
-    ) {
-        let Some(board) = self.board_of_mut(id) else {
-            return;
-        };
+    ) -> Option<u64> {
+        let board = self.board_of_mut(id)?;
         let theirs = match Scene::from_stored(content) {
             Ok(parsed) => parsed.scene,
             Err(error) => {
                 eprintln!("Inner Word: the stored whiteboard cannot be read: {error}");
-                return;
+                return None;
             }
         };
         let before = Scene::from_stored(&board.base)
@@ -1765,7 +1813,7 @@ impl Workspace {
             if board.dirty() && !board.adopting {
                 self.schedule_board_save(id, Duration::ZERO, cx);
             }
-            return;
+            return None;
         }
         // The writer's scene descends from the base before this write (the
         // first one, when another adopt is still answered).
@@ -1839,6 +1887,7 @@ impl Workspace {
             .ok();
         })
         .detach();
+        Some(seq)
     }
 
     /// Whether adopt `seq` of whiteboard `id` in `session` is still the one
@@ -1891,6 +1940,18 @@ impl Workspace {
         // An agent's change: the note says what was not taken, and offers
         // Undo.
         self.agent_adopt_answered(id, seq, adopted.rev, &adopted.conflicts, cx);
+        // An answer's drawing: the keyboard goes to the canvas, and the
+        // writer is told what was drawn.
+        if let Some(pending) = self.board_of_mut(id).and_then(|board| {
+            board
+                .assistant_drawing
+                .take_if(|pending| pending.seq == seq)
+        }) {
+            pending.answered(super::assistant_draw::DrawAnswered::Adopted {
+                rev: adopted.rev,
+                conflicts: adopted.conflicts.clone(),
+            });
+        }
         cx.notify();
     }
 
@@ -1906,6 +1967,14 @@ impl Workspace {
         let Some(board) = self.board_of_mut(id) else {
             return;
         };
+        // An answer's drawing: it is in the stored scene the view loads.
+        let seq = board.adopt_seq;
+        if let Some(pending) = board
+            .assistant_drawing
+            .take_if(|pending| pending.seq == seq)
+        {
+            pending.answered(super::assistant_draw::DrawAnswered::Reloaded);
+        }
         let writer = newest_of(board.pending_post.take(), board.adopt_writer.take())
             .filter(|writer| writer.rev > board.saved);
         let base = board
@@ -3747,6 +3816,9 @@ impl Workspace {
             name if name == crate::actions::RenameDocument.name() => "Rename whiteboard",
             name if name == crate::actions::FocusEditor.name() => "Go to whiteboard",
             name if name == crate::actions::ReloadPage.name() => "Reload whiteboard",
+            name if name == innerword_assistant_ui::actions::DrawAnswer.name() => {
+                "Draw answer on whiteboard"
+            }
             _ => return,
         };
         let old = std::mem::replace(&mut command.title, title.into());

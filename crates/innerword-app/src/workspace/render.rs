@@ -992,6 +992,9 @@ impl Render for Workspace {
                 )
                 .capture_action(cx.listener(|this, _: &assistant::AddContext, window, cx| {
                     this.bring_the_side_chat_for_its_command(window, cx)
+                }))
+                .capture_action(cx.listener(|this, _: &assistant::DrawAnswer, window, cx| {
+                    this.draw_answer_command(window, cx)
                 }));
         }
         // The zoom of the text, while there is a text.

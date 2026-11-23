@@ -2887,3 +2887,935 @@ fn opening_another_item_after_reopening_a_closing_whiteboard_keeps_that_item(
     );
     assert_eq!(workspace.read_with(vcx, |w, _| w.open_board_id()), None);
 }
+
+// ----- the assistant's drawings (docs/assistant-draws-design.md, section 5) ------------
+//
+// The side chat on the fake engine of the assistant (`FakeBackend`: no test runs
+// Claude Code), the whiteboard on the fake page engine.
+
+mod drawings {
+    use std::{rc::Rc, sync::Arc};
+
+    use gpui::TestAppContext;
+    use innerword_app::{
+        assistant::conversations,
+        boards::fail_board_saves,
+        pages::{self, FakePages},
+        workspace::{
+            ASSISTANT_DRAWING_LABEL, BOARD_BUSY, CHANGES_NOTHING, CLOSED_BEFORE_DRAWN, NOT_UNDONE,
+            ONLY_GONE, PUT_BESIDE, PUT_IN_VIEW, SHOWN_IN_THE_SIDE_CHAT, STILL_LOADING,
+            conflicts_sentence, drew_sentence,
+        },
+    };
+    use innerword_assistant::{FakeBackend, MessageId};
+    use innerword_assistant_ui::{AssistantPanel, DRAWN_ALREADY};
+    use serde_json::{Value, json};
+
+    use super::{ids, scene, settle, stored, toasts};
+    use crate::suite::*;
+
+    /// A shape as Excalidraw keeps it at `(x, y)`, `width` x `height`, with
+    /// its label when `label` is given.
+    pub(super) fn shape(
+        kind: &str,
+        id: &str,
+        at: (f64, f64, f64, f64),
+        index: &str,
+        label: Option<&str>,
+    ) -> Vec<Value> {
+        let (x, y, width, height) = at;
+        let mut shape = json!({
+            "id": id, "type": kind, "x": x, "y": y, "width": width, "height": height,
+            "angle": 0, "strokeColor": "#1e1e1e", "backgroundColor": "transparent",
+            "fillStyle": "solid", "strokeWidth": 2, "strokeStyle": "solid", "roughness": 1,
+            "opacity": 100, "groupIds": [], "frameId": null, "roundness": null,
+            "seed": 1, "version": 1, "versionNonce": 3, "isDeleted": false,
+            "boundElements": null, "updated": 1, "link": null, "locked": false,
+            "index": index,
+        });
+        let Some(text) = label else {
+            return vec![shape];
+        };
+        let label_id = format!("{id}-label");
+        shape["boundElements"] = json!([{ "type": "text", "id": label_id }]);
+        let label = json!({
+            "id": label_id, "type": "text", "x": x + 10.0, "y": y + height / 2.0 - 12.5,
+            "width": width - 20.0, "height": 25.0, "angle": 0, "strokeColor": "#1e1e1e",
+            "backgroundColor": "transparent", "fillStyle": "solid", "strokeWidth": 2,
+            "strokeStyle": "solid", "roughness": 1, "opacity": 100, "groupIds": [],
+            "frameId": null, "roundness": null, "seed": 2, "version": 1, "versionNonce": 5,
+            "isDeleted": false, "boundElements": null, "updated": 1, "link": null,
+            "locked": false, "index": format!("{index}V"), "text": text, "originalText": text,
+            "fontSize": 20, "fontFamily": 5, "textAlign": "center", "verticalAlign": "middle",
+            "containerId": id, "autoResize": true, "lineHeight": 1.25,
+        });
+        vec![shape, label]
+    }
+
+    /// The rectangle "API" the examples draw beside.
+    fn api() -> Vec<Value> {
+        shape(
+            "rectangle",
+            "api",
+            (100.0, 80.0, 200.0, 90.0),
+            "a0",
+            Some("API"),
+        )
+    }
+
+    /// An answer that holds `drawing` as its block.
+    pub(super) fn answer_with(drawing: &str) -> String {
+        format!("Here is the drawing.\n\n```whiteboard\n{drawing}\n```\n")
+    }
+
+    /// The design's example: a database the API reads from, the API blue.
+    pub(super) const DB_AND_BLUE: &str = r##"{"add": [
+  {"type": "ellipse", "id": "db", "x": 420, "y": 80, "width": 160, "height": 90, "label": {"text": "Postgres"}},
+  {"type": "arrow", "id": "reads", "x": 300, "y": 125, "start": {"id": "api"}, "end": {"id": "db"}, "label": {"text": "reads"}}],
+ "update": [{"id": "api", "backgroundColor": "#a5d8ff", "fillStyle": "solid"}]}"##;
+
+    pub(super) struct Desk<'a> {
+        pub fake: FakeBackend,
+        pub pages: Rc<FakePages>,
+        pub library: Entity<Library>,
+        pub workspace: Entity<Workspace>,
+        pub board: DocumentId,
+        pub text: DocumentId,
+        pub cx: &'a mut VisualTestContext,
+    }
+
+    /// A workspace with the assistant on its fake engine and the whiteboard
+    /// "Plan" open and ready, the rectangle "API" drawn and saved; a text
+    /// "Notes" beside it.
+    pub(super) fn desk(cx: &mut TestAppContext) -> Desk<'_> {
+        init(cx);
+        let fake = FakeBackend::new();
+        cx.update(|cx| innerword_app::assistant::set_backend(Arc::new(fake.clone()), cx));
+        let pages = cx.update(pages::use_fake);
+        let library = library(cx);
+        let text = add_document(&library, None, &simple_document("Notes", "Words."), cx);
+        let (workspace, vcx) = open_workspace(&library, cx);
+        vcx.run_until_parked();
+        let board = workspace
+            .update_in(vcx, |w, window, cx| w.new_board(Some("Plan"), window, cx))
+            .expect("a whiteboard is made");
+        vcx.run_until_parked();
+        pages.board_ready();
+        pages.draw(&scene(&api()));
+        settle(vcx);
+        Desk {
+            fake,
+            pages,
+            library,
+            workspace,
+            board,
+            text,
+            cx: vcx,
+        }
+    }
+
+    impl Desk<'_> {
+        pub fn side(&mut self) -> Entity<AssistantPanel> {
+            self.workspace
+                .read_with(self.cx, |w, _| w.side_chat().expect("an engine").clone())
+        }
+
+        /// Goes to the side chat (`cmd-3`), asks, and lets `answer` come.
+        pub fn ask(&mut self, answer: &str) -> MessageId {
+            self.cx.simulate_keystrokes("cmd-3");
+            self.cx.run_until_parked();
+            let panel = self.side();
+            self.fake.reply(answer);
+            panel.update_in(self.cx, |panel, window, cx| {
+                panel.send("Draw it, please.", window, cx)
+            });
+            self.cx.run_until_parked();
+            panel.read_with(self.cx, |panel, _| {
+                panel.transcript().last_answer().expect("an answer").id
+            })
+        }
+
+        pub fn on_canvas(&mut self) -> bool {
+            self.workspace
+                .update_in(self.cx, |w, window, _| w.page_has_focus(window))
+        }
+
+        pub fn in_chat(&mut self) -> bool {
+            self.workspace.update_in(self.cx, |w, window, cx| {
+                w.assistant_panel_has_focus(window, cx)
+            })
+        }
+
+        pub fn toasts(&mut self) -> Vec<String> {
+            toasts(&self.workspace, self.cx)
+        }
+
+        pub fn has_toast(&mut self, words: &str) -> bool {
+            self.toasts().iter().any(|toast| toast == words)
+        }
+
+        pub fn toast_starting(&mut self, start: &str) -> Option<String> {
+            self.toasts()
+                .into_iter()
+                .find(|toast| toast.starts_with(start))
+        }
+
+        /// Presses the button of the toast that starts with `start`.
+        pub fn press_toast(&mut self, start: &str) {
+            let layer = self
+                .workspace
+                .read_with(self.cx, |workspace, _| workspace.toast_layer().clone());
+            let id = layer.read_with(self.cx, |layer, _| {
+                layer
+                    .ids()
+                    .into_iter()
+                    .zip(layer.toasts())
+                    .find(|(_, toast)| toast.message.starts_with(start))
+                    .map(|(id, _)| id)
+                    .unwrap_or_else(|| panic!("no toast says {start:?}"))
+            });
+            let ran = layer.update_in(self.cx, |layer, window, cx| {
+                layer.run_action(id, window, cx)
+            });
+            assert!(ran, "the toast {start:?} has no button");
+            self.cx.run_until_parked();
+        }
+
+        pub fn versions_before_drawings(&mut self) -> usize {
+            let board = self.board;
+            self.library.read_with(self.cx, |library, _| {
+                library
+                    .store()
+                    .snapshot_labels(board)
+                    .unwrap()
+                    .into_values()
+                    .filter(|label| label == ASSISTANT_DRAWING_LABEL)
+                    .count()
+            })
+        }
+
+        pub fn drawn(&mut self, answer: MessageId) -> bool {
+            self.side().read_with(self.cx, |panel, _| {
+                panel
+                    .transcript()
+                    .message(answer)
+                    .is_some_and(|message| message.drawn_at.is_some())
+            })
+        }
+
+        pub fn stored_ids(&mut self) -> Vec<String> {
+            ids(&stored(&self.library, self.board, self.cx))
+        }
+
+        /// The fake canvas's elements by id.
+        pub fn canvas_ids(&mut self) -> Vec<String> {
+            let canvas: Value = serde_json::from_str(&self.pages.canvas()).unwrap();
+            canvas["elements"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|element| element["id"].as_str().unwrap().to_string())
+                .collect()
+        }
+
+        /// The text the side chat shows for answer `id`.
+        pub fn shown(&mut self, id: MessageId) -> String {
+            let panel = self.side();
+            panel.read_with(self.cx, |panel, cx| {
+                panel
+                    .messages()
+                    .read(cx)
+                    .answer_editor(id)
+                    .expect("the answer is shown")
+                    .read(cx)
+                    .document()
+                    .plain_text()
+            })
+        }
+    }
+
+    /// Clicks the control drawn under `selector`.
+    fn click(selector: &str, cx: &mut VisualTestContext) {
+        let selector: &'static str = Box::leak(selector.to_string().into_boxed_str());
+        let bounds = cx
+            .debug_bounds(selector)
+            .unwrap_or_else(|| panic!("nothing is drawn as {selector:?}"));
+        cx.simulate_click(bounds.center(), gpui::Modifiers::none());
+        cx.run_until_parked();
+    }
+
+    #[gpui::test]
+    fn the_assistant_draws_on_the_open_whiteboard_in_one_step_of_its_undo(cx: &mut TestAppContext) {
+        let mut desk = desk(cx);
+        let answer = desk.ask(&answer_with(DB_AND_BLUE));
+        assert!(desk.in_chat());
+        // The line, never the JSON.
+        let shown = desk.shown(answer);
+        assert!(
+            shown.contains("Drawing: adds an ellipse and an arrow; changes the rectangle"),
+            "{shown}"
+        );
+        assert!(!shown.contains("\"type\""), "{shown}");
+
+        // The button under the answer.
+        click(&format!("assistant-action-draw-{}", answer.0), desk.cx);
+        let adopted = desk.pages.adopted();
+        assert_eq!(adopted.len(), 1, "one adopt");
+        assert!(adopted[0].contains("\"undoable\":true"), "{}", adopted[0]);
+        // The library has it, and the whiteboard as it was as a version.
+        let stored_ids = desk.stored_ids();
+        for id in ["api", "db", "reads"] {
+            assert!(stored_ids.contains(&id.to_string()), "{stored_ids:?}");
+        }
+        let scene = stored(&desk.library, desk.board, desk.cx);
+        assert_eq!(
+            scene.element("api").unwrap().json()["backgroundColor"],
+            json!("#a5d8ff")
+        );
+        assert_eq!(desk.versions_before_drawings(), 1);
+        // The canvas took it in: the keyboard is on it, the toast says so.
+        assert!(desk.on_canvas(), "the keyboard went to the canvas");
+        assert!(
+            desk.has_toast(&drew_sentence("Plan", 2, 1, 0)),
+            "{:?}",
+            desk.toasts()
+        );
+        // The answer is marked drawn, also in the stored conversation.
+        assert!(desk.drawn(answer));
+        let stored_answer = desk.library.read_with(desk.cx, |library, _| {
+            conversations::load(library, desk.board)
+                .last_answer()
+                .cloned()
+                .unwrap()
+        });
+        assert!(stored_answer.drawn_at.is_some());
+        let report = desk
+            .workspace
+            .read_with(desk.cx, |w, _| w.last_drawing_report().map(str::to_string))
+            .unwrap();
+        assert!(
+            report.starts_with("draw: 2 added, 1 changed, 0 removed, version kept"),
+            "{report}"
+        );
+        assert!(
+            report.ends_with("keyboard to the canvas after the adopt answered"),
+            "{report}"
+        );
+
+        // The Edit menu's Undo on the canvas: one step takes it all out.
+        desk.cx.update(|window, cx| {
+            window.dispatch_action(Box::new(innerword_editor::actions::Undo), cx)
+        });
+        desk.cx.run_until_parked();
+        assert!(
+            desk.pages.board_calls().contains(&"undo 1".to_string()),
+            "{:?}",
+            desk.pages.board_calls()
+        );
+        let canvas = desk.canvas_ids();
+        let deleted: Value = serde_json::from_str(&desk.pages.canvas()).unwrap();
+        assert!(!canvas.contains(&"db".to_string()), "{canvas:?} {deleted}");
+        settle(desk.cx);
+        assert_eq!(desk.stored_ids(), ["api", "api-label"]);
+    }
+
+    #[gpui::test]
+    fn the_keyboard_moves_only_when_the_canvas_has_the_drawing(cx: &mut TestAppContext) {
+        let mut desk = desk(cx);
+        desk.ask(&answer_with(DB_AND_BLUE));
+        desk.pages.hold_adopts();
+        desk.cx.simulate_keystrokes("cmd-shift-d");
+        desk.cx.run_until_parked();
+        assert_eq!(desk.pages.adopted().len(), 1, "the adopt was sent");
+        // Not answered yet: the keyboard is still in the side chat, and its
+        // cmd-z is the composer's, not the canvas's.
+        assert!(desk.in_chat());
+        desk.cx.simulate_keystrokes("cmd-z");
+        desk.cx.run_until_parked();
+        assert!(
+            !desk
+                .pages
+                .board_calls()
+                .iter()
+                .any(|call| call.starts_with("undo")),
+            "{:?}",
+            desk.pages.board_calls()
+        );
+        assert!(desk.toast_starting("Drew on").is_none());
+        desk.pages.release_adopts();
+        desk.cx.run_until_parked();
+        assert!(desk.on_canvas());
+        assert!(desk.toast_starting("Drew on").is_some());
+
+        // A second drawing; the writer goes to the library before the canvas
+        // answers, and the keyboard stays there.
+        desk.ask(&answer_with(
+            r#"{"add": [{"type": "text", "id": "note", "x": 100, "y": 300, "text": "Reads only."}]}"#,
+        ));
+        desk.pages.hold_adopts();
+        desk.cx.simulate_keystrokes("cmd-shift-d");
+        desk.cx.run_until_parked();
+        desk.cx.simulate_keystrokes("cmd-0");
+        desk.cx.run_until_parked();
+        desk.pages.release_adopts();
+        desk.cx.run_until_parked();
+        assert!(!desk.on_canvas());
+        assert!(!desk.in_chat());
+        assert!(desk.stored_ids().contains(&"note".to_string()));
+    }
+
+    #[gpui::test]
+    fn a_drawing_waits_for_what_the_page_holds(cx: &mut TestAppContext) {
+        let mut desk = desk(cx);
+        desk.ask(&answer_with(DB_AND_BLUE));
+        // A stroke the page has not posted.
+        let mut elements = api();
+        elements.extend(shape(
+            "rectangle",
+            "late",
+            (100.0, 400.0, 100.0, 50.0),
+            "a1",
+            None,
+        ));
+        desk.pages.draw_unposted(&scene(&elements));
+        desk.cx.run_until_parked();
+        let asked = desk.pages.collects_asked();
+        desk.cx.simulate_keystrokes("cmd-shift-d");
+        desk.cx.run_until_parked();
+        assert!(
+            desk.pages.collects_asked() > asked,
+            "the page was asked first"
+        );
+        let stored_ids = desk.stored_ids();
+        assert!(stored_ids.contains(&"late".to_string()), "{stored_ids:?}");
+        assert!(stored_ids.contains(&"db".to_string()), "{stored_ids:?}");
+        // The writer's stroke is on the canvas beside the drawing.
+        let canvas = desk.canvas_ids();
+        assert!(canvas.contains(&"late".to_string()) && canvas.contains(&"db".to_string()));
+    }
+
+    #[gpui::test]
+    fn two_presses_draw_once(cx: &mut TestAppContext) {
+        let mut desk = desk(cx);
+        let answer = desk.ask(&answer_with(DB_AND_BLUE));
+        desk.pages.hold_collects();
+        let mut elements = api();
+        elements.extend(shape(
+            "rectangle",
+            "late",
+            (100.0, 400.0, 100.0, 50.0),
+            "a1",
+            None,
+        ));
+        desk.pages.draw_unposted(&scene(&elements));
+        desk.cx.run_until_parked();
+        // The button, then the key before the page answered.
+        click(&format!("assistant-action-draw-{}", answer.0), desk.cx);
+        desk.cx.simulate_keystrokes("cmd-shift-d");
+        desk.cx.run_until_parked();
+        assert!(desk.has_toast(BOARD_BUSY), "{:?}", desk.toasts());
+        desk.pages.release_collects();
+        desk.cx.run_until_parked();
+        assert_eq!(desk.pages.adopted().len(), 1);
+        assert_eq!(desk.versions_before_drawings(), 1);
+    }
+
+    #[gpui::test]
+    fn an_outside_change_during_the_collect_is_waited_for(cx: &mut TestAppContext) {
+        let mut desk = desk(cx);
+        desk.ask(&answer_with(DB_AND_BLUE));
+        desk.pages.hold_collects();
+        let mut elements = api();
+        elements.extend(shape(
+            "rectangle",
+            "late",
+            (100.0, 400.0, 100.0, 50.0),
+            "a1",
+            None,
+        ));
+        desk.pages.draw_unposted(&scene(&elements));
+        desk.cx.run_until_parked();
+        desk.cx.simulate_keystrokes("cmd-shift-d");
+        desk.cx.run_until_parked();
+        // Meanwhile a write from outside (an agent's, a restore) starts its own
+        // adopt, which the view has not answered when the page hands over.
+        desk.pages.hold_adopts();
+        let board = desk.board;
+        let content = desk
+            .library
+            .read_with(desk.cx, |l, _| l.document(board).unwrap().content);
+        let mut theirs = innerword_board::Scene::from_stored(&content).unwrap().scene;
+        let mut making = innerword_board::HashedMaking::new(&[b"outside".as_slice()], 1);
+        let skeleton = json!({"type": "rectangle", "id": "agent", "x": 0, "y": 700});
+        innerword_board::add(
+            &mut theirs,
+            &[innerword_board::Skeleton(
+                skeleton.as_object().unwrap().clone(),
+            )],
+            &innerword_board::Pictures::new(),
+            &mut making,
+        )
+        .unwrap();
+        let written = theirs.to_stored();
+        let text = theirs.text();
+        let (_, told) = desk.library.update(desk.cx, |library, cx| {
+            library.change_outside(
+                |store| {
+                    let content = innerword_library::store::BoardContent {
+                        scene: &written,
+                        files: &[],
+                        plain_text: &text,
+                        word_count: 0,
+                        char_count: 0,
+                    };
+                    store.save_board(board, &content, None).unwrap();
+                    (
+                        (),
+                        vec![innerword_library::OutsideChange::DocumentSaved(board)],
+                    )
+                },
+                cx,
+            )
+        });
+        told.unwrap();
+        desk.workspace
+            .update(desk.cx, |w, cx| w.adopt_outside_write(board, cx));
+        desk.cx.run_until_parked();
+        let outside = desk.pages.adopted().len();
+        assert_eq!(outside, 1, "the outside write's adopt");
+        desk.pages.release_collects();
+        desk.cx.run_until_parked();
+        assert!(desk.has_toast(BOARD_BUSY), "{:?}", desk.toasts());
+        assert_eq!(desk.pages.adopted().len(), outside, "the drawing sent none");
+        assert_eq!(desk.versions_before_drawings(), 0);
+        desk.pages.release_adopts();
+        desk.cx.run_until_parked();
+    }
+
+    #[gpui::test]
+    fn a_drawing_that_changes_what_is_gone_draws_nothing(cx: &mut TestAppContext) {
+        let mut desk = desk(cx);
+        let answer = desk.ask(&answer_with(
+            r##"{"update": [{"id": "cache", "backgroundColor": "#ffc9c9"}],
+                 "add": [{"type": "arrow", "id": "to", "x": 0, "y": 0, "start": {"id": "api"}, "end": {"id": "queue"}}]}"##,
+        ));
+        desk.cx.simulate_keystrokes("cmd-shift-d");
+        desk.cx.run_until_parked();
+        let said = desk.toast_starting("Nothing was drawn").expect("a toast");
+        assert_eq!(
+            said,
+            "Nothing was drawn: the answer changes cache, which is no longer on the whiteboard; \
+             the answer joins arrows or frames to queue, which is no longer on the whiteboard. \
+             Ask again: the assistant is sent the whiteboard as it is now."
+        );
+        assert!(desk.pages.adopted().is_empty());
+        assert_eq!(desk.versions_before_drawings(), 0);
+        assert!(!desk.drawn(answer));
+    }
+
+    #[gpui::test]
+    fn a_drawing_of_nothing_keeps_no_version(cx: &mut TestAppContext) {
+        let mut desk = desk(cx);
+        let answer = desk.ask(&answer_with(r#"{"remove": ["ghost"]}"#));
+        desk.cx.simulate_keystrokes("cmd-shift-d");
+        desk.cx.run_until_parked();
+        assert!(desk.has_toast(ONLY_GONE), "{:?}", desk.toasts());
+        assert!(!desk.drawn(answer));
+        let answer = desk.ask(&answer_with(r#"{"update": [{"id": "api", "x": 100}]}"#));
+        desk.cx.simulate_keystrokes("cmd-shift-d");
+        desk.cx.run_until_parked();
+        assert!(desk.has_toast(CHANGES_NOTHING), "{:?}", desk.toasts());
+        assert!(!desk.drawn(answer));
+        assert!(desk.pages.adopted().is_empty());
+        assert_eq!(desk.versions_before_drawings(), 0);
+    }
+
+    #[gpui::test]
+    fn a_failed_save_leaves_no_version(cx: &mut TestAppContext) {
+        let mut desk = desk(cx);
+        let answer = desk.ask(&answer_with(DB_AND_BLUE));
+        desk.cx.update(|_, cx| fail_board_saves(cx, true));
+        desk.cx.simulate_keystrokes("cmd-shift-d");
+        desk.cx.run_until_parked();
+        desk.cx.update(|_, cx| fail_board_saves(cx, false));
+        assert!(
+            desk.has_toast("Nothing was drawn: it could not be saved (the library is busy)."),
+            "{:?}",
+            desk.toasts()
+        );
+        assert_eq!(desk.versions_before_drawings(), 0);
+        assert!(desk.pages.adopted().is_empty());
+        assert!(!desk.drawn(answer));
+        assert_eq!(desk.stored_ids(), ["api", "api-label"]);
+    }
+
+    #[gpui::test]
+    fn closing_the_whiteboard_during_the_collect_says_so(cx: &mut TestAppContext) {
+        let mut desk = desk(cx);
+        desk.ask(&answer_with(DB_AND_BLUE));
+        desk.pages.hold_collects();
+        let mut elements = api();
+        elements.extend(shape(
+            "rectangle",
+            "late",
+            (100.0, 400.0, 100.0, 50.0),
+            "a1",
+            None,
+        ));
+        desk.pages.draw_unposted(&scene(&elements));
+        desk.cx.run_until_parked();
+        desk.cx.simulate_keystrokes("cmd-shift-d");
+        desk.cx.run_until_parked();
+        let text = desk.text;
+        desk.workspace.update_in(desk.cx, |w, window, cx| {
+            w.open_document(text, true, window, cx);
+        });
+        desk.cx.run_until_parked();
+        desk.pages.release_collects();
+        settle(desk.cx);
+        assert!(desk.has_toast(CLOSED_BEFORE_DRAWN), "{:?}", desk.toasts());
+        assert_eq!(desk.versions_before_drawings(), 0);
+        // The writer's stroke was kept all the same.
+        assert!(desk.stored_ids().contains(&"late".to_string()));
+        assert!(!desk.stored_ids().contains(&"db".to_string()));
+    }
+
+    #[gpui::test]
+    fn a_drawing_the_converter_refuses_offers_the_message(cx: &mut TestAppContext) {
+        let mut desk = desk(cx);
+        let refused = answer_with(
+            r#"{"add": [{"type": "rectangle", "id": "x", "x": 0, "y": 400, "link": "javascript:alert(1)"}]}"#,
+        );
+        desk.ask(&refused);
+        desk.cx.simulate_keystrokes("cmd-shift-d");
+        desk.cx.run_until_parked();
+        let said = desk.toast_starting("Nothing was drawn: ").expect("a toast");
+        assert!(said.contains("http://, https:// or mailto:"), "{said}");
+        let panel = desk.side();
+        let offered = panel.read_with(desk.cx, |panel, cx| panel.composer().read(cx).text(cx));
+        assert!(
+            offered.starts_with("Your drawing could not be used: ")
+                && offered.ends_with(". Please write it again."),
+            "{offered}"
+        );
+        assert!(desk.pages.adopted().is_empty());
+        // A composer with the writer's own text is left alone.
+        panel.update(desk.cx, |panel, cx| {
+            panel
+                .composer()
+                .update(cx, |composer, cx| composer.set_text("My own words", cx))
+        });
+        desk.cx.simulate_keystrokes("cmd-shift-d");
+        desk.cx.run_until_parked();
+        let kept = panel.read_with(desk.cx, |panel, cx| panel.composer().read(cx).text(cx));
+        assert_eq!(kept, "My own words");
+    }
+
+    /// Where the view is: Excalidraw's scroll and zoom, as the page posts
+    /// them.
+    fn look_at(desk: &mut Desk<'_>, zoom: f64, scroll_x: f64, scroll_y: f64) {
+        let mut status = desk.pages.board_status();
+        status.zoom = zoom;
+        status.scroll_x = scroll_x;
+        status.scroll_y = scroll_y;
+        desk.pages.set_status(status);
+        desk.cx.run_until_parked();
+    }
+
+    #[gpui::test]
+    fn a_drawing_that_covers_the_drawing_lands_free_in_view(cx: &mut TestAppContext) {
+        let mut desk = desk(cx);
+        look_at(&mut desk, 1.0, 0.0, 0.0);
+        // A legend written over the API.
+        desk.ask(&answer_with(
+            r#"{"add": [{"type": "rectangle", "id": "legend", "x": 120, "y": 90, "width": 120, "height": 60}]}"#,
+        ));
+        desk.cx.simulate_keystrokes("cmd-shift-d");
+        desk.cx.run_until_parked();
+        let scene = stored(&desk.library, desk.board, desk.cx);
+        let legend = scene.element("legend").expect("drawn");
+        let (x, y) = (legend.x(), legend.y());
+        // Clear of the API grown by the margin, and in the view.
+        let clear = x + 120.0 <= 100.0 - 40.0
+            || x >= 300.0 + 40.0
+            || y + 60.0 <= 80.0 - 40.0
+            || y >= 170.0 + 40.0;
+        assert!(clear, "the legend at ({x}, {y}) covers the API");
+        assert!(x >= 0.0 && y >= 0.0, "in view: ({x}, {y})");
+        let said = desk.toast_starting("Drew on").unwrap();
+        assert!(said.ends_with(PUT_IN_VIEW), "{said}");
+        assert!(
+            !desk.pages.board_calls().contains(&"zoom fit".to_string()),
+            "it was seen: no zoom"
+        );
+    }
+
+    #[gpui::test]
+    fn one_larger_than_the_view_zooms_to_fit(cx: &mut TestAppContext) {
+        let mut desk = desk(cx);
+        // Zoomed far in: the view is a few dozen points across.
+        look_at(&mut desk, 30.0, -100.0, -80.0);
+        desk.ask(&answer_with(
+            r#"{"add": [{"type": "rectangle", "id": "big", "x": 100, "y": 80, "width": 600, "height": 400}]}"#,
+        ));
+        desk.cx.simulate_keystrokes("cmd-shift-d");
+        desk.cx.run_until_parked();
+        let scene = stored(&desk.library, desk.board, desk.cx);
+        let big = scene.element("big").expect("drawn");
+        assert!(big.x() >= 300.0 + 100.0, "beside the drawing: {}", big.x());
+        let said = desk.toast_starting("Drew on").unwrap();
+        assert!(said.ends_with(PUT_BESIDE), "{said}");
+        let calls = desk.pages.board_calls();
+        let adopt = calls.iter().position(|call| call == "adopt").unwrap();
+        let fit = calls
+            .iter()
+            .position(|call| call == "zoom fit")
+            .expect("the view zooms to fit");
+        assert!(adopt < fit, "after the adopt: {calls:?}");
+    }
+
+    #[gpui::test]
+    fn conflicts_are_said_once_the_view_answered(cx: &mut TestAppContext) {
+        let mut desk = desk(cx);
+        desk.ask(&answer_with(DB_AND_BLUE));
+        desk.pages.hold_adopts();
+        desk.cx.simulate_keystrokes("cmd-shift-d");
+        desk.cx.run_until_parked();
+        // The writer moves the API before the canvas takes the drawing in.
+        let mut moved = api();
+        moved[0]["x"] = json!(140.0);
+        moved[0]["version"] = json!(2);
+        desk.pages.draw(&scene(&moved));
+        desk.cx.run_until_parked();
+        desk.pages.release_adopts();
+        settle(desk.cx);
+        let said = desk.toast_starting("Drew on").unwrap();
+        let conflicts = conflicts_sentence(&["api".to_string()]).unwrap();
+        assert!(said.contains(&conflicts), "{said}");
+        // The writer's copy of the API stays.
+        let scene = stored(&desk.library, desk.board, desk.cx);
+        assert_eq!(scene.element("api").unwrap().x(), 140.0);
+    }
+
+    #[gpui::test]
+    fn the_toast_offers_undo_while_the_canvas_has_not_moved_on(cx: &mut TestAppContext) {
+        let mut desk = desk(cx);
+        desk.ask(&answer_with(DB_AND_BLUE));
+        desk.cx.simulate_keystrokes("cmd-shift-d");
+        desk.cx.run_until_parked();
+        desk.press_toast("Drew on");
+        assert!(desk.pages.board_calls().contains(&"undo 1".to_string()));
+        assert!(!desk.canvas_ids().contains(&"db".to_string()));
+
+        // Drawn again, then the writer draws: the toast's Undo says why not.
+        desk.ask(&answer_with(
+            r#"{"add": [{"type": "text", "id": "note", "x": 100, "y": 300, "text": "Reads only."}]}"#,
+        ));
+        desk.cx.simulate_keystrokes("cmd-shift-d");
+        desk.cx.run_until_parked();
+        let undos = desk
+            .pages
+            .board_calls()
+            .iter()
+            .filter(|call| call.starts_with("undo"))
+            .count();
+        let mut elements = api();
+        elements.extend(shape(
+            "rectangle",
+            "mine",
+            (100.0, 500.0, 100.0, 50.0),
+            "a5",
+            None,
+        ));
+        desk.pages.draw(&scene(&elements));
+        desk.cx.run_until_parked();
+        desk.press_toast("Drew on");
+        assert!(desk.has_toast(NOT_UNDONE), "{:?}", desk.toasts());
+        let after = desk
+            .pages
+            .board_calls()
+            .iter()
+            .filter(|call| call.starts_with("undo"))
+            .count();
+        assert_eq!(after, undos, "nothing was undone");
+    }
+
+    #[gpui::test]
+    fn a_whiteboard_that_is_not_ready_is_not_drawn_on(cx: &mut TestAppContext) {
+        let mut desk = desk(cx);
+        desk.ask(&answer_with(DB_AND_BLUE));
+        // A second whiteboard, its page still loading.
+        let second = desk
+            .workspace
+            .update_in(desk.cx, |w, window, cx| {
+                w.new_board(Some("Second"), window, cx)
+            })
+            .unwrap();
+        desk.cx.run_until_parked();
+        let answer = desk.ask(&answer_with(DB_AND_BLUE));
+        let panel = desk.side();
+        panel.update(desk.cx, |panel, cx| panel.draw(answer, true, cx));
+        desk.cx.run_until_parked();
+        assert!(desk.has_toast(STILL_LOADING), "{:?}", desk.toasts());
+        assert!(desk.pages.adopted().is_empty());
+        // A page that could not start: no drawing is offered, the palette
+        // leaves the command out, and the key says why.
+        desk.pages.fail_start();
+        desk.cx.run_until_parked();
+        assert_eq!(
+            panel.read_with(desk.cx, |panel, _| panel.drawing_target()),
+            innerword_assistant::DrawingTarget::None
+        );
+        let titles = palette_lists(&desk.workspace, desk.cx);
+        assert!(
+            !titles
+                .iter()
+                .any(|title| title == "Draw answer on whiteboard"
+                    || title == "New whiteboard from answer"),
+            "{titles:?}"
+        );
+        assert_eq!(
+            desk.workspace.read_with(desk.cx, |w, _| w.open_board_id()),
+            Some(second)
+        );
+    }
+
+    /// The titles the palette lists now.
+    pub(super) fn palette_lists(
+        workspace: &Entity<Workspace>,
+        cx: &mut VisualTestContext,
+    ) -> Vec<String> {
+        workspace.update_in(cx, |w, window, cx| w.toggle_command_palette(window, cx));
+        cx.run_until_parked();
+        let palette = workspace
+            .read_with(cx, |w, cx| {
+                w.modal_layer()
+                    .read(cx)
+                    .active::<innerword_app::palette::CommandPalette>()
+            })
+            .expect("the palette is open");
+        let titles = palette.read_with(cx, |palette, _| palette.delegate.listed_titles());
+        workspace.update_in(cx, |w, window, cx| w.dismiss_modal(window, cx));
+        cx.run_until_parked();
+        titles
+    }
+
+    #[gpui::test]
+    fn an_answer_drawn_before_needs_a_second_press(cx: &mut TestAppContext) {
+        let mut desk = desk(cx);
+        let answer = desk.ask(&answer_with(DB_AND_BLUE));
+        desk.cx.simulate_keystrokes("cmd-shift-d");
+        desk.cx.run_until_parked();
+        assert_eq!(desk.pages.adopted().len(), 1);
+        // The key, again: it says so first and draws at the second press.
+        desk.cx.simulate_keystrokes("cmd-3");
+        desk.cx.run_until_parked();
+        desk.cx.simulate_keystrokes("cmd-shift-d");
+        desk.cx.run_until_parked();
+        assert!(desk.has_toast(DRAWN_ALREADY), "{:?}", desk.toasts());
+        assert_eq!(desk.pages.adopted().len(), 1);
+        desk.cx.simulate_keystrokes("cmd-3");
+        desk.cx.run_until_parked();
+        desk.cx.simulate_keystrokes("cmd-shift-d");
+        desk.cx.run_until_parked();
+        assert_eq!(desk.pages.adopted().len(), 2);
+        // Its ids are the whiteboard's now: the new elements were renamed.
+        let ids = desk.stored_ids();
+        assert!(ids.contains(&"db-2".to_string()), "{ids:?}");
+        // The button draws at once.
+        desk.cx.simulate_keystrokes("cmd-3");
+        desk.cx.run_until_parked();
+        click(&format!("assistant-action-draw-{}", answer.0), desk.cx);
+        assert_eq!(desk.pages.adopted().len(), 3);
+        assert_eq!(desk.versions_before_drawings(), 3);
+    }
+
+    #[gpui::test]
+    fn the_palette_shows_before_it_draws(cx: &mut TestAppContext) {
+        let mut desk = desk(cx);
+        let answer = desk.ask(&answer_with(DB_AND_BLUE));
+        // The side chat closed, the keyboard on the canvas.
+        desk.cx.simulate_keystrokes("cmd-3");
+        desk.cx.run_until_parked();
+        desk.workspace.update_in(desk.cx, |w, window, cx| {
+            w.set_assistant_panel_open(false, window, cx)
+        });
+        let board = desk.board;
+        desk.workspace.update_in(desk.cx, |w, window, cx| {
+            w.open_document(board, true, window, cx);
+        });
+        desk.cx.run_until_parked();
+        assert!(desk.on_canvas());
+        let titles = palette_lists(&desk.workspace, desk.cx);
+        assert!(
+            titles.contains(&"Draw answer on whiteboard".to_string()),
+            "{titles:?}"
+        );
+        let run = |desk: &mut Desk<'_>| {
+            let command = desk.cx.update(|_, cx| {
+                innerword_app::commands::all(cx)
+                    .into_iter()
+                    .find(|command| command.title.as_ref() == "New whiteboard from answer")
+                    .expect("the command")
+            });
+            desk.workspace
+                .update_in(desk.cx, |w, window, cx| w.run_command(&command, window, cx));
+            desk.cx.run_until_parked();
+        };
+        run(&mut desk);
+        // The side chat came with the answer marked; nothing was drawn.
+        assert_eq!(
+            desk.workspace
+                .read_with(desk.cx, |w, _| w.right_panel_shown()),
+            Some(innerword_app::workspace::RightPanel::Assistant)
+        );
+        let marked = desk
+            .side()
+            .read_with(desk.cx, |panel, cx| panel.messages().read(cx).selected());
+        assert_eq!(marked, Some(answer));
+        assert!(
+            desk.has_toast(SHOWN_IN_THE_SIDE_CHAT),
+            "{:?}",
+            desk.toasts()
+        );
+        assert!(desk.pages.adopted().is_empty());
+        assert!(desk.on_canvas(), "the keyboard stayed");
+        // The second run draws.
+        run(&mut desk);
+        assert_eq!(desk.pages.adopted().len(), 1);
+        assert!(desk.drawn(answer));
+    }
+
+    #[gpui::test]
+    fn the_line_names_the_whiteboards_elements(cx: &mut TestAppContext) {
+        let mut desk = desk(cx);
+        // A picture beside the API.
+        let png = innerword_image::fixtures::png(40, 30, [10, 120, 200]);
+        desk.pages.paste_picture("pasted", "image/png", &png);
+        let mut elements = api();
+        let mut picture = shape("image", "pic", (400.0, 80.0, 40.0, 30.0), "a1", None).remove(0);
+        picture["fileId"] = json!("pasted");
+        picture["status"] = json!("saved");
+        elements.push(picture);
+        desk.pages.draw(&scene(&elements));
+        settle(desk.cx);
+        let answer = desk.ask(&answer_with(
+            r#"{"update": [{"id": "api", "x": 120}], "remove": ["pic"]}"#,
+        ));
+        let shown = desk.shown(answer);
+        assert!(
+            shown
+                .contains("Drawing: changes the rectangle \u{201c}API\u{201d}; removes a picture."),
+            "{shown}"
+        );
+        // Drawn: the toast counts what changed and what was removed.
+        desk.cx.simulate_keystrokes("cmd-shift-d");
+        desk.cx.run_until_parked();
+        assert!(
+            desk.has_toast(&drew_sentence("Plan", 0, 1, 1)),
+            "{:?}",
+            desk.toasts()
+        );
+        assert!(!desk.stored_ids().contains(&"pic".to_string()));
+    }
+}

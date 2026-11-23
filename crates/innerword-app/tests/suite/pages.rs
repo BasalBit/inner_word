@@ -1425,12 +1425,14 @@ fn the_list_of_shortcuts_has_the_rows_of_pages(cx: &mut TestAppContext) {
         // The file: the entries of before (410) and the whiteboard's
         // commands, each in its key context (the fixed rows are no
         // entries): New whiteboard twice, the menu, Find, six Add, Mermaid
-        // and three of the shape library.
+        // and three of the shape library; and the assistant's drawing (New
+        // whiteboard from answer, in the side chat: the file holds every
+        // command, the assistant's too while it is not shown).
         assert_eq!(
             innerword_app::workspace::shortcuts_file_catalogue(cx)
                 .entries()
                 .len(),
-            410 + 2 + 1 + 1 + 6 + 1 + 3
+            410 + 2 + 1 + 1 + 6 + 1 + 3 + 1
         );
     });
 }

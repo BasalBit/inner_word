@@ -64,18 +64,26 @@
 //! - **The note about where the text goes** is shown in both chats until
 //!   it was acknowledged in either (`assistant.notice_accepted`).
 
-use std::{cell::RefCell, path::PathBuf, rc::Rc, sync::Arc};
+use std::{
+    cell::RefCell,
+    collections::HashMap,
+    path::PathBuf,
+    rc::Rc,
+    sync::{Arc, OnceLock},
+};
 
 use gpui::{
     AnyElement, App, AppContext as _, ClipboardItem, Context, Entity, IntoElement,
-    ParentElement as _, Styled as _, Subscription, Window, div,
+    ParentElement as _, SharedString, Styled as _, Subscription, Window, div,
 };
 use innerword_assistant::{
-    Attachment, Availability, Mode, OpenDocument, OpenKind, Selection, ToolServer,
+    Attachment, Availability, DrawingTarget, ElementName, ElementNames, Mode, OpenDocument,
+    OpenKind, Selection, ToolServer,
 };
 use innerword_assistant_quick::{QuickChat, QuickChatEvent};
 use innerword_assistant_ui::{
     ApplyKind, AssistantPanel, AssistantPanelEvent, AssistantPanelOptions, DocumentRef,
+    SharedElementNames,
 };
 use innerword_editor::Editor;
 use innerword_library::{DocumentId, Library};
@@ -140,6 +148,67 @@ impl BoardFeed {
     }
 }
 
+/// The names of the open whiteboard's elements as the line of an answer's
+/// drawing says them ("the rectangle “API”", "a picture"), over the scene the
+/// app holds: read from it the first time a name is asked (most answers
+/// change and remove nothing, and ask none), once for each scene.
+pub(crate) struct BoardNames {
+    scene: Arc<str>,
+    pictures: super::saver::StoredPictures,
+    names: OnceLock<HashMap<String, ElementName>>,
+}
+
+impl BoardNames {
+    fn new(scene: Arc<str>, pictures: super::saver::StoredPictures) -> Self {
+        Self {
+            scene,
+            pictures,
+            names: OnceLock::new(),
+        }
+    }
+
+    fn names(&self) -> &HashMap<String, ElementName> {
+        self.names.get_or_init(|| {
+            let pictures = &self.pictures;
+            let Ok(scene) =
+                innerword_board::Scene::from_view(&self.scene, &|id| pictures.get(id).cloned())
+                    .or_else(|_| innerword_board::Scene::from_stored(&self.scene))
+                    .map(|parsed| parsed.scene)
+            else {
+                return HashMap::new();
+            };
+            scene
+                .listed()
+                .into_iter()
+                .map(|listed| {
+                    // A frame is named by its name, a shape or an arrow by
+                    // its label, a text by its text.
+                    let text = match listed.r#type.as_str() {
+                        "frame" => scene
+                            .element(&listed.id)
+                            .and_then(|element| element.name())
+                            .map(str::to_string),
+                        _ => listed.label.clone().or_else(|| listed.text.clone()),
+                    };
+                    (
+                        listed.id.clone(),
+                        ElementName {
+                            kind: listed.r#type.clone(),
+                            text: text.filter(|text| !text.trim().is_empty()),
+                        },
+                    )
+                })
+                .collect()
+        })
+    }
+}
+
+impl ElementNames for BoardNames {
+    fn name(&self, id: &str) -> Option<ElementName> {
+        self.names().get(id).cloned()
+    }
+}
+
 /// The assistant as one workspace holds it.
 pub(crate) struct AssistantState {
     /// The engine; `None` in an app without one.
@@ -157,6 +226,17 @@ pub(crate) struct AssistantState {
     /// Whether the keyboard was in the side chat when the last frame was
     /// built ([`Workspace::collect_as_the_side_chat_takes_the_keyboard`]).
     side_had_keyboard: bool,
+    /// What the side chat was last told the open item offers for an
+    /// answer's drawing, and why not.
+    drawing: (DrawingTarget, Option<SharedString>),
+    /// The scene the side chat's names of elements were last made over
+    /// (`None`: no whiteboard is open, and it was told so).
+    names_scene: Option<Arc<str>>,
+    /// The whiteboards made from an answer, with the line their own chat
+    /// says about where they came from, until that chat has a message.
+    pub(super) origins: HashMap<DocumentId, SharedString>,
+    /// What the last answer's drawing did, as a scripted run prints it.
+    pub(super) last_draw_report: Option<String>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -181,6 +261,10 @@ impl AssistantState {
                 open,
                 apply_state: (false, false),
                 side_had_keyboard: false,
+                drawing: (DrawingTarget::None, None),
+                names_scene: None,
+                origins: HashMap::new(),
+                last_draw_report: None,
                 _subscriptions: Vec::new(),
             };
         };
@@ -292,6 +376,10 @@ impl AssistantState {
             open,
             apply_state: (false, false),
             side_had_keyboard: false,
+            drawing: (DrawingTarget::None, None),
+            names_scene: None,
+            origins: HashMap::new(),
+            last_draw_report: None,
             _subscriptions: subscriptions,
         }
     }
@@ -596,17 +684,89 @@ impl Workspace {
             quick.update(cx, |quick, cx| quick.close(window, cx));
         }
         if let Some(side) = self.assistant.side.clone() {
-            let document = open
-                .as_ref()
-                .map(|open| DocumentRef::new(open.id.0, open.title.clone()));
+            // What the item offers for an answer's drawing goes with it, so
+            // that its conversation starts with its own prompt.
+            let drawing = self.drawing_target_now(cx);
+            self.assistant.drawing = drawing.clone();
             let stored = open
                 .as_ref()
                 .map(|open| conversations::load(self.library.read(cx), open.id));
+            // The line about where a whiteboard made from an answer came
+            // from, until its own conversation has a message.
+            if let (Some(open), Some(stored)) = (&open, &stored)
+                && !stored.is_empty()
+            {
+                self.assistant.origins.remove(&open.id);
+            }
+            let document = open.as_ref().map(|open| {
+                let document = DocumentRef::new(open.id.0, open.title.clone())
+                    .with_drawing(drawing.0, drawing.1.clone());
+                match self.assistant.origins.get(&open.id) {
+                    Some(note) => document.with_origin_note(note.clone()),
+                    None => document,
+                }
+            });
             side.update(cx, |side, cx| {
                 side.set_document(document, stored, window, cx)
             });
+            self.give_the_side_chat_element_names(cx);
         }
         self.sync_right_panel(cx);
+    }
+
+    /// What the open item offers for an answer's drawing
+    /// (`docs/assistant-draws-design.md`, 3.1 and 4.4), and why nothing when
+    /// nothing: a whiteboard that can be drawn on is drawn on; a document,
+    /// in an app that can show whiteboards, makes a new one; a whiteboard
+    /// that cannot be drawn on now says why (still loading counts as
+    /// drawable: the press says it is loading), and so does a document
+    /// where whiteboards cannot be shown.
+    pub(crate) fn drawing_target_now(&self, cx: &App) -> (DrawingTarget, Option<SharedString>) {
+        let boards = crate::pages::engine(cx).is_some();
+        if self.open_board_id().is_some() {
+            if boards && self.board_drawable() {
+                return (DrawingTarget::OpenWhiteboard, None);
+            }
+            return (
+                DrawingTarget::None,
+                Some(self.board_not_ready_sentence(cx).into()),
+            );
+        }
+        if self.session.is_some() {
+            if boards {
+                return (DrawingTarget::NewWhiteboard, None);
+            }
+            return (
+                DrawingTarget::None,
+                Some(crate::boards::not_shown_sentence(cx).into()),
+            );
+        }
+        (DrawingTarget::None, None)
+    }
+
+    /// Gives the side chat the names of the open whiteboard's elements, made
+    /// over the scene the app holds now, when that is another scene than the
+    /// one they were made over; `None` over anything else.
+    fn give_the_side_chat_element_names(&mut self, cx: &mut Context<Self>) {
+        let Some(side) = self.assistant.side.clone() else {
+            return;
+        };
+        let scene = self.open_board_id().and_then(|_| self.board_scene_held());
+        let same = match (&self.assistant.names_scene, &scene) {
+            (None, None) => true,
+            (Some(old), Some(new)) => Arc::ptr_eq(old, new),
+            _ => false,
+        };
+        if same {
+            return;
+        }
+        self.assistant.names_scene = scene.clone();
+        let names: Option<SharedElementNames> = scene.map(|scene| {
+            let names: SharedElementNames =
+                Arc::new(BoardNames::new(scene, self.board_stored_pictures()));
+            names
+        });
+        side.update(cx, |side, cx| side.set_element_names(names, cx));
     }
 
     /// Keeps the side chat in step with the text, as a frame is built:
@@ -617,6 +777,17 @@ impl Workspace {
             return;
         };
         self.feed_the_side_chat();
+        // What the open item offers for an answer's drawing, when that
+        // changed while it stays open (the whiteboard's page failed or
+        // stopped, a page engine came or went).
+        let drawing = self.drawing_target_now(cx);
+        if drawing != self.assistant.drawing {
+            self.assistant.drawing = drawing.clone();
+            side.update(cx, |side, cx| {
+                side.set_drawing_target(drawing.0, drawing.1, cx)
+            });
+        }
+        self.give_the_side_chat_element_names(cx);
         // The title of the open item, a text or a page (a page has no
         // caret and no selection: nothing can be put into it).
         let title = self.open_item_id().map(|_| self.display_title());
@@ -751,8 +922,26 @@ impl Workspace {
             } => {
                 if let Some(id) = document {
                     conversations::store(&self.library, DocumentId(*id), transcript, cx);
+                    // A whiteboard made from an answer whose own chat has a
+                    // message: its empty state is gone, and its line too.
+                    if !transcript.is_empty() {
+                        self.assistant.origins.remove(&DocumentId(*id));
+                    }
                 }
             }
+            AssistantPanelEvent::Draw {
+                message,
+                target,
+                drawing,
+            } => match target {
+                DrawingTarget::OpenWhiteboard => {
+                    self.draw_answer_on_board(drawing.clone(), *message, window, cx)
+                }
+                DrawingTarget::NewWhiteboard => {
+                    self.new_board_from_answer(drawing.clone(), *message, window, cx);
+                }
+                DrawingTarget::None => {}
+            },
             AssistantPanelEvent::SelectionChanged(selection) => {
                 self.remember_assistant_selection(Mode::Side, selection, cx)
             }
@@ -1019,6 +1208,45 @@ impl Workspace {
         }
         self.close_modal_first(window, cx);
         self.set_assistant_panel_open(true, window, cx);
+    }
+
+    /// "Draw answer on whiteboard" / "New whiteboard from answer" on its way
+    /// to the side chat (`cmd-shift-d` is the side chat's own, so this is the
+    /// palette): with the side chat shown it goes on and draws. With the
+    /// side chat closed or behind the comments, nothing is drawn that the
+    /// writer has not seen: the side chat comes, the answer the command
+    /// would draw is marked in it, the command stops there and says to run
+    /// it again (`docs/assistant-draws-design.md`, section 7). Without an
+    /// answer with a drawing the side chat comes and the command goes on,
+    /// so that it says why nothing is drawn.
+    pub(crate) fn draw_answer_command(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.assistant.shown || self.open_item_id().is_none() {
+            return;
+        }
+        if self.right.shown == Some(RightPanel::Assistant) {
+            return;
+        }
+        let Some(side) = self.assistant.side.clone() else {
+            return;
+        };
+        self.close_modal_first(window, cx);
+        self.set_assistant_panel_open(true, window, cx);
+        let answer = side.read(cx).draw_target(window, cx);
+        let has_drawing = answer.is_some_and(|answer| {
+            side.read(cx)
+                .transcript()
+                .message(answer)
+                .is_some_and(|message| innerword_assistant::answer_drawing(&message.text).is_some())
+        });
+        let Some(answer) = answer.filter(|_| has_drawing) else {
+            return;
+        };
+        side.update(cx, |side, cx| side.show_answer(answer, cx));
+        cx.stop_propagation();
+        self.show_toast(
+            Toast::new(super::SHOWN_IN_THE_SIDE_CHAT).duration(std::time::Duration::from_secs(5)),
+            cx,
+        );
     }
 
     pub(crate) fn on_ask_assistant(

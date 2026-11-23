@@ -755,6 +755,13 @@ pub struct FakeBoard {
     /// Collects whose answer waits (made when they were asked).
     pub(crate) waiting_collects: Vec<(Done, String)>,
     pub(crate) fail_adopts: Option<FakeFailure>,
+    /// Adopts are answered only at [`crate::pages::FakePages::release_adopts`].
+    pub(crate) adopts_held: bool,
+    /// Adopts whose answer waits, with their argument.
+    pub(crate) waiting_adopts: Vec<(Done, String)>,
+    /// The canvas before each adopt that was one step of the undo, newest
+    /// last: what Excalidraw's undo brings back.
+    pub(crate) undo_stack: Vec<Value>,
     /// Adopts that never answer, kept so that dropping them does not answer.
     pub(crate) unanswered: Vec<Done>,
     pub(crate) adopted: Vec<String>,
@@ -824,6 +831,8 @@ impl FakeBoard {
         self.library_posted = 0;
         self.parked = false;
         self.unposted_files.clear();
+        // A view that loads again has no undo history.
+        self.undo_stack.clear();
     }
 
     /// The canvas's elements that are not deleted.
@@ -900,6 +909,13 @@ impl FakeBoard {
                 .is_some_and(|versions| versions.get(id) == Some(&version))
         };
         let canvas_was_at_base = self.rev == base_rev;
+        if delta
+            .get("undoable")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        {
+            self.undo_stack.push(self.canvas.clone());
+        }
         let mut conflicts = Vec::new();
         let mut set_versions_all_theirs = true;
         let mut elements: Vec<Value> = elements_of(&self.canvas).to_vec();
@@ -995,6 +1011,58 @@ impl FakeBoard {
             self.given(rev);
         }
         Ok(json!({ "rev": rev, "same": same, "conflicts": conflicts }).to_string())
+    }
+
+    /// Excalidraw's undo of `steps` steps the adopts made: the canvas as it
+    /// was before them, each element that differs from it now at a newer
+    /// version (an element the adopts added is deleted). Returns whether
+    /// there was such a step.
+    pub(crate) fn undo(&mut self, steps: u64) -> bool {
+        let mut restored = None;
+        for _ in 0..steps {
+            match self.undo_stack.pop() {
+                Some(canvas) => restored = Some(canvas),
+                None => break,
+            }
+        }
+        let Some(restored) = restored else {
+            return false;
+        };
+        let now: Vec<Value> = elements_of(&self.canvas).to_vec();
+        let mut elements: Vec<Value> = elements_of(&restored).to_vec();
+        let version_of =
+            |element: &Value| element.get("version").and_then(Value::as_i64).unwrap_or(1);
+        for element in &mut elements {
+            let id = element
+                .get("id")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            let current = now
+                .iter()
+                .find(|known| known.get("id").and_then(Value::as_str) == Some(id.as_str()));
+            if let Some(current) = current
+                && current != element
+            {
+                let version = version_of(current).max(version_of(element)) + 1;
+                element["version"] = json!(version);
+            }
+        }
+        for current in &now {
+            let id = current.get("id").and_then(Value::as_str);
+            let kept = elements
+                .iter()
+                .any(|element| element.get("id").and_then(Value::as_str) == id);
+            if !kept {
+                let mut gone = current.clone();
+                gone["isDeleted"] = json!(true);
+                gone["version"] = json!(version_of(current) + 1);
+                elements.push(gone);
+            }
+        }
+        self.canvas["elements"] = Value::Array(elements);
+        self.changed();
+        true
     }
 
     /// `collect`'s answer, and what it gives the app.
@@ -1336,6 +1404,53 @@ impl crate::pages::FakePages {
         self.board.borrow_mut().fail_adopts = Some(how);
     }
 
+    /// From now on the answer of `adopt` waits for
+    /// [`FakePages::release_adopts`].
+    pub fn hold_adopts(&self) {
+        self.board.borrow_mut().adopts_held = true;
+    }
+
+    /// Answers the adopts that wait (each takes its delta in then, as the
+    /// glue does once its pictures and fonts are loaded), and every later one
+    /// at once.
+    pub fn release_adopts(&self) {
+        let waiting = {
+            let mut board = self.board.borrow_mut();
+            board.adopts_held = false;
+            std::mem::take(&mut board.waiting_adopts)
+        };
+        for (done, argument) in waiting {
+            self.answer_adopt(&argument, done);
+        }
+    }
+
+    /// The adopt of `argument` taken into the canvas and answered; a merge
+    /// that is not the stored scene is posted as a change of the writer's.
+    fn answer_adopt(&self, argument: &str, done: Done) {
+        let answer = self.board.borrow_mut().adopt(argument);
+        let same = answer
+            .as_ref()
+            .ok()
+            .and_then(|text| serde_json::from_str::<Value>(text).ok())
+            .and_then(|value| value.get("same").and_then(Value::as_bool))
+            .unwrap_or(true);
+        done(answer);
+        if !same {
+            // The merge is posted as a change of the writer's.
+            let (rev, text, status) = {
+                let mut board = self.board.borrow_mut();
+                let rev = board.rev;
+                board.given(rev);
+                (rev, board.scene_text(), board.status.clone())
+            };
+            self.post_board(Message::Scene {
+                rev,
+                scene: raw(text),
+            });
+            self.post_board(Message::Status(status));
+        }
+    }
+
     /// How many collects were asked.
     pub fn collects_asked(&self) -> usize {
         self.board.borrow().collects
@@ -1533,41 +1648,25 @@ impl crate::pages::FakeView {
                 done(Ok(answer));
             }
             "adopt" => {
-                let failure = {
+                let (failure, held) = {
                     let mut board = pages.board.borrow_mut();
                     board.calls.push("adopt".to_string());
                     board.adopted.push(argument.to_string());
-                    board.fail_adopts.take()
+                    (board.fail_adopts.take(), board.adopts_held)
                 };
                 match failure {
                     Some(FakeFailure::Throws) => done(Err("the merge threw".to_string())),
                     Some(FakeFailure::NeverAnswers) => {
                         pages.board.borrow_mut().unanswered.push(Box::new(done));
                     }
-                    None => {
-                        let answer = pages.board.borrow_mut().adopt(argument);
-                        let same = answer
-                            .as_ref()
-                            .ok()
-                            .and_then(|text| serde_json::from_str::<Value>(text).ok())
-                            .and_then(|value| value.get("same").and_then(Value::as_bool))
-                            .unwrap_or(true);
-                        done(answer);
-                        if !same {
-                            // The merge is posted as a change of the writer's.
-                            let (rev, text, status) = {
-                                let mut board = pages.board.borrow_mut();
-                                let rev = board.rev;
-                                board.given(rev);
-                                (rev, board.scene_text(), board.status.clone())
-                            };
-                            pages.post_board(Message::Scene {
-                                rev,
-                                scene: raw(text),
-                            });
-                            pages.post_board(Message::Status(status));
-                        }
+                    None if held => {
+                        pages
+                            .board
+                            .borrow_mut()
+                            .waiting_adopts
+                            .push((Box::new(done), argument.to_string()));
                     }
+                    None => pages.answer_adopt(argument, Box::new(done)),
                 }
             }
             "files" => {
@@ -1613,12 +1712,18 @@ impl crate::pages::FakeView {
                     .get("steps")
                     .and_then(Value::as_u64)
                     .unwrap_or(1);
-                let rev = {
+                let (rev, undone) = {
                     let mut board = pages.board.borrow_mut();
                     board.calls.push(format!("{name} {steps}"));
-                    board.rev
+                    // An undo of what adopts made takes the canvas back; the
+                    // page posts it as a change of the writer's.
+                    let undone = name == "undo" && board.undo(steps);
+                    (board.rev, undone)
                 };
                 done(Ok(json!({ "rev": rev }).to_string()));
+                if undone {
+                    pages.post_board_scene_now();
+                }
             }
             "zoom" => {
                 let words = if argument_value.get("in").is_some() {

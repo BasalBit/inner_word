@@ -903,6 +903,24 @@ impl Workspace {
         }
     }
 
+    /// The writer changed whiteboard `board` through the app (an answer's
+    /// drawing applied, `docs/assistant-draws-design.md` 5.1): the last run
+    /// of agents' changes on it no longer offers Undo, and cannot get one
+    /// back (its later changes join a run the writer drew into, as a gesture
+    /// between two of them does). The note, when it is up, is shown again.
+    pub(crate) fn writer_changed_the_board(&mut self, board: DocumentId, cx: &mut Context<Self>) {
+        let Some(last) = self.live.last.as_mut() else {
+            return;
+        };
+        if !matches!(last.undo, Some(Undo::Board { board: of, .. }) if of == board) {
+            return;
+        }
+        last.undo = None;
+        if self.agent_note_is_up(cx) {
+            self.show_agent_note(cx);
+        }
+    }
+
     /// The open whiteboard's canvas moved on (a post, a status): once the
     /// writer has drawn after the last adopt of an agent's change, the note
     /// no longer offers to undo it (the undo would take out the writer's

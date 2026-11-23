@@ -76,6 +76,7 @@
 //! modals get their keys directly.
 
 mod assistant;
+mod assistant_draw;
 pub(crate) mod board;
 mod board_pdf;
 mod fonts;
@@ -127,6 +128,13 @@ use crate::{
 };
 
 pub use assistant::{library_attachments, library_tool_server};
+pub use assistant_draw::{
+    ASK_AGAIN, ASSISTANT_DRAWING_LABEL, BOARD_BUSY, CHANGED_MEANWHILE, CHANGES_A_WHITEBOARD,
+    CHANGES_NOTHING, CLOSED_BEFORE_DRAWN, KEPT_AS_A_VERSION, LOADED_AGAIN, NO_VERSION,
+    NOT_SAVED_FIRST, NOT_UNDONE, ONLY_GONE, OPEN_A_DOCUMENT, OPEN_A_WHITEBOARD, PUT_BESIDE,
+    PUT_IN_VIEW, SHOWN_IN_THE_SIDE_CHAT, drew_sentence, gone_sentence, made_sentence,
+    new_board_names_missing, origin_note,
+};
 pub(crate) use board::post_board_message;
 pub use board::{
     AddArrow, AddDiamond, AddEllipse, AddFrame, AddRectangle, AddText, AddToShapeLibrary,
@@ -1132,6 +1140,14 @@ impl Workspace {
         if crate::pages::engine(cx).is_none() {
             left_out.push(gpui::Action::name(&ImportPage));
             left_out.push(gpui::Action::name(&NewBoard));
+        }
+        // An answer's drawing, only where one can be applied: not over a
+        // page, with nothing open, without a page engine, or on a
+        // whiteboard that cannot be drawn on.
+        if self.drawing_target_now(cx).0 == innerword_assistant::DrawingTarget::None {
+            left_out.push(gpui::Action::name(
+                &innerword_assistant_ui::actions::DrawAnswer,
+            ));
         }
         let page_open = self.page.is_some();
         let renamed = move |command: &mut innerword_ui::CommandDescriptor| {

@@ -78,7 +78,7 @@
 //! `invalid`, "the request cannot be read"), the kind in the wire form of
 //! [`Error::WrongKind`] (what the item is and what the operation wanted, where version 3
 //! said only whether it is a page), and the pictures a whiteboard's request carries
-//! (`pictures`, [`BoardPicture`](crate::BoardPicture): the picture files its `image`
+//! (`pictures`, [`BoardPicture`]: the picture files its `image`
 //! skeletons name, read and made by the tool, base64 in the line, 32 MB a request at
 //! most), which the listener stores before it queues the request, as it stores a page's
 //! files ([`store_page_files`]). So a 0.10 app and a 0.11 tool refuse each other whole.

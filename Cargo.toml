@@ -49,6 +49,9 @@ innerword-page = { path = "crates/innerword-page" }
 # Pages in WebKit: the view in the window, the offline check of a page, a page printed
 # to a PDF (no GPUI; Objective-C through `objc`).
 innerword-web = { path = "crates/innerword-web" }
+# Whiteboards: the stored scene of a whiteboard (Excalidraw's form), agents' skeletons made
+# into Excalidraw's elements, the delta and the merge (no GPUI, no WebKit, nothing of ours).
+innerword-board = { path = "crates/innerword-board" }
 
 # Shared third-party crates. Crate-specific dependencies are declared in the
 # crate's own Cargo.toml, not here.

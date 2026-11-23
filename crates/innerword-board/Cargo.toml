@@ -1,0 +1,23 @@
+[package]
+name = "innerword-board"
+description = "Whiteboards for Inner Word: the stored scene of a whiteboard (Excalidraw's own form), its text, listing and bounds, agents' skeletons made into Excalidraw elements, changes and removals by id, the delta and the merge by the base rule, the shape library."
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+# No GPUI, no WebKit, no IO but `export_dir`: a pure crate (`CARGO_TARGET_DIR=target-pure`),
+# used by the command layer for agents and by the app. It depends on nothing of ours.
+[lib]
+doctest = false
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+# Derived ids, seeds and nonces (HashedMaking): SHA-256 of the request and a counter.
+sha2 = "0.10"
+
+[dev-dependencies]
+tempfile.workspace = true

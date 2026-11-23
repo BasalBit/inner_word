@@ -5,6 +5,7 @@
 import { convertToExcalidrawElements, exportToSvg, restore, restoreElements } from "@excalidraw/excalidraw";
 import { defineCalls } from "./calls.js";
 import { loadFontsFor } from "./fonts.js";
+import { withKeptLinks } from "./links.js";
 import { loadPictures } from "./pictures.js";
 import { NEVER_KEPT, markReady } from "./scene.js";
 
@@ -34,7 +35,9 @@ const exportCalls = {
    * pixels, which a PDF makes points). */
   async exportLayout({ padding = 32, maxSide = 14400 }) {
     const scene = await storedScene();
-    const elements = (Array.isArray(scene.elements) ? scene.elements : []).filter((e) => e && !e.isDeleted && !NEVER_KEPT.has(e.type));
+    const elements = withKeptLinks(
+      (Array.isArray(scene.elements) ? scene.elements : []).filter((e) => e && !e.isDeleted && !NEVER_KEPT.has(e.type)),
+    );
     if (!elements.length) throw new Error("the whiteboard is empty: there is nothing to export");
     const files = await loadPictures(scene.files);
     await loadFontsFor(elements);

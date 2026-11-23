@@ -31,6 +31,9 @@ export const board = {
   versionsAt: new Map(),
   /** Excalidraw file ids the app has the bytes of (stored, posted, or given by the app). */
   filesKnown: new Set(),
+  /** Excalidraw file ids whose `file` message would be longer than the view takes (a
+   * picture pasted as Excalidraw JSON from elsewhere): never posted, missing to `files`. */
+  filesTooLarge: new Set(),
   pointerDown: false,
   editing: false,
   composing: false,

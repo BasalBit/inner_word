@@ -4,7 +4,7 @@
 // undo or redo, a deletion, a call that inserts); 150 ms after the last change made with
 // another key (holding an arrow key to nudge posts once); at most once a second while a text
 // is edited; never while the pointer is down; at once when the page is hidden or goes.
-import { MAX_VIEW_SCENE_BYTES, fitsIn, post, postSceneText } from "./bridge.js";
+import { MAX_VIEW_SCENE_BYTES, fitsIn, post, postFile, postSceneText } from "./bridge.js";
 import { board, currentRev, namedFileIds, recordVersions, sceneJson, selectedIds } from "./scene.js";
 
 const KEY_QUIET_MS = 150;
@@ -33,18 +33,24 @@ function clearTimers() {
 }
 
 /** Posts a `file` message for each picture the scene names that the app does not have and
- * the canvas has the bytes of; the ids it could not post. */
+ * the canvas has the bytes of; the ids it could not post. A picture whose message would be
+ * longer than the view takes is not posted (`filesTooLarge`), and not tried again. */
 export function postNewFiles(elements) {
   const files = board.api.getFiles();
   const missing = [];
   for (const id of namedFileIds(elements)) {
     if (board.filesKnown.has(id)) continue;
     const file = files[id];
-    if (!file?.dataURL) {
+    if (!file?.dataURL || board.filesTooLarge.has(id)) {
       missing.push(id);
       continue;
     }
-    if (post("file", { id, mimeType: file.mimeType, dataURL: file.dataURL })) board.filesKnown.add(id);
+    const posted = postFile(id, file.mimeType, file.dataURL);
+    if (posted === "posted") board.filesKnown.add(id);
+    else {
+      if (posted === "tooLarge") board.filesTooLarge.add(id);
+      missing.push(id);
+    }
   }
   return missing;
 }

@@ -17,7 +17,7 @@ import { boardCalls, defineCalls } from "./calls.js";
 import { loadFontsFor } from "./fonts.js";
 import { installKeys, watchTheInterface } from "./keys.js";
 import { itemsOfStored, libraryChanged, postLibrary, servedLibrary } from "./library.js";
-import { onLinkOpen } from "./links.js";
+import { onLinkOpen, withKeptLinks } from "./links.js";
 import { loadPictures } from "./pictures.js";
 import { NEVER_KEPT, board, currentRev, markReady, recordVersions, withoutNeverKept } from "./scene.js";
 
@@ -49,7 +49,8 @@ async function generateIdForFile(file) {
 
 function onPaste(data) {
   // Web embeds never reach the canvas from the clipboard (Excalidraw JSON any site can put there).
-  if (Array.isArray(data?.elements)) data.elements = data.elements.filter((e) => !NEVER_KEPT.has(e?.type));
+  // Nor a link the whiteboard never keeps (a `file:` or an app's own address).
+  if (Array.isArray(data?.elements)) data.elements = withKeptLinks(data.elements.filter((e) => !NEVER_KEPT.has(e?.type)));
   return true;
 }
 

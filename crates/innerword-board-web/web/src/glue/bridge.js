@@ -67,6 +67,21 @@ export function post(kind, fields = {}) {
   return postText(wellFormed(JSON.stringify({ v: 1, kind, ...fields })));
 }
 
+/**
+ * Posts a picture the app has not had (`file`): "posted", "failed" (no app), or "tooLarge"
+ * when the message would be longer than the view takes. The view drops such a message
+ * without a word (it only counts it), so it is never posted: the caller keeps the picture
+ * as one the app cannot be posted, and the `files` call answers it as missing, so that no
+ * save waits for it. `collect` is an answer, not a message, and brings such a picture whole.
+ */
+export function postFile(id, mimeType, dataURL) {
+  if (typeof dataURL !== "string") return "failed";
+  if (dataURL.length > MAX_MESSAGE_BYTES) return "tooLarge";
+  const text = wellFormed(JSON.stringify({ v: 1, kind: "file", id, mimeType, dataURL }));
+  if (!fitsIn(text, MAX_MESSAGE_BYTES)) return "tooLarge";
+  return postText(text) ? "posted" : "failed";
+}
+
 /** Posts a scene (its JSON, well formed already) with its rev: one `scene` message, or
  * `scenePart` messages when it is longer than one may be. */
 export function postSceneText(rev, json) {

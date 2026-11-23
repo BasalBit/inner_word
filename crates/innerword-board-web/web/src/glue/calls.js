@@ -5,7 +5,7 @@
 // the bundle's run in this world.
 import { CaptureUpdateAction, convertToExcalidrawElements } from "@excalidraw/excalidraw";
 import { markImmediate, postNow, sendStatus, statusNow } from "./autosave.js";
-import { post, postSceneText, wellFormed, fitsIn, PART_BYTES } from "./bridge.js";
+import { postFile, postSceneText, wellFormed, fitsIn, PART_BYTES } from "./bridge.js";
 import { adopt, insertElements } from "./edit.js";
 import { KEYS_THE_WINDOW_TAKES } from "./keys.js";
 import { collectLibrary, libraryCall } from "./library.js";
@@ -129,17 +129,21 @@ export const boardCalls = {
     return `{"rev":${rev},"scene":${scene},"files":${wellFormed(JSON.stringify(files))},"library":${library},"status":${wellFormed(JSON.stringify(status))}}`;
   },
 
-  /** Posts a `file` message for each id the canvas has the bytes of. */
+  /** Posts a `file` message for each id the canvas has the bytes of; the others are
+   * missing, and so is one whose message would be longer than the view takes (it would be
+   * dropped, and the app would wait for it with every save). */
   files({ ids }) {
     const all = board.api.getFiles();
     const posted = [];
     const missing = [];
     for (const id of ids ?? []) {
       const file = all[id];
-      if (file?.dataURL && post("file", { id, mimeType: file.mimeType, dataURL: file.dataURL })) {
+      const result = file?.dataURL && !board.filesTooLarge.has(id) ? postFile(id, file.mimeType, file.dataURL) : "failed";
+      if (result === "posted") {
         board.filesKnown.add(id);
         posted.push(id);
       } else {
+        if (result === "tooLarge") board.filesTooLarge.add(id);
         missing.push(id);
       }
     }

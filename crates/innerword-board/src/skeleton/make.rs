@@ -288,26 +288,59 @@ pub(crate) fn place_label(container: &Element, label: &mut Element) {
     }
 }
 
-/// A free text measured again after its text or font changed (`getAdjustedDimensions`
-/// for an unrotated text): the side its alignment names stays where it was.
+/// A free text measured again after its text or font changed (`refreshTextDimensions` and
+/// `getAdjustedDimensions`). A text the writer made narrower than its text (`autoResize:
+/// false`, set once a text box is dragged narrower) keeps its width and is wrapped to it
+/// again; any other is as wide as its longest line. The side its alignment names stays
+/// where it was, on a rotated text too (`adjustXYWithRotation`); a centred and middle text
+/// that resizes itself stays centred on its middle.
 pub(crate) fn remeasure_free_text(element: &mut Element) {
     let style = text_style_of(element);
-    let text = original_text(element);
-    let (width, height) = metrics::text_size(&text, style.font_family, style.font_size);
+    let original = original_text(element);
+    let auto_resize = element
+        .json()
+        .get("autoResize")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
     let (old_w, old_h) = (element.width(), element.height());
-    let dx = match style.text_align.as_str() {
-        "center" => (old_w - width) / 2.0,
-        "right" => old_w - width,
-        _ => 0.0,
-    };
-    let dy = if style.vertical_align == "middle" && style.text_align == "center" {
-        (old_h - height) / 2.0
+    let text = if auto_resize {
+        original
     } else {
-        0.0
+        metrics::wrap(&original, style.font_family, style.font_size, old_w)
     };
+    let (measured, height) = metrics::text_size(&text, style.font_family, style.font_size);
+    let width = if auto_resize { measured } else { old_w };
+    let (mut x, mut y) = (element.x(), element.y());
+    let align = style.text_align.as_str();
+    if auto_resize && align == "center" && style.vertical_align == "middle" {
+        // Excalidraw measures the text before the change; its stored size is that.
+        x -= (width - old_w) / 2.0;
+        y -= (height - old_h) / 2.0;
+    } else {
+        // The top left corner stays, and the box is shrunk or grown by half the change on
+        // each side (deltaX1 and deltaY1 are 0), then put back by the sides that stay.
+        let (half_w, half_h) = ((old_w - width) / 2.0, (old_h - height) / 2.0);
+        let (sin, cos) = element.angle().sin_cos();
+        let (east, west) = (
+            align == "center" || align == "left",
+            align == "center" || align == "right",
+        );
+        if east && west {
+            x += half_w;
+        } else if east {
+            x += half_w * (1.0 - cos);
+            y -= half_w * sin;
+        } else if west {
+            x += half_w * (1.0 + cos);
+            y += half_w * sin;
+        }
+        // The south side moves: the top stays.
+        x += half_h * sin;
+        y += half_h * (1.0 - cos);
+    }
     element.set("text", Value::String(text));
-    element.set_f64("x", element.x() + dx);
-    element.set_f64("y", element.y() + dy);
+    element.set_f64("x", x);
+    element.set_f64("y", y);
     element.set_f64("width", width);
     element.set_f64("height", height);
 }
@@ -399,6 +432,13 @@ pub(crate) fn is_bindable(element: &Element) -> bool {
     }
 }
 
+/// Whether an arrow is an elbow arrow (`elbowed: true`): Excalidraw routes it around the
+/// shapes it joins and binds it by `fixedPoint`; this crate never routes or rebinds one.
+pub(crate) fn is_elbowed(element: &Element) -> bool {
+    element.kind() == ElementType::Arrow
+        && element.json().get("elbowed").and_then(Value::as_bool) == Some(true)
+}
+
 /// How an arrow's ends are placed on the elements they are bound to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Snap {
@@ -412,7 +452,8 @@ pub(crate) enum Snap {
 
 /// Puts the arrow's bound ends on the outlines of `start` and `end` and writes the
 /// bindings (`startBinding`, `endBinding` with focus and gap). An end whose line misses
-/// its element is aimed at the element's centre. Returns false when the ends cannot be
+/// its element is aimed at the element's centre. Never for an elbow arrow ([`is_elbowed`]):
+/// its route is Excalidraw's and its bindings carry a `fixedPoint`. Returns false when the ends cannot be
 /// put anywhere sensible (the two elements overlap so that no line leaves one for the
 /// other); the arrow is then left where it was, bound all the same.
 pub(crate) fn snap_arrow(
@@ -506,11 +547,13 @@ pub(crate) fn snap_arrow(
     // The bindings, measured on the outline points (Excalidraw's focus and gap).
     if let (Some(element), Some(shape)) = (start, &start_shape) {
         let focus = geometry::focus(shape, points[1], points[0]);
-        arrow.set("startBinding", binding(element.id(), focus));
+        let value = binding(arrow.json().get("startBinding"), element.id(), focus);
+        arrow.set("startBinding", value);
     }
     if let (Some(element), Some(shape)) = (end, &end_shape) {
         let focus = geometry::focus(shape, points[last - 1], points[last]);
-        arrow.set("endBinding", binding(element.id(), focus));
+        let value = binding(arrow.json().get("endBinding"), element.id(), focus);
+        arrow.set("endBinding", value);
     }
     if placed {
         match snap {
@@ -594,8 +637,17 @@ fn half_pixel_in(points: &mut [Point]) {
     }
 }
 
-fn binding(element_id: &str, focus: f64) -> Value {
-    let mut map = Map::new();
+/// A binding to `element_id` with this focus and Excalidraw's gap; the fields of the binding
+/// it replaces are kept when it named the same element.
+fn binding(previous: Option<&Value>, element_id: &str, focus: f64) -> Value {
+    let mut map = match previous {
+        Some(Value::Object(old))
+            if old.get("elementId").and_then(Value::as_str) == Some(element_id) =>
+        {
+            old.clone()
+        }
+        _ => Map::new(),
+    };
     map.insert("elementId".into(), Value::String(element_id.to_string()));
     map.insert("focus".into(), num(focus));
     map.insert("gap".into(), num(BINDING_GAP));

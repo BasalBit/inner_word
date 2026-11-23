@@ -578,10 +578,6 @@ impl Scene {
         self.elements.iter().find(|e| e.id() == id)
     }
 
-    pub(crate) fn element_mut(&mut self, id: &str) -> Option<&mut Element> {
-        self.elements.iter_mut().find(|e| e.id() == id)
-    }
-
     /// The pictures, by Excalidraw's file id.
     pub fn files(&self) -> &BTreeMap<String, FileEntry> {
         &self.files

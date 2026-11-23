@@ -231,3 +231,48 @@ fn the_merge_is_in_index_order_and_keeps_the_pictures_of_both() {
         ["ft", "fw"]
     );
 }
+
+/// A scene of one rectangle with these canvas settings.
+fn canvas(background: &str, grid_mode: bool) -> Scene {
+    let text = json!({
+        "type": "excalidraw", "version": 2,
+        "elements": [{"id": "a", "type": "rectangle", "x": 0, "y": 0, "width": 10,
+                      "height": 10, "version": 1, "versionNonce": 7, "index": "a0"}],
+        "appState": {"viewBackgroundColor": background, "gridModeEnabled": grid_mode},
+        "files": {}
+    })
+    .to_string();
+    Scene::from_stored(&text).unwrap().scene
+}
+
+fn settings(scene: &Scene) -> (String, bool) {
+    let state = scene.app_state();
+    (
+        state["viewBackgroundColor"].as_str().unwrap().to_string(),
+        state["gridModeEnabled"].as_bool().unwrap(),
+    )
+}
+
+#[test]
+fn the_canvas_is_theirs_only_where_the_writer_left_it_as_it_was() {
+    let base = canvas("#ffffff", false);
+    let theirs = canvas("#fff9db", true);
+    let writer = canvas("#e7f5ff", false);
+    // Theirs changed it and the writer did not: theirs.
+    let merged = merge(&base, &base, &theirs);
+    assert_eq!(settings(&merged.scene), ("#fff9db".to_string(), true));
+    assert!(merged.conflicts.is_empty());
+    // Both changed it: the writer's, the whole of it (their grid is not taken either).
+    let merged = merge(&base, &writer, &theirs);
+    assert_eq!(settings(&merged.scene), ("#e7f5ff".to_string(), false));
+    assert!(merged.conflicts.is_empty(), "the canvas is no element");
+    // Only the writer changed it: the writer's.
+    let merged = merge(&base, &writer, &base);
+    assert_eq!(settings(&merged.scene), ("#e7f5ff".to_string(), false));
+    // Nobody did: as it was.
+    let merged = merge(&base, &base, &base);
+    assert_eq!(settings(&merged.scene), ("#ffffff".to_string(), false));
+    // Both made the same change: that.
+    let merged = merge(&base, &theirs, &theirs);
+    assert_eq!(settings(&merged.scene), ("#fff9db".to_string(), true));
+}

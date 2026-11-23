@@ -243,3 +243,53 @@ fn valid(kind: &str, rng: &mut Lcg, existing: &[String]) -> Map<String, Value> {
     }
     map
 }
+
+/// A request with two wrong fields is refused for the same field whichever order its keys
+/// were written in: serde_json keeps that order where a crate of the build turns on
+/// `preserve_order` (gpui does, so the app reads requests that way) and sorts the keys
+/// otherwise (the tool), and the two must say the same.
+#[test]
+fn of_two_wrong_fields_the_same_one_is_named_in_every_build() {
+    let field_of = |error: innerword_board::BoardError| match error {
+        innerword_board::BoardError::Invalid { field, .. } => field.unwrap_or_default(),
+        other => panic!("{other:?}"),
+    };
+    let added = |json: &str| {
+        let skeletons: Vec<Skeleton> = serde_json::from_str(json).unwrap();
+        let mut scene = Scene::empty();
+        field_of(
+            add(
+                &mut scene,
+                &skeletons,
+                &Default::default(),
+                &mut HashedMaking::new(&[b"order"], 1),
+            )
+            .unwrap_err(),
+        )
+    };
+    let a = added(r#"[{"type":"rectangle","x":0,"y":0,"zigzag":1,"crop":null}]"#);
+    let b = added(r#"[{"crop":null,"zigzag":1,"y":0,"x":0,"type":"rectangle"}]"#);
+    assert_eq!((a.as_str(), b.as_str()), ("crop", "crop"));
+    let a = added(r#"[{"type":"rectangle","x":0,"y":0,"label":{"text":"x","zz":1,"bold":true}}]"#);
+    let b = added(r#"[{"type":"rectangle","x":0,"y":0,"label":{"bold":true,"zz":1,"text":"x"}}]"#);
+    assert_eq!(a, b);
+
+    let mut scene = Scene::empty();
+    let skeletons: Vec<Skeleton> =
+        serde_json::from_str(r#"[{"type":"rectangle","id":"r","x":0,"y":0}]"#).unwrap();
+    add(
+        &mut scene,
+        &skeletons,
+        &Default::default(),
+        &mut HashedMaking::new(&[b"order"], 1),
+    )
+    .unwrap();
+    let updated = |json: &str| {
+        let changes: Vec<ElementChange> = serde_json::from_str(json).unwrap();
+        let mut copy = scene.clone();
+        field_of(update(&mut copy, &changes, &mut HashedMaking::new(&[b"order"], 2)).unwrap_err())
+    };
+    let a = updated(r#"[{"id":"r","zeta":1,"customData":{}}]"#);
+    let b = updated(r#"[{"customData":{},"zeta":1,"id":"r"}]"#);
+    assert_eq!((a.as_str(), b.as_str()), ("customData", "customData"));
+}

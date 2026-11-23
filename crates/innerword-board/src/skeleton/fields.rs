@@ -66,6 +66,17 @@ pub(crate) const NEVER_FROM_AGENTS: [(&str, &str); 7] = [
     ("version", "an element's version is the whiteboard's"),
 ];
 
+/// The keys of an object in one fixed order (sorted), for the checks that stop at the first
+/// wrong field: serde_json keeps the order a request was written in where a crate of the
+/// build turns on `preserve_order` (gpui does, in `target/`) and sorts the keys otherwise,
+/// so a request with two wrong fields would be refused for one field by the app and for
+/// another by the tool.
+pub(crate) fn sorted_keys(map: &Map<String, Value>) -> Vec<&String> {
+    let mut keys: Vec<&String> = map.keys().collect();
+    keys.sort();
+    keys
+}
+
 /// Where a field was read: the element's index in the request.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct At(pub Option<usize>);

@@ -1,11 +1,11 @@
 //! `remove`: elements removed by id, with their labels (section 7.3).
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 
 use serde_json::Value;
 
 use super::make::{bump, label_id, remove_bound};
-use super::{BoardError, Removed, known_ids};
+use super::{BoardError, Positions, Removed, known_ids};
 use crate::limits::MAX_REQUEST_ELEMENTS;
 use crate::{ElementType, Making, Scene};
 
@@ -20,8 +20,9 @@ pub(super) fn remove(
             limit: MAX_REQUEST_ELEMENTS,
         });
     }
+    let at = Positions::of(scene);
     for id in ids {
-        if scene.element(id).is_none() {
+        if at.get(scene, id).is_none() {
             return Err(BoardError::NotFound {
                 id: id.clone(),
                 known: known_ids(scene, id),
@@ -30,16 +31,16 @@ pub(super) fn remove(
     }
     // What goes: each id, and the label of each that is not a label.
     let mut going: Vec<String> = Vec::new();
+    let mut listed: HashSet<String> = HashSet::new();
     for id in ids {
-        if !going.contains(id) {
+        if listed.insert(id.clone()) {
             going.push(id.clone());
         }
-        let element = scene.element(id).cloned();
-        if let Some(element) = element
+        if let Some(element) = at.get(scene, id)
             && element.container_id().is_none()
-            && let Some(label) = label_id(&element)
-            && scene.element(&label).is_some()
-            && !going.contains(&label)
+            && let Some(label) = label_id(element)
+            && at.get(scene, &label).is_some()
+            && listed.insert(label.clone())
         {
             going.push(label);
         }
@@ -96,7 +97,7 @@ pub(super) fn remove(
         }
     }
     for id in &changed {
-        if let Some(element) = scene.element_mut(id) {
+        if let Some(element) = at.get_mut(scene, id) {
             bump(element, making);
         }
     }

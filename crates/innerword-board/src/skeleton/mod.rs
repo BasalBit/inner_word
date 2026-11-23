@@ -7,13 +7,13 @@ pub(crate) mod make;
 mod remove;
 mod update;
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use crate::limits::{MAX_ELEMENTS, MAX_SCENE_BYTES};
-use crate::{FileHex, Making, Scene};
+use crate::{Element, FileHex, Making, Scene};
 
 /// An element as an agent writes it: a subset of Excalidraw's `ExcalidrawElementSkeleton`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -180,6 +180,14 @@ pub fn picture_paths(skeletons: &[Skeleton]) -> Vec<String> {
 
 /// Changes elements by id (section 7.3), with what follows them. On an error the scene is
 /// as it was.
+///
+/// An elbow arrow (`elbowed: true`, which only the writer draws) keeps its route and its
+/// bindings with their `fixedPoint` (section 7.1): its `start`, `end`, `points`, `width`,
+/// `height` and `angle` are refused, and so are `x`, `y`, `dx` and `dy` while it is bound
+/// (Excalidraw does not drag one alone either). When what it is bound to moves, it stays
+/// where it is, bound, and Excalidraw routes it again when the writer next moves those
+/// elements; when everything it is bound to moved by one distance in a change (a frame
+/// that holds both its ends), it moves whole with them.
 pub fn update(
     scene: &mut Scene,
     changes: &[ElementChange],
@@ -203,6 +211,42 @@ pub fn remove(
     let removed = remove::remove(&mut work, ids, making)?;
     *scene = work;
     Ok(removed)
+}
+
+/// Where each element of a scene stands, by id: made once per operation, so that a request
+/// of 2,000 elements on a board of 20,000 does not walk the board for each element it
+/// names (`Scene::element` does). An operation only replaces elements in place and appends;
+/// [`Positions::push`] appends.
+pub(crate) struct Positions(HashMap<String, usize>);
+
+impl Positions {
+    pub(crate) fn of(scene: &Scene) -> Positions {
+        let mut map = HashMap::with_capacity(scene.elements.len());
+        for (n, element) in scene.elements.iter().enumerate() {
+            // The first of two with one id, as `Scene::element` finds it.
+            map.entry(element.id().to_string()).or_insert(n);
+        }
+        Positions(map)
+    }
+
+    pub(crate) fn index(&self, id: &str) -> Option<usize> {
+        self.0.get(id).copied()
+    }
+
+    pub(crate) fn get<'s>(&self, scene: &'s Scene, id: &str) -> Option<&'s Element> {
+        scene.elements.get(self.index(id)?)
+    }
+
+    pub(crate) fn get_mut<'s>(&self, scene: &'s mut Scene, id: &str) -> Option<&'s mut Element> {
+        scene.elements.get_mut(self.index(id)?)
+    }
+
+    pub(crate) fn push(&mut self, scene: &mut Scene, element: Element) {
+        self.0
+            .entry(element.id().to_string())
+            .or_insert(scene.elements.len());
+        scene.elements.push(element);
+    }
 }
 
 /// A new id: from `making`, skipping any that is taken.

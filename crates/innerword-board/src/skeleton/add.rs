@@ -6,13 +6,15 @@ use serde_json::{Map, Value};
 
 use super::fields::{
     ARROWHEADS, At, FILL_FIELDS, FILL_STYLES, NEVER_FROM_AGENTS, STROKE_STYLES, STYLE_FIELDS,
-    normalize_angle,
+    normalize_angle, sorted_keys,
 };
 use super::make::{
     self, DEFAULT_DIMENSION, FRAME_PADDING, Snap, TextStyle, add_bound, bump,
     invisibly_small_points, is_bindable,
 };
-use super::{Added, AddedElement, BoardError, Pictures, Skeleton, check_limits, known_ids, new_id};
+use super::{
+    Added, AddedElement, BoardError, Pictures, Positions, Skeleton, check_limits, known_ids, new_id,
+};
 use crate::geometry::element_bounds;
 use crate::limits::{MAX_REQUEST_ELEMENTS, PICTURE_MAX_SIDE};
 use crate::metrics;
@@ -87,6 +89,8 @@ pub(super) fn add(
     }
     // The ids given: unique, and none already on the whiteboard.
     let mut taken: BTreeSet<String> = scene.elements.iter().map(|e| e.id().to_string()).collect();
+    // Where each element of the board is: nothing is appended before the end.
+    let at = Positions::of(scene);
     let mut given: BTreeSet<String> = BTreeSet::new();
     for (n, skeleton) in skeletons.iter().enumerate() {
         if let Some(value) = skeleton.0.get("id") {
@@ -128,7 +132,17 @@ pub(super) fn add(
     for p in &planned {
         for (field, id) in [("start", &p.start), ("end", &p.end)] {
             if let Some(id) = id {
-                check_named(p.at, field, id, &p.id, scene, &planned, &request_ids, true)?;
+                check_named(
+                    p.at,
+                    field,
+                    id,
+                    &p.id,
+                    scene,
+                    &at,
+                    &planned,
+                    &request_ids,
+                    true,
+                )?;
             }
         }
         if let Some(children) = &p.children {
@@ -139,6 +153,7 @@ pub(super) fn add(
                     id,
                     &p.id,
                     scene,
+                    &at,
                     &planned,
                     &request_ids,
                     false,
@@ -185,8 +200,8 @@ pub(super) fn add(
         let find = |id: &str| -> Element {
             match request_ids.get(id) {
                 Some(&i) => planned[i].element.clone(),
-                None => scene
-                    .element(id)
+                None => at
+                    .get(scene, id)
                     .cloned()
                     .unwrap_or_else(|| Element(Map::new())),
             }
@@ -206,7 +221,7 @@ pub(super) fn add(
             match request_ids.get(&id) {
                 Some(&i) => add_bound(&mut planned[i].element, &arrow_id, "arrow"),
                 None => {
-                    if let Some(target) = scene.element_mut(&id) {
+                    if let Some(target) = at.get_mut(scene, &id) {
                         add_bound(target, &arrow_id, "arrow");
                         touched.insert(id.clone());
                     }
@@ -237,8 +252,8 @@ pub(super) fn add(
                     .iter()
                     .map(|(id, _)| id.to_string())
                     .collect(),
-                None => scene
-                    .element(child)
+                None => at
+                    .get(scene, child)
                     .map(|e| {
                         e.bound_elements()
                             .iter()
@@ -257,7 +272,7 @@ pub(super) fn add(
                 } else if let Some((_, label)) = labels.iter_mut().find(|(_, l)| l.id() == id) {
                     label.set("frameId", Value::String(frame_id.clone()));
                     members.push(label.clone());
-                } else if let Some(element) = scene.element_mut(&id) {
+                } else if let Some(element) = at.get_mut(scene, &id) {
                     element.set("frameId", Value::String(frame_id.clone()));
                     touched.insert(id.clone());
                     members.push(element.clone());
@@ -313,7 +328,7 @@ pub(super) fn add(
     }
 
     for id in &touched {
-        if let Some(element) = scene.element_mut(id) {
+        if let Some(element) = at.get_mut(scene, id) {
             bump(element, making);
         }
     }
@@ -358,6 +373,7 @@ fn check_named(
     id: &str,
     own: &str,
     scene: &Scene,
+    positions: &Positions,
     planned: &[Planned],
     request_ids: &BTreeMap<String, usize>,
     binding: bool,
@@ -367,7 +383,7 @@ fn check_named(
     }
     let element = match request_ids.get(id) {
         Some(&i) => &planned[i].element,
-        None => match scene.element(id) {
+        None => match positions.get(scene, id) {
             Some(e) => e,
             None => {
                 return Err(BoardError::NotFound {
@@ -443,7 +459,7 @@ fn plan(
         ));
     }
     // Every field known.
-    for key in map.keys() {
+    for key in sorted_keys(map) {
         if let Some((_, why)) = NEVER_FROM_AGENTS.iter().find(|(name, _)| name == key) {
             return Err(at.invalid(key, *why));
         }
@@ -762,7 +778,7 @@ fn read_label(
     let Value::Object(label) = value else {
         return Err(at.invalid("label", "label must be {\"text\": \"…\"}"));
     };
-    for key in label.keys() {
+    for key in sorted_keys(label) {
         if !LABEL_FIELDS.contains(&key.as_str()) {
             return Err(at.invalid("label", format!("a label has no field {key}")));
         }

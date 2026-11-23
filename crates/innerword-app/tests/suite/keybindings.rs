@@ -4112,3 +4112,87 @@ fn the_zoom_commands_are_given_other_keys_in_the_list(cx: &mut TestAppContext) {
     assert_eq!(runs("f7", vcx).as_deref(), Some("zoom::FitWidth"));
     assert_eq!(menu_key(&zoom::ZoomIn, vcx).as_deref(), Some("cmd-+"));
 }
+
+/// The library's own "New whiteboard" (it has no key) is a row "In the
+/// library", beside the window's row "Anywhere"; a key given to it works on
+/// a row of the tree and makes a whiteboard named in place, and it is never
+/// offered in the palette (the window's is).
+#[gpui::test]
+fn the_librarys_new_whiteboard_is_a_row_in_the_library_and_takes_a_key(cx: &mut TestAppContext) {
+    init(cx);
+    cx.update(innerword_app::pages::use_fake);
+    let library = library(cx);
+    add_document(
+        &library,
+        None,
+        &simple_document("Keys", "A paragraph with a few words in it."),
+        cx,
+    );
+    let (workspace, vcx) = open_workspace(&library, cx);
+    assert!(row_keys("New whiteboard", Place::Library, vcx).is_empty());
+    assert!(row_keys("New whiteboard", Place::Anywhere, vcx).is_empty());
+    let in_the_library = Target::new(
+        "library_panel::NewBoard",
+        Some(innerword_library::TREE_KEY_CONTEXT),
+    );
+    assert!(change(&workspace, vcx, |keymap| {
+        assert!(
+            keymap
+                .check(&in_the_library, &key("ctrl-alt-w"), None)
+                .is_allowed()
+        );
+        keymap.add_key(&in_the_library, key("ctrl-alt-w"))
+    }));
+    assert_eq!(
+        row_keys("New whiteboard", Place::Library, vcx),
+        ["ctrl-alt-w"]
+    );
+    // In the text the key is not the library's.
+    assert_ne!(
+        runs("ctrl-alt-w", vcx).as_deref(),
+        Some("library_panel::NewBoard")
+    );
+    // On a row of the tree it is.
+    vcx.simulate_keystrokes("cmd-0");
+    vcx.run_until_parked();
+    assert_eq!(
+        runs("ctrl-alt-w", vcx).as_deref(),
+        Some("library_panel::NewBoard")
+    );
+    vcx.simulate_keystrokes("ctrl-alt-w");
+    vcx.run_until_parked();
+    assert!(workspace.read_with(vcx, |w, cx| w.panel().read(cx).renaming().is_some()));
+    vcx.simulate_input("Plan");
+    vcx.simulate_keystrokes("enter");
+    vcx.run_until_parked();
+    let board = workspace.read_with(vcx, |w, _| w.open_board_id());
+    assert!(board.is_some(), "the whiteboard opens once named");
+    let title = library.read_with(vcx, |library, _| {
+        library.document_meta(board.unwrap()).unwrap().title
+    });
+    assert_eq!(title, "Plan");
+
+    // The palette offers one "New whiteboard": the window's.
+    workspace.update_in(vcx, |workspace, window, cx| {
+        workspace.toggle_command_palette(window, cx)
+    });
+    vcx.run_until_parked();
+    let palette = workspace
+        .read_with(vcx, |workspace, cx| {
+            workspace
+                .modal_layer()
+                .read(cx)
+                .active::<innerword_ui::Picker<innerword_app::palette::PaletteDelegate>>()
+        })
+        .expect("the palette is open");
+    vcx.simulate_input("new whiteboard");
+    let titles = palette.read_with(vcx, |palette, _| palette.delegate.listed_titles());
+    assert_eq!(
+        titles
+            .iter()
+            .filter(|title| title.as_str() == "New whiteboard")
+            .count(),
+        1,
+        "{titles:?}"
+    );
+}

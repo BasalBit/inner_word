@@ -14,7 +14,11 @@
 //!    turns the list of what changed into the events the library's own
 //!    methods emit: the sidebar, the trash and whatever else listens follow
 //!    as if the writer had made the change.
-//! 3. **The open document.** When it is among what changed, it is read
+//! 3. **The open item.** The open whiteboard, when its scene is among what
+//!    changed, takes the change in as one step of its undo, by the base
+//!    rule (`Workspace::take_over_open_board`); the note waits for the
+//!    view's answer to name the changes it did not take and to offer Undo.
+//!    The open document, when it is among what changed, is read
 //!    back and taken over by the editor
 //!    ([`innerword_editor::Editor::adopt_document`]): the caret, the selection
 //!    and the view stay, and the change is one more step of the undo
@@ -38,6 +42,8 @@
 //! (an undo of the agent's change is one) is saved like every other.
 
 use std::{
+    cell::Cell,
+    rc::Rc,
     sync::{Arc, atomic::Ordering},
     time::{Duration, Instant},
 };
@@ -54,6 +60,7 @@ use innerword_ui::{Toast, toast::ToastId};
 use super::{Workspace, session_title};
 use crate::{
     actions::ShowVersionHistory,
+    boards,
     document_io::load_document,
     live::{ANONYMOUS, ShowAgentChange, TOAST_DURATION, UndoAgentChange},
     settings::keys,
@@ -91,6 +98,18 @@ pub enum Undo {
     },
     /// Bring this back from the trash.
     Trash(LibraryItem),
+    /// The newest `steps` steps of the undo of the open whiteboard `board`
+    /// (Excalidraw's own), for as long as its canvas is at `rev`, the rev
+    /// the last adopt of an agent's change answered: the writer has not
+    /// drawn since.
+    Board {
+        /// The whiteboard.
+        board: DocumentId,
+        /// How many steps the run added.
+        steps: usize,
+        /// The rev of the canvas after the last of them.
+        rev: u64,
+    },
 }
 
 /// What the note at the bottom offers.
@@ -124,6 +143,12 @@ pub struct AgentChanges {
     pub count: usize,
     /// What the note says.
     pub message: String,
+    /// What the note says before the changes that were not taken.
+    pub said: String,
+    /// The elements of a whiteboard whose change by the agent was not
+    /// taken, because the writer had changed them meanwhile (the base rule
+    /// kept the writer's copy): the note names them after its sentence.
+    pub conflicts: Vec<String>,
     /// What they are about.
     pub subject: Subject,
     /// How all of them are taken back in one step, when one step does it.
@@ -163,6 +188,39 @@ pub(crate) struct LiveState {
     total: usize,
     /// What the last of them cost.
     cost: Option<ChangeCost>,
+    /// What the request at the head of the queue waits for.
+    wait: RequestWait,
+    /// The adopt an agent's change to the open whiteboard started, whose
+    /// answer the note waits for (its conflicts, its Undo).
+    board_adopt: Option<BoardAdopt>,
+}
+
+/// What a request of an agent has waited for so far (section 6.7 of
+/// `docs/whiteboard-design.md`), each wait with its own patience, measured
+/// on the app's clock (a test's clock in a test).
+#[derive(Default)]
+pub(crate) struct RequestWait {
+    /// Since when it waits for a whiteboard that is closing to be saved.
+    closing_since: Option<Instant>,
+    /// Since when it waits for the open whiteboard to answer the adopt of
+    /// an earlier outside write.
+    adopt_since: Option<Instant>,
+    /// The collect it asked of the open whiteboard: since when, and whether
+    /// what it handed over is saved.
+    collect: Option<(Instant, Rc<Cell<bool>>)>,
+    /// Since when it waits for a composition to end.
+    composing_since: Option<Instant>,
+}
+
+/// An adopt of an agent's change to the open whiteboard, not answered yet.
+#[derive(Clone, Copy, Debug)]
+struct BoardAdopt {
+    board: DocumentId,
+    /// The number of the adopt (`BoardState::adopt_in_flight`).
+    seq: u64,
+    /// The steps of the run before this one, when this change joins them
+    /// (the writer has not drawn since the last of them).
+    steps_before: usize,
 }
 
 /// The names of the things one request changed, for the note.
@@ -205,6 +263,16 @@ pub fn sentence(who: &str, operation: &str, names: &Names) -> String {
         .map(quoted)
         .map(|name| format!("the folder {name}"))
         .unwrap_or_else(|| "a folder".to_string());
+    let whiteboard = names
+        .document
+        .as_deref()
+        .or(names.document_before.as_deref())
+        .map(quoted);
+    let whiteboard_or_a = || {
+        whiteboard
+            .clone()
+            .unwrap_or_else(|| "a whiteboard".to_string())
+    };
     let did = match operation {
         "create_document" | "duplicate_document" => format!("created {document}"),
         "replace_document" => format!("rewrote {document}"),
@@ -242,6 +310,14 @@ pub fn sentence(who: &str, operation: &str, names: &Names) -> String {
         "reopen_comment" => format!("reopened a comment on {document}"),
         "delete_comment" => format!("deleted a comment on {document}"),
         "restore_version" => format!("brought back an earlier version of {document}"),
+        // A whiteboard.
+        "create_board" => match &whiteboard {
+            Some(name) => format!("made the whiteboard {name}"),
+            None => "made a whiteboard".to_string(),
+        },
+        "add_to_board" => format!("drew on {}", whiteboard_or_a()),
+        "update_board" => format!("changed {}", whiteboard_or_a()),
+        "remove_from_board" => format!("removed elements from {}", whiteboard_or_a()),
         // An operation a later version of the engine has.
         _ if names.document.is_some() || names.document_before.is_some() => {
             format!("changed {document}")
@@ -279,6 +355,47 @@ pub fn run_sentence(who: &str, count: usize, name: Option<&str>) -> String {
     match name {
         Some(name) => format!("{who} made {count} changes to {name}"),
         None => format!("{who} made {count} changes in the library"),
+    }
+}
+
+/// The most element ids a note names of the changes that were not taken.
+const NAMED_CONFLICTS: usize = 5;
+
+/// What the note says after its sentence when the open whiteboard kept the
+/// writer's copy of elements an agent changed (the base rule: the writer
+/// changed them meanwhile): "2 of its changes were not taken, because you
+/// changed those elements meanwhile: api, reads." `None` for none.
+pub fn conflicts_sentence(ids: &[String]) -> Option<String> {
+    match ids {
+        [] => None,
+        [one] => Some(format!(
+            "1 of its changes was not taken, because you changed that element meanwhile: {one}."
+        )),
+        _ => {
+            let named = ids
+                .iter()
+                .take(NAMED_CONFLICTS)
+                .map(String::as_str)
+                .collect::<Vec<_>>()
+                .join(", ");
+            let more = match ids.len().saturating_sub(NAMED_CONFLICTS) {
+                0 => String::new(),
+                more => format!(" and {more} more"),
+            };
+            Some(format!(
+                "{} of its changes were not taken, because you changed those elements meanwhile: \
+                 {named}{more}.",
+                ids.len()
+            ))
+        }
+    }
+}
+
+/// The note's whole message: `said`, then what was not taken.
+fn with_conflicts(said: &str, conflicts: &[String]) -> String {
+    match conflicts_sentence(conflicts) {
+        Some(sentence) => format!("{said}. {sentence}"),
+        None => said.to_string(),
     }
 }
 
@@ -425,12 +542,98 @@ impl Workspace {
 
     // ----- a request ------------------------------------------------------------------
 
-    /// Whether `request` has to wait: it would change the library, and
-    /// with it perhaps the open document, while text is being composed
-    /// there with an input method. Taking a change over ends a
-    /// composition where it stands, so the change waits for it.
-    pub(crate) fn must_wait(&self, request: &Request, cx: &App) -> bool {
-        request.changes_library() && self.session.is_some() && self.editor.read(cx).is_composing()
+    /// Whether `request` has to wait before it is carried out (`first`: this
+    /// is the first look at it). In this order, each with its own patience
+    /// (section 6.7 of `docs/whiteboard-design.md`):
+    ///
+    /// 1. A whiteboard is closing (its view parked while its last gesture
+    ///    is collected): every request waits for that save, at most
+    ///    [`boards::VIEW_COLLECT_PATIENCE`], after which it is saved as the
+    ///    app holds it. A late collect never saves the scene from before
+    ///    the agent's change over it.
+    /// 2. The open whiteboard has not answered the adopt of an earlier
+    ///    outside write: every request waits for it (at most until the app
+    ///    gave it up and merged in Rust), so that the next change is merged
+    ///    against what the canvas holds after the last one.
+    /// 3. The open whiteboard's page holds more than it posted (a gesture
+    ///    under way, a text being edited, a change not posted yet): the
+    ///    page is asked once for this request, and the request waits until
+    ///    what it handed over is saved, at most a second; then it goes on
+    ///    with what the app holds, a read and a write alike. What the page
+    ///    still holds is newer than the base the agent's change is merged
+    ///    against, and the base rule keeps it.
+    /// 4. It would change the library while text is being composed with an
+    ///    input method (in the open document, or in a text element of the
+    ///    open whiteboard): taking a change over would end the composition
+    ///    where it stands, so it waits, at most
+    ///    [`crate::live::COMPOSITION_PATIENCE`], and is then refused by
+    ///    [`Workspace::carry_out`]. A read does not wait for a composition.
+    pub(crate) fn must_wait(
+        &mut self,
+        request: &Request,
+        first: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if first {
+            self.live.wait = RequestWait::default();
+        }
+        let now = cx.background_executor().now();
+        let waited = |since: Instant| now.saturating_duration_since(since);
+
+        if !self.closing_boards.is_empty() {
+            let since = *self.live.wait.closing_since.get_or_insert(now);
+            if waited(since) < boards::VIEW_COLLECT_PATIENCE {
+                return true;
+            }
+            self.finish_closing_board_now(window, cx);
+        }
+
+        if self.board().is_some_and(|board| board.adopting) {
+            let since = *self.live.wait.adopt_since.get_or_insert(now);
+            if waited(since) < boards::ADOPT_PATIENCE + boards::VIEW_COLLECT_PATIENCE {
+                return true;
+            }
+        }
+
+        if let Some(id) = self.open_board_id() {
+            match &self.live.wait.collect {
+                None if self
+                    .board()
+                    .is_some_and(|board| board.ready && board.status.holds_more()) =>
+                {
+                    let done = Rc::new(Cell::new(false));
+                    let collect = self.collect_board(id, cx);
+                    let saved = done.clone();
+                    cx.spawn(async move |_, _| {
+                        collect.await;
+                        saved.set(true);
+                    })
+                    .detach();
+                    self.live.wait.collect = Some((now, done));
+                    return true;
+                }
+                Some((since, done))
+                    if !done.get() && waited(*since) < boards::VIEW_COLLECT_PATIENCE =>
+                {
+                    return true;
+                }
+                _ => {}
+            }
+        }
+
+        if request.changes_library() && self.is_composing(cx) {
+            let since = *self.live.wait.composing_since.get_or_insert(now);
+            return waited(since) < crate::live::COMPOSITION_PATIENCE;
+        }
+        false
+    }
+
+    /// Whether text is being composed with an input method: in the open
+    /// document, or in a text element of the open whiteboard.
+    fn is_composing(&self, cx: &App) -> bool {
+        (self.session.is_some() && self.editor.read(cx).is_composing())
+            || self.board().is_some_and(|board| board.status.composing)
     }
 
     /// Carries `request` out and returns what goes back to the agent. See
@@ -461,7 +664,7 @@ impl Workspace {
             return Answer::refused(Refusal::SwitchedOff);
         }
         // The composition outlasted the patience of whoever called.
-        if self.must_wait(request, cx) {
+        if self.is_composing(cx) {
             return Answer::refused(Refusal::Composing);
         }
         let started = Instant::now();
@@ -470,6 +673,7 @@ impl Workspace {
                 .session
                 .as_ref()
                 .and_then(|session| session.failure.clone())
+                .or_else(|| self.board().and_then(|board| board.failure.clone()))
                 .unwrap_or_else(|| "the save failed".to_string());
             return Answer::refused(Refusal::CouldNotSave { message });
         }
@@ -513,7 +717,8 @@ impl Workspace {
         self.editor
             .update(cx, |editor, cx| editor.images_changed(cx));
         let adopted = self.take_over_open_document(&executed.changes, window, cx);
-        self.note_agent_change(request, &executed.changes, &before, adopted, cx);
+        let board = self.take_over_open_board(&executed.changes, cx);
+        self.note_agent_change(request, &executed.changes, &before, adopted, board, cx);
         self.live.cost = Some(ChangeCost {
             save: saved - started,
             change: changed - saved,
@@ -610,6 +815,116 @@ impl Workspace {
             revision,
             place,
         })
+    }
+
+    /// Brings the open whiteboard up to date when its scene is among
+    /// `changes` (section 6.7): the stored scene after the change is taken
+    /// into the view by the base rule, as one step of its undo
+    /// ([`Workspace::adopt_outside_write`]: the delta from the stored scene
+    /// the view descends from, which the flush before the change made the
+    /// writer's last gesture, to the stored scene now; from here until the
+    /// view answers, its posts are held). A rename changes the title only
+    /// (the library's event does that); a whiteboard that went to the trash
+    /// or was deleted closes as a page does. Returns the adopt that was
+    /// started, for the note (its conflicts, its Undo).
+    fn take_over_open_board(
+        &mut self,
+        changes: &[Change],
+        cx: &mut Context<Self>,
+    ) -> Option<(DocumentId, u64)> {
+        let open = self.open_board_id()?;
+        let touched = changes
+            .iter()
+            .any(|change| matches!(change, Change::DocumentText { id } if *id == open));
+        if !touched {
+            return None;
+        }
+        self.adopt_outside_write(open, cx);
+        let seq = self.board()?.adopt_in_flight()?;
+        Some((open, seq))
+    }
+
+    /// The open whiteboard answered an adopt (`seq`): when it was the one an
+    /// agent's change started, the note says which of the agent's changes
+    /// were not taken, and offers Undo while the writer has not drawn since.
+    pub(crate) fn agent_adopt_answered(
+        &mut self,
+        board: DocumentId,
+        seq: u64,
+        rev: u64,
+        conflicts: &[String],
+        cx: &mut Context<Self>,
+    ) {
+        let Some(pending) = self
+            .live
+            .board_adopt
+            .filter(|pending| pending.board == board && pending.seq == seq)
+        else {
+            return;
+        };
+        self.live.board_adopt = None;
+        // The writer drew while the adopt was answered: no step undoes it.
+        let drawn_since = self.board().is_some_and(|state| state.status.rev > rev);
+        let open = self.open_board_id() == Some(board);
+        let Some(last) = self.live.last.as_mut() else {
+            return;
+        };
+        last.conflicts.extend(conflicts.iter().cloned());
+        last.message = with_conflicts(&last.said, &last.conflicts);
+        last.undo = (!drawn_since && open).then_some(Undo::Board {
+            board,
+            steps: pending.steps_before + 1,
+            rev,
+        });
+        if self.agent_note_is_up(cx) {
+            self.show_agent_note(cx);
+        }
+    }
+
+    /// The adopt an agent's change started failed: the view was loaded again
+    /// (its undo history is gone), so the note offers no Undo.
+    pub(crate) fn agent_adopt_failed(&mut self, board: DocumentId, cx: &mut Context<Self>) {
+        if self
+            .live
+            .board_adopt
+            .take_if(|pending| pending.board == board)
+            .is_none()
+        {
+            return;
+        }
+        if let Some(last) = self.live.last.as_mut() {
+            last.undo = None;
+        }
+        if self.agent_note_is_up(cx) {
+            self.show_agent_note(cx);
+        }
+    }
+
+    /// The open whiteboard's canvas moved on (a post, a status): once the
+    /// writer has drawn after the last adopt of an agent's change, the note
+    /// no longer offers to undo it (the undo would take out the writer's
+    /// gesture first).
+    pub(crate) fn board_moved_on(&mut self, board: DocumentId, cx: &mut Context<Self>) {
+        let Some(Undo::Board { board: of, rev, .. }) =
+            self.live.last.as_ref().and_then(|last| last.undo)
+        else {
+            return;
+        };
+        if of != board {
+            return;
+        }
+        let moved = self
+            .board()
+            .is_none_or(|state| self.open_board_id() != Some(board) || state.status.rev > rev);
+        if !moved {
+            return;
+        }
+        if let Some(last) = self.live.last.as_mut() {
+            last.undo = None;
+        }
+        if self.agent_note_is_up(cx) {
+            self.show_agent_note(cx);
+        }
     }
 
     /// An event of the editor says that the text or the settings of the
@@ -715,11 +1030,14 @@ impl Workspace {
         changes: &[Change],
         before: &Before,
         adopted: Option<TakenOver>,
+        board: Option<(DocumentId, u64)>,
         cx: &mut Context<Self>,
     ) {
         let who = request.author().unwrap_or(ANONYMOUS).to_string();
         let subject = subject_of(changes);
-        // How this one change is taken back in one step.
+        // How this one change is taken back in one step. A change to the
+        // open whiteboard is known once its view answered the adopt
+        // (`agent_adopt_answered`).
         let undo = match (adopted, changes) {
             (Some(taken), _) if taken.undo_step => Some(Undo::Text {
                 document: taken.document,
@@ -741,6 +1059,28 @@ impl Workspace {
             .last
             .take()
             .filter(|last| running && last.who == who);
+        // The steps of the open whiteboard's undo this change goes on top
+        // of: those of the run, while the writer has not drawn since.
+        let board_steps_before = match (&joined, board) {
+            (
+                Some(AgentChanges {
+                    undo:
+                        Some(Undo::Board {
+                            board: of,
+                            steps,
+                            rev,
+                        }),
+                    ..
+                }),
+                Some((id, _)),
+            ) if *of == id && self.board().is_some_and(|state| state.status.rev <= *rev) => *steps,
+            _ => 0,
+        };
+        self.live.board_adopt = board.map(|(board, seq)| BoardAdopt {
+            board,
+            seq,
+            steps_before: board_steps_before,
+        });
         self.live.last = Some(match joined {
             Some(mut run) => {
                 run.count += 1;
@@ -749,7 +1089,8 @@ impl Workspace {
                 }
                 // One step undoes the run only when it is nothing but
                 // steps of the open document's undo history, one on top of
-                // the other.
+                // the other (or of the open whiteboard's, once its view has
+                // answered).
                 run.undo = match (run.undo, undo, adopted) {
                     (
                         Some(Undo::Text {
@@ -769,25 +1110,31 @@ impl Workspace {
                     _ => None,
                 };
                 run.place = run.place.or(place);
-                run.message = run_sentence(
+                run.said = run_sentence(
                     &who,
                     run.count,
                     self.subject_name(run.subject, cx).as_deref(),
                 );
+                run.message = with_conflicts(&run.said, &run.conflicts);
                 run
             }
-            None => AgentChanges {
-                message: sentence(
+            None => {
+                let said = sentence(
                     &who,
                     operation_words(request, changes),
                     &self.names(changes, before, cx),
-                ),
-                who,
-                count: 1,
-                subject,
-                undo,
-                place,
-            },
+                );
+                AgentChanges {
+                    message: said.clone(),
+                    said,
+                    conflicts: Vec::new(),
+                    who,
+                    count: 1,
+                    subject,
+                    undo,
+                    place,
+                }
+            }
         });
         self.show_agent_note(cx);
     }
@@ -795,7 +1142,12 @@ impl Workspace {
     /// What the note offers for `changes` as things are now. A page that
     /// is open (one an agent updated reloads by itself) offers nothing.
     fn offer_for(&self, changes: &AgentChanges, cx: &App) -> Option<Offer> {
-        if changes.undo.is_some() {
+        let undo_holds = match changes.undo {
+            Some(Undo::Board { board, rev, .. }) => self.board_undo_holds(board, rev),
+            Some(_) => true,
+            None => false,
+        };
+        if undo_holds {
             return Some(Offer::Undo);
         }
         match changes.subject {
@@ -807,6 +1159,14 @@ impl Workspace {
             }
             _ => None,
         }
+    }
+
+    /// Whether the undo of whiteboard `board` still takes out what agents
+    /// changed: it is the open whiteboard and the writer has not drawn
+    /// since the canvas was at `rev`.
+    fn board_undo_holds(&self, board: DocumentId, rev: u64) -> bool {
+        self.open_board_id() == Some(board)
+            && self.board().is_some_and(|state| state.status.rev <= rev)
     }
 
     /// What the note about the last changes of agents offers.
@@ -903,6 +1263,19 @@ impl Workspace {
                 self.show_toast(Toast::new(format!("Undid {whose} {what}")).success(), cx);
                 undone > 0
             }
+            Some(Undo::Board { board, steps, rev }) if self.board_undo_holds(board, rev) => {
+                drop(self.board_call(
+                    board,
+                    innerword_board_web::calls::UNDO,
+                    innerword_board_web::calls::steps_argument(steps as u32),
+                ));
+                if let Some(last) = self.live.last.as_mut() {
+                    last.undo = None;
+                }
+                dismiss_note(self, cx);
+                self.show_toast(Toast::new(format!("Undid {whose} {what}")).success(), cx);
+                true
+            }
             Some(Undo::Trash(item)) => {
                 let restored = self.library.update(cx, |library, cx| match item {
                     LibraryItem::Document(id) => library.restore_document(id, cx).map(|_| ()),
@@ -927,14 +1300,18 @@ impl Workspace {
             // the change was none of the text.
             _ => {
                 let text_of_open = matches!(last.subject, Subject::Document(id) if self.open_document_id() == Some(id));
+                let board_of_open = matches!(last.subject, Subject::Document(id) if self.open_board_id() == Some(id));
                 let mut toast = Toast::new(if text_of_open {
                     "This can no longer be undone in one step. The text from before is in the \
+                     version history."
+                } else if board_of_open {
+                    "This can no longer be undone in one step. The drawing from before is in the \
                      version history."
                 } else {
                     "This change cannot be undone in one step."
                 })
                 .duration(TOAST_DURATION);
-                if text_of_open {
+                if text_of_open || board_of_open {
                     toast = toast.action("Version History", ShowVersionHistory);
                 }
                 dismiss_note(self, cx);

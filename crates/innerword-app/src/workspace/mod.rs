@@ -138,8 +138,8 @@ pub use board::{
 };
 pub use images::{SELECT_AN_IMAGE_FIRST, is_image_command};
 pub use live::{
-    AgentChanges, ChangeCost, Names, Offer, Subject, UPDATED_PAGE, Undo as AgentUndo, run_sentence,
-    sentence,
+    AgentChanges, ChangeCost, Names, Offer, Subject, UPDATED_PAGE, Undo as AgentUndo,
+    conflicts_sentence, run_sentence, sentence,
 };
 pub use menus::{ASK_THE_ASSISTANT, Anchors, MenuKind};
 pub(crate) use page::fake_printed;
@@ -356,6 +356,9 @@ impl Workspace {
         // The sidebar reads what it stored at the last quit: not about
         // folders and documents that were deleted since.
         session::forget_missing_sidebar_items(&library, cx);
+        // Whiteboards are made only with a page engine (WebKit, or the fake
+        // of the tests): without one the panel offers no New Whiteboard.
+        let makes_boards = crate::pages::engine(cx).is_some();
         let panel = cx.new(|cx| {
             let mut panel = LibraryPanel::new(library.clone(), cx);
             // One modal layer per window: the panel's pickers and
@@ -363,6 +366,11 @@ impl Workspace {
             panel.set_modal_layer(modal_layer.clone(), cx);
             // What the panel's own "new document" key stores.
             panel.set_new_document_content(new_document_json(&settings));
+            // What its New Whiteboard stores: an empty scene, as the
+            // library keeps one.
+            if makes_boards {
+                panel.set_new_board_content(innerword_board::Scene::empty().to_stored());
+            }
             panel
         });
         let toast_layer = cx.new(|_| ToastLayer::new());
@@ -1112,6 +1120,9 @@ impl Workspace {
         if !board_open {
             left_out.extend(Self::board_only_commands());
         }
+        // The library's own New whiteboard is a row of the list of
+        // shortcuts only: the palette has the window's.
+        left_out.push(gpui::Action::name(&innerword_library::NewBoard));
         // Without a page engine nothing can be imported, and no whiteboard
         // made.
         if crate::pages::engine(cx).is_none() {
@@ -1766,13 +1777,24 @@ impl Workspace {
         self.new_document(window, cx);
     }
 
+    /// "New Whiteboard" (the palette, File > New Whiteboard, the empty
+    /// state's hint): made by the library's panel at the end of the selected
+    /// folder and named in place in the sidebar, which is shown for it;
+    /// `enter` takes the name and `escape` leaves it "Untitled", and either
+    /// opens it with the keyboard on the canvas (the panel's `OpenDocument`).
     pub(crate) fn on_new_board(
         &mut self,
         _: &NewBoard,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.new_board(None, window, cx);
+        if crate::pages::engine(cx).is_none() || !self.panel.read(cx).makes_boards() {
+            self.say_about_page(&crate::boards::not_shown_sentence(cx), cx);
+            return;
+        }
+        self.dismiss_modal(window, cx);
+        self.panel
+            .update(cx, |panel, cx| panel.new_board(window, cx));
     }
 
     pub(crate) fn on_new_folder(

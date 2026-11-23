@@ -291,6 +291,13 @@ fn a_right_click_on_every_object_opens_its_menu(cx: &mut TestAppContext) {
         ],
         "a folder row",
     );
+    // Without a page engine no whiteboard is made.
+    assert!(
+        !labels
+            .iter()
+            .any(|label| label.starts_with("New Whiteboard")),
+        "{labels:?}"
+    );
     click_item("Export Folder…", vcx);
     let picker = workspace
         .read_with(vcx, |w, cx| {
@@ -1211,4 +1218,82 @@ fn the_library_menus_import_pages_and_a_page_row_has_its_address(cx: &mut TestAp
     right_click_at(empty, vcx);
     let labels = open_menu("the empty library area", vcx);
     assert_has(&labels, &["Import Page…"], "the empty library area");
+}
+
+/// With a page engine a folder row offers "New Whiteboard Here" and the
+/// empty library "New Whiteboard": each makes a whiteboard there and names
+/// it in place; `enter` takes the name and opens it with the keyboard on
+/// the canvas, `escape` leaves it "Untitled" and opens it all the same.
+#[gpui::test]
+fn the_library_menus_make_whiteboards_named_in_place(cx: &mut TestAppContext) {
+    init(cx);
+    cx.update(innerword_app::pages::use_fake);
+    let library = library(cx);
+    let folder = library.update(cx, |library, cx| {
+        library.create_folder(None, "Sketches", cx).unwrap().id
+    });
+    add_document(&library, None, &simple_document("Notes", "A text."), cx);
+    let (workspace, vcx) = open_workspace(&library, cx);
+    let boards = |vcx: &mut VisualTestContext| {
+        library.read_with(vcx, |library, _| {
+            library
+                .all_documents()
+                .unwrap()
+                .into_iter()
+                .filter(|entry| entry.meta.kind == innerword_library::DocumentKind::Board)
+                .map(|entry| (entry.meta.title, entry.meta.folder_id, entry.meta.id))
+                .collect::<Vec<_>>()
+        })
+    };
+
+    // A folder row: made in that folder, named "Plan".
+    let at = library_row(&workspace, LibraryItem::Folder(folder), vcx);
+    right_click_at(at, vcx);
+    let labels = open_menu("a folder row", vcx);
+    assert_has(&labels, &["New Whiteboard Here"], "a folder row");
+    click_item("New Whiteboard Here", vcx);
+    assert!(workspace.read_with(vcx, |w, cx| w.panel().read(cx).renaming().is_some()));
+    vcx.simulate_input("Plan");
+    vcx.simulate_keystrokes("enter");
+    vcx.run_until_parked();
+    let made = boards(vcx);
+    assert_eq!(made.len(), 1);
+    assert_eq!((made[0].0.as_str(), made[0].1), ("Plan", Some(folder)));
+    assert_eq!(
+        workspace.read_with(vcx, |w, _| w.open_board_id()),
+        Some(made[0].2)
+    );
+    assert!(
+        workspace.update_in(vcx, |w, window, _| w.page_has_focus(window)),
+        "the keyboard is on the canvas"
+    );
+
+    // The empty library: made at the top level, escape leaves it Untitled.
+    let sidebar = bounds_of("sidebar", vcx);
+    let rows = workspace.read_with(vcx, |w, cx| w.panel().read(cx).visible_items().len());
+    let last_row = library_row(
+        &workspace,
+        workspace.read_with(vcx, |w, cx| w.panel().read(cx).visible_items()[rows - 1]),
+        vcx,
+    );
+    let empty = point(last_row.x, last_row.y + ROW_HEIGHT * 4.);
+    assert!(empty.y < sidebar.bottom() - px(60.));
+    right_click_at(empty, vcx);
+    let labels = open_menu("the empty library area", vcx);
+    assert_has(&labels, &["New Whiteboard"], "the empty library area");
+    click_item("New Whiteboard", vcx);
+    assert!(workspace.read_with(vcx, |w, cx| w.panel().read(cx).renaming().is_some()));
+    vcx.simulate_keystrokes("escape");
+    vcx.run_until_parked();
+    let made = boards(vcx);
+    assert_eq!(made.len(), 2);
+    let untitled = made
+        .iter()
+        .find(|(title, _, _)| title.is_empty())
+        .expect("an untitled whiteboard");
+    assert_eq!(untitled.1, None);
+    assert_eq!(
+        workspace.read_with(vcx, |w, _| w.open_board_id()),
+        Some(untitled.2)
+    );
 }

@@ -64,7 +64,7 @@
 //! - **The note about where the text goes** is shown in both chats until
 //!   it was acknowledged in either (`assistant.notice_accepted`).
 
-use std::{cell::RefCell, path::PathBuf, rc::Rc};
+use std::{cell::RefCell, path::PathBuf, rc::Rc, sync::Arc};
 
 use gpui::{
     AnyElement, App, AppContext as _, ClipboardItem, Context, Entity, IntoElement,
@@ -81,7 +81,7 @@ use innerword_editor::Editor;
 use innerword_library::{DocumentId, Library};
 use innerword_ui::Toast;
 
-use super::{RightPanel, Workspace};
+use super::{RightPanel, Workspace, saver::StoredPictures};
 use crate::{
     actions::{AskAssistant, CATEGORY_ASSISTANT, FocusAssistant, ToggleAssistant},
     assistant::{Host, HostEvent, apply, choices, conversations},
@@ -105,8 +105,39 @@ struct OpenRef {
 struct OpenPage {
     source_url: Option<String>,
     text: Rc<str>,
-    /// A whiteboard: `text` is the listing of its elements.
-    board: bool,
+    /// A whiteboard: the scene the app holds of it, whose listing of
+    /// elements is sent (made when a message is sent, from what the app
+    /// holds then).
+    board: Option<BoardFeed>,
+}
+
+/// The open whiteboard as the side chat's source reads it, kept up to date
+/// by [`Workspace::feed_the_side_chat`] (as a frame is built, and as the
+/// page posts).
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct BoardFeed {
+    /// The newest scene the page posted, else the stored scene it descends
+    /// from.
+    scene: Arc<str>,
+    /// The pictures the app has stored, for the listing ("picture stored").
+    pictures: Rc<StoredPictures>,
+}
+
+impl BoardFeed {
+    /// The listing of the whiteboard's elements, one per line, with the
+    /// header the agents' `read` writes.
+    fn listing(&self, open: &OpenRef, folder: Option<&str>) -> String {
+        let pictures = &self.pictures;
+        let scene = innerword_board::Scene::from_view(&self.scene, &|id| pictures.get(id).cloned())
+            .or_else(|_| innerword_board::Scene::from_stored(&self.scene))
+            .map(|parsed| parsed.scene)
+            .unwrap_or_else(|_| innerword_board::Scene::empty());
+        scene.listing(&innerword_board::ListingHeader {
+            reference: &format!("board:{}", open.id.0),
+            title: &open.title,
+            folder,
+        })
+    }
 }
 
 /// The assistant as one workspace holds it.
@@ -241,9 +272,15 @@ fn open_document(open: &OpenRef, editor: &Editor, library: &Library) -> OpenDocu
         .ok()
         .and_then(|meta| meta.folder_id);
     let mut path = library.folder_path(folder);
+    let folder_path = path.join("/");
     path.push(open.title.clone());
     let (markdown, kind) = match &open.page {
-        Some(page) if page.board => (page.text.to_string(), OpenKind::Board),
+        Some(OpenPage {
+            board: Some(feed), ..
+        }) => (
+            feed.listing(open, Some(folder_path.as_str()).filter(|f| !f.is_empty())),
+            OpenKind::Board,
+        ),
         Some(page) => (
             page.text.to_string(),
             OpenKind::Page {
@@ -495,14 +532,17 @@ impl Workspace {
                     Some(item) => OpenPage {
                         source_url: item.source_url.clone(),
                         text: Rc::from(item.manifest.text.as_str()),
-                        board: false,
+                        board: None,
                     },
                     // A whiteboard: the listing of its elements as the app
-                    // holds them.
+                    // holds them when a message is sent.
                     None => OpenPage {
                         source_url: None,
-                        text: Rc::from(self.board_listing_text(cx).as_str()),
-                        board: true,
+                        text: Rc::from(""),
+                        board: Some(BoardFeed {
+                            scene: self.board_scene_held().unwrap_or_else(|| Arc::from("{}")),
+                            pictures: Rc::new(self.board_stored_pictures()),
+                        }),
                     },
                 }),
             }),
@@ -535,6 +575,7 @@ impl Workspace {
         let Some(side) = self.assistant.side.clone() else {
             return;
         };
+        self.feed_the_side_chat();
         // The title of the open item, a text or a page (a page has no
         // caret and no selection: nothing can be put into it).
         let title = self.open_item_id().map(|_| self.display_title());
@@ -564,6 +605,46 @@ impl Workspace {
             }
             side.set_apply_state(apply_state.0, apply_state.1, cx);
         });
+    }
+
+    /// Gives the side chat's source the scene of the open whiteboard as the
+    /// app holds it now (a pointer is compared; the pictures are read again
+    /// only when the scene or the number of stored pictures changed), so
+    /// that a message is sent with the listing of what the writer last drew.
+    pub(crate) fn feed_the_side_chat(&mut self) {
+        let Some(id) = self.open_board_id() else {
+            return;
+        };
+        let Some(scene) = self.board_scene_held() else {
+            return;
+        };
+        let stored = self.board_stored_picture_count();
+        let mut open = self.assistant.open.borrow_mut();
+        let Some(OpenRef {
+            id: open_id,
+            page: Some(OpenPage {
+                board: Some(feed), ..
+            }),
+            ..
+        }) = open.as_mut()
+        else {
+            return;
+        };
+        if *open_id != id || (Arc::ptr_eq(&feed.scene, &scene) && feed.pictures.len() == stored) {
+            return;
+        }
+        feed.scene = scene;
+        drop(open);
+        let pictures = Rc::new(self.board_stored_pictures());
+        if let Some(OpenRef {
+            page: Some(OpenPage {
+                board: Some(feed), ..
+            }),
+            ..
+        }) = self.assistant.open.borrow_mut().as_mut()
+        {
+            feed.pictures = pictures;
+        }
     }
 
     /// Stores the side chat's conversation about the open document as it
@@ -794,6 +875,14 @@ impl Workspace {
         }
         self.close_modal_first(window, cx);
         self.set_assistant_panel_open(true, window, cx);
+        // Over a whiteboard whose page holds more than it posted (a gesture,
+        // a text being edited), the page is asked for it now, so that the
+        // listing the next message is sent with has it.
+        if let Some(id) = self.open_board_id()
+            && self.board_holds_more()
+        {
+            self.collect_board(id, cx).detach();
+        }
         if let Some(side) = self.assistant.side.clone() {
             side.update(cx, |side, cx| side.focus(window, cx));
         }

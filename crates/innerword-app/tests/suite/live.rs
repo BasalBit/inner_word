@@ -31,7 +31,8 @@ use innerword_app::{
     single_instance::{self, Acquired, InstanceLock},
     version_history::VersionHistory,
     workspace::{
-        AUTOSAVE_DELAY, AgentUndo, CHANGED_OUTSIDE, Names, Offer, Subject, run_sentence, sentence,
+        AUTOSAVE_DELAY, AgentUndo, CHANGED_OUTSIDE, Names, Offer, Subject, conflicts_sentence,
+        run_sentence, sentence,
     },
 };
 use innerword_core::{Position, Selection};
@@ -1990,10 +1991,54 @@ fn the_note_says_who_did_what() {
         };
         let said = sentence("Claude", operation, &names);
         assert!(said.starts_with("Claude "), "{said}");
-        if !matches!(*operation, "edit" | "insert" | "replace_section") {
+        if !matches!(
+            *operation,
+            "edit" | "insert" | "replace_section" | "update_board"
+        ) {
             assert_ne!(said, format!("Claude changed {}", q("D")), "{operation}");
         }
     }
+    // A whiteboard (section 6.7 of docs/whiteboard-design.md).
+    assert_eq!(
+        sentence("Claude", "create_board", &named("Plan")),
+        format!("Claude made the whiteboard {}", q("Plan"))
+    );
+    assert_eq!(
+        sentence("Claude", "add_to_board", &named("Plan")),
+        format!("Claude drew on {}", q("Plan"))
+    );
+    assert_eq!(
+        sentence("Claude", "update_board", &named("Plan")),
+        format!("Claude changed {}", q("Plan"))
+    );
+    assert_eq!(
+        sentence("Claude", "remove_from_board", &named("Plan")),
+        format!("Claude removed elements from {}", q("Plan"))
+    );
+    assert_eq!(
+        sentence("Claude", "add_to_board", &Names::default()),
+        "Claude drew on a whiteboard"
+    );
+    assert_eq!(
+        conflicts_sentence(&["api".into(), "reads".into()]).as_deref(),
+        Some(
+            "2 of its changes were not taken, because you changed those elements meanwhile: \
+             api, reads."
+        )
+    );
+    assert_eq!(
+        conflicts_sentence(&["api".into()]).as_deref(),
+        Some("1 of its changes was not taken, because you changed that element meanwhile: api.")
+    );
+    let eight: Vec<String> = (1..=8).map(|n| format!("e{n}")).collect();
+    assert_eq!(
+        conflicts_sentence(&eight).as_deref(),
+        Some(
+            "8 of its changes were not taken, because you changed those elements meanwhile: \
+             e1, e2, e3, e4, e5 and 3 more."
+        )
+    );
+    assert_eq!(conflicts_sentence(&[]), None);
     // A long title does not push the button out of the note.
     let long = "A very long title ".repeat(8);
     let said = sentence("Claude", "edit", &named(&long));
@@ -3357,4 +3402,623 @@ fn with_the_switch_off_a_page_is_refused_before_its_files_are_stored(cx: &mut Te
     let added = ask(cx, move || tool.add_page(&request)).unwrap();
     assert_eq!(added.outcome, agent::PageOutcome::Added);
     assert!(file_count(&desk, cx) > 0);
+}
+
+// ----- whiteboards (section 6.7 of docs/whiteboard-design.md) ---------------------------
+//
+// On the fake page engine: its canvas is a scene held in Rust, and its
+// `adopt` applies the base rule, as the glue does in the page.
+
+use innerword_app::{boards::FakeFailure, pages::FakePages, workspace::BOARD_SAVE_DELAY};
+use innerword_board_web::bridge::Status;
+use serde_json::{Value, json};
+
+/// A rectangle as Excalidraw keeps it, at version `version`.
+fn shape(id: &str, x: f64, version: i64) -> Value {
+    json!({
+        "id": id, "type": "rectangle", "x": x, "y": 0.0, "width": 100.0, "height": 50.0,
+        "angle": 0, "strokeColor": "#1e1e1e", "backgroundColor": "transparent",
+        "fillStyle": "solid", "strokeWidth": 2, "strokeStyle": "solid", "roughness": 1,
+        "opacity": 100, "groupIds": [], "frameId": null, "roundness": null,
+        "seed": 1, "version": version, "versionNonce": version * 7 + 1, "isDeleted": false,
+        "boundElements": null, "updated": 1, "link": null, "locked": false,
+        "index": format!("a{}", id.len()),
+    })
+}
+
+/// A scene of `elements` as the page posts it.
+fn drawing(elements: &[Value]) -> String {
+    json!({
+        "type": "excalidraw", "version": 2, "source": "inner-word",
+        "elements": elements, "appState": { "viewBackgroundColor": "#ffffff" }, "files": {},
+    })
+    .to_string()
+}
+
+/// The stored scene of whiteboard `id`.
+fn stored_board(desk: &Desk, id: DocumentId, cx: &mut VisualTestContext) -> innerword_board::Scene {
+    let content = desk
+        .library
+        .read_with(cx, |library, _| library.document(id).unwrap().content);
+    innerword_board::Scene::from_stored(&content)
+        .expect("a stored scene")
+        .scene
+}
+
+/// The ids of the elements of whiteboard `id` as stored, sorted.
+fn stored_ids(desk: &Desk, id: DocumentId, cx: &mut VisualTestContext) -> Vec<String> {
+    let mut ids: Vec<String> = stored_board(desk, id, cx)
+        .elements()
+        .iter()
+        .map(|element| element.id().to_string())
+        .collect();
+    ids.sort();
+    ids
+}
+
+/// Lets the whiteboard's save timer and what follows run.
+fn settle_board(cx: &mut VisualTestContext) {
+    for _ in 0..8 {
+        cx.executor().advance_clock(BOARD_SAVE_DELAY);
+        cx.run_until_parked();
+    }
+}
+
+/// The app open on the fake page engine with a text "Notes" and a
+/// whiteboard "Plan", open and ready, and the channel for agents open.
+fn desk_with_a_board(
+    cx: &mut TestAppContext,
+) -> (
+    Desk,
+    std::rc::Rc<FakePages>,
+    DocumentId,
+    DocumentId,
+    &mut VisualTestContext,
+) {
+    let (dir, lock, library) = library_on_disk(cx);
+    let fake = cx.update(innerword_app::pages::use_fake);
+    let text = add_document(&library, None, &notes(), cx);
+    let (desk, cx) = open_desk(dir, lock, library, cx);
+    let board = desk
+        .workspace
+        .update_in(cx, |workspace, window, cx| {
+            workspace.new_board(Some("Plan"), window, cx)
+        })
+        .expect("a whiteboard is made");
+    cx.run_until_parked();
+    fake.board_ready();
+    cx.run_until_parked();
+    (desk, fake, board, text, cx)
+}
+
+/// Skeletons as an agent writes them.
+fn skeletons(value: Value) -> Vec<agent::Skeleton> {
+    serde_json::from_value(value).expect("skeletons")
+}
+
+/// "Draw `elements` on `board`", by Claude.
+fn draw_on(board: DocumentId, elements: Value) -> agent::AddToBoardRequest {
+    agent::AddToBoardRequest {
+        board: board.into(),
+        elements: skeletons(elements),
+        pictures: Vec::new(),
+        base_dir: None,
+        write: claude(),
+    }
+}
+
+/// "Change `changes` on `board`", by Claude.
+fn change_on(board: DocumentId, changes: Value) -> agent::UpdateBoardRequest {
+    agent::UpdateBoardRequest {
+        board: board.into(),
+        changes: serde_json::from_value(changes).expect("changes"),
+        write: claude(),
+    }
+}
+
+/// The state line of the open whiteboard (`board=[…]`).
+fn board_line(desk: &Desk, cx: &mut VisualTestContext) -> String {
+    let line = desk.workspace.update_in(cx, describe_state);
+    line.split("board=[")
+        .nth(1)
+        .and_then(|rest| rest.split(']').next())
+        .unwrap_or_default()
+        .to_string()
+}
+
+/// An agent draws on the open whiteboard: the app carries it out, the view
+/// takes it in as one step of its undo (the base rule, nothing of the
+/// writer's lost), the library keeps the drawing as it was as a version
+/// first, the note says so and its Undo takes it out of the view.
+#[gpui::test]
+fn an_agent_draws_on_the_open_whiteboard_and_the_writer_can_take_it_out(cx: &mut TestAppContext) {
+    let (desk, fake, board, _text, cx) = desk_with_a_board(cx);
+    fake.draw(&drawing(&[shape("mine", 0.0, 1)]));
+    settle_board(cx);
+    assert_eq!(stored_ids(&desk, board, cx), ["mine"]);
+
+    let tool = desk.tool();
+    let request = draw_on(
+        board,
+        json!([{"type": "rectangle", "id": "api", "x": 300, "y": 0, "width": 200,
+                "height": 90, "label": {"text": "API"}}]),
+    );
+    let drawn = ask(cx, move || tool.add_to_board(&request)).expect("the app drew");
+    assert!(
+        drawn.added.iter().any(|added| added.id == "api"),
+        "{drawn:?}"
+    );
+    settle_board(cx);
+
+    // In the view (one adopt), and in the library with the writer's shape.
+    assert_eq!(fake.adopted().len(), 1);
+    assert!(fake.canvas().contains("\"api\""), "{}", fake.canvas());
+    let ids = stored_ids(&desk, board, cx);
+    assert!(
+        ids.contains(&"api".to_string()) && ids.contains(&"mine".to_string()),
+        "{ids:?}"
+    );
+    assert!(
+        version_labels(&desk, board, cx)
+            .iter()
+            .any(|label| label == "Before a drawing by Claude"),
+        "{:?}",
+        version_labels(&desk, board, cx)
+    );
+    let line = board_line(&desk, cx);
+    assert!(
+        line.contains("dirty=no") && line.contains("adopting=no"),
+        "{line}"
+    );
+
+    // The note, and its Undo: one step of the whiteboard's own undo.
+    let said = format!("Claude drew on {}", q("Plan"));
+    assert_eq!(
+        last_note(&desk, cx),
+        (said.clone(), Some("Undo".to_string()))
+    );
+    press_note(&desk, &said, cx);
+    assert!(
+        fake.board_calls().contains(&"undo 1".to_string()),
+        "{:?}",
+        fake.board_calls()
+    );
+}
+
+/// Two changes in a row are one note, and its Undo takes out both; once
+/// the writer draws, the note no longer offers it.
+#[gpui::test]
+fn two_drawings_in_a_row_are_one_note_until_the_writer_draws(cx: &mut TestAppContext) {
+    let (desk, fake, board, _text, cx) = desk_with_a_board(cx);
+    for (id, x) in [("one", 0), ("two", 300)] {
+        let tool = desk.tool();
+        let request = draw_on(
+            board,
+            json!([{"type": "ellipse", "id": id, "x": x, "y": 0}]),
+        );
+        ask(cx, move || tool.add_to_board(&request)).expect("the app drew");
+        settle_board(cx);
+    }
+    let said = format!("Claude made 2 changes to {}", q("Plan"));
+    assert_eq!(last_note(&desk, cx), (said, Some("Undo".to_string())));
+    assert!(matches!(
+        desk.workspace
+            .read_with(cx, |workspace, _| workspace.last_agent_changes().cloned())
+            .and_then(|last| last.undo),
+        Some(AgentUndo::Board { steps: 2, .. })
+    ));
+
+    // The writer draws: an undo would take their gesture out first.
+    let canvas = fake.canvas();
+    let mut scene: Value = serde_json::from_str(&canvas).unwrap();
+    scene["elements"]
+        .as_array_mut()
+        .unwrap()
+        .push(shape("mine", 600.0, 1));
+    fake.draw(&scene.to_string());
+    settle_board(cx);
+    assert_eq!(
+        last_note(&desk, cx),
+        (format!("Claude made 2 changes to {}", q("Plan")), None)
+    );
+    let ids = stored_ids(&desk, board, cx);
+    assert_eq!(ids, ["mine", "one", "two"]);
+}
+
+/// The writer moved a shape and the page has not posted it when an agent
+/// changes the same shape: the request waits for what the page holds at
+/// most a second (here the page does not answer), then goes on; the
+/// writer's copy stays (the base rule), the library holds it after the
+/// next save, and the note names what was not taken.
+#[gpui::test]
+fn a_write_goes_on_after_a_second_and_keeps_the_writers_unposted_stroke(cx: &mut TestAppContext) {
+    let (desk, fake, board, _text, cx) = desk_with_a_board(cx);
+    fake.draw(&drawing(&[shape("api", 0.0, 1), shape("db", 300.0, 1)]));
+    settle_board(cx);
+    fake.hold_collects();
+    // A move of "api" and a new shape, not posted yet.
+    fake.draw_unposted(&drawing(&[
+        shape("api", 40.0, 2),
+        shape("db", 300.0, 1),
+        shape("late", 600.0, 1),
+    ]));
+    cx.run_until_parked();
+
+    let tool = desk.tool();
+    let request = change_on(
+        board,
+        json!([{"id": "api", "dx": -100}, {"id": "db", "backgroundColor": "#ffc9c9"}]),
+    );
+    let asked = asking(move || tool.update_board(&request));
+    // Half a second: still waiting for the page.
+    let started = Instant::now();
+    while cx.update(|_, cx| live::waiting(cx)) == 0 {
+        assert!(
+            started.elapsed() < Duration::from_secs(30),
+            "no request came"
+        );
+        cx.run_until_parked();
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    for _ in 0..10 {
+        cx.executor().advance_clock(live::COMPOSITION_POLL);
+        cx.run_until_parked();
+    }
+    assert!(asked.0.try_recv().is_err(), "it waits for the page");
+    assert!(fake.collects_asked() >= 1, "the page was asked");
+    let changed = answer_in_time(cx, asked, Duration::from_secs(3)).expect("then it goes on");
+    assert!(changed.updated.contains(&"db".to_string()), "{changed:?}");
+    settle_board(cx);
+
+    // The writer's move and their new shape stay; the agent's change of the
+    // other shape is taken.
+    let scene = stored_board(&desk, board, cx);
+    assert_eq!(scene.element("api").unwrap().x(), 40.0, "the writer's copy");
+    assert!(scene.element("late").is_some(), "the unposted stroke");
+    assert!(
+        scene.to_stored().contains("#ffc9c9"),
+        "the agent's change of db"
+    );
+    let note = last_note(&desk, cx).0;
+    assert_eq!(
+        note,
+        format!(
+            "Claude changed {}. 1 of its changes was not taken, because you changed that \
+             element meanwhile: api.",
+            q("Plan")
+        )
+    );
+    fake.release_collects();
+    settle_board(cx);
+    assert_eq!(
+        stored_board(&desk, board, cx).element("api").unwrap().x(),
+        40.0
+    );
+}
+
+/// A read waits for what the page holds at most a second, and then reads
+/// what the app holds.
+#[gpui::test]
+fn a_read_waits_for_the_whiteboard_at_most_a_second(cx: &mut TestAppContext) {
+    let (desk, fake, board, _text, cx) = desk_with_a_board(cx);
+    fake.draw(&drawing(&[shape("posted", 0.0, 1)]));
+    settle_board(cx);
+    fake.hold_collects();
+    fake.draw_unposted(&drawing(&[
+        shape("posted", 0.0, 1),
+        shape("late", 300.0, 1),
+    ]));
+    cx.run_until_parked();
+    let tool = desk.tool();
+    let asked = asking(move || {
+        tool.read(&ReadRequest {
+            document: board.into(),
+            ..ReadRequest::default()
+        })
+    });
+    let read = answer_in_time(cx, asked, Duration::from_secs(3)).expect("read");
+    assert!(read.content.contains("posted"), "{}", read.content);
+    assert!(!read.content.contains("late"), "{}", read.content);
+    // With the page answering, the same read has the stroke.
+    fake.release_collects();
+    settle_board(cx);
+    fake.draw_unposted(&drawing(&[
+        shape("posted", 0.0, 1),
+        shape("late", 300.0, 1),
+        shape("later", 600.0, 1),
+    ]));
+    cx.run_until_parked();
+    let tool = desk.tool();
+    let asked = asking(move || {
+        tool.read(&ReadRequest {
+            document: board.into(),
+            ..ReadRequest::default()
+        })
+    });
+    let read = answer_in_time(cx, asked, Duration::from_secs(3)).expect("read");
+    assert!(read.content.contains("later"), "{}", read.content);
+}
+
+/// A request that comes while a whiteboard is closing (its view parked, its
+/// last gesture being collected) waits for that save, so that the late
+/// collect never writes the scene from before the agent's change over it.
+#[gpui::test]
+fn a_request_waits_for_a_closing_whiteboard(cx: &mut TestAppContext) {
+    let (desk, fake, board, text, cx) = desk_with_a_board(cx);
+    fake.hold_collects();
+    fake.draw_unposted(&drawing(&[shape("late", 0.0, 1)]));
+    cx.run_until_parked();
+    desk.workspace.update_in(cx, |workspace, window, cx| {
+        workspace.open_document(text, true, window, cx);
+    });
+    cx.run_until_parked();
+    assert_eq!(
+        desk.workspace.read_with(cx, |w, _| w.board_closing()),
+        Some(board)
+    );
+    let tool = desk.tool();
+    let request = draw_on(
+        board,
+        json!([{"type": "diamond", "id": "theirs", "x": 300, "y": 0}]),
+    );
+    let asked = asking(move || tool.add_to_board(&request));
+    let started = Instant::now();
+    while cx.update(|_, cx| live::waiting(cx)) == 0 {
+        assert!(
+            started.elapsed() < Duration::from_secs(30),
+            "no request came"
+        );
+        cx.run_until_parked();
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    cx.run_until_parked();
+    assert!(
+        asked.0.try_recv().is_err(),
+        "it waits for the closing whiteboard"
+    );
+    fake.release_collects();
+    answer_in_time(cx, asked, Duration::from_secs(2)).expect("then it is carried out");
+    assert_eq!(stored_ids(&desk, board, cx), ["late", "theirs"]);
+    // The version the agent's change kept has the writer's last stroke.
+    assert!(
+        version_labels(&desk, board, cx)
+            .iter()
+            .any(|label| label == "Before a drawing by Claude")
+    );
+    // Not open: the note offers to open it.
+    assert_eq!(
+        last_note(&desk, cx),
+        (
+            format!("Claude drew on {}", q("Plan")),
+            Some("Open".to_string())
+        )
+    );
+}
+
+/// While an input method composes in a text element of the whiteboard a
+/// change waits, and after three seconds it is refused; a read does not
+/// wait.
+#[gpui::test]
+fn a_change_to_a_whiteboard_waits_for_a_composition_then_is_refused(cx: &mut TestAppContext) {
+    let (desk, fake, board, _text, cx) = desk_with_a_board(cx);
+    fake.draw(&drawing(&[shape("mine", 0.0, 1)]));
+    settle_board(cx);
+    let status = fake.board_status();
+    fake.set_status(Status {
+        composing: true,
+        ..status
+    });
+    cx.run_until_parked();
+    let tool = desk.tool();
+    let request = draw_on(
+        board,
+        json!([{"type": "rectangle", "id": "theirs", "x": 300, "y": 0}]),
+    );
+    let asked = asking(move || tool.add_to_board(&request));
+    let refused = answer_in_time(cx, asked, live::COMPOSITION_PATIENCE * 2).unwrap_err();
+    assert!(
+        matches!(
+            &refused,
+            agent::Error::AppIsOpen {
+                why: Refusal::Composing,
+                ..
+            }
+        ),
+        "{refused:?}"
+    );
+    assert_eq!(
+        stored_ids(&desk, board, cx),
+        ["mine"],
+        "nothing was changed"
+    );
+    assert!(fake.adopted().is_empty());
+    let tool = desk.tool();
+    let read = ask(cx, move || {
+        tool.read(&ReadRequest {
+            document: board.into(),
+            ..ReadRequest::default()
+        })
+    })
+    .expect("a read does not wait for a composition");
+    assert!(read.content.contains("mine"), "{}", read.content);
+}
+
+/// A post that left the page before an agent's change is not saved over
+/// it, and the agent's rename of the open whiteboard is not undone by the
+/// next autosave.
+#[gpui::test]
+fn a_late_post_and_the_autosave_keep_what_an_agent_changed(cx: &mut TestAppContext) {
+    let (desk, fake, board, _text, cx) = desk_with_a_board(cx);
+    fake.draw(&drawing(&[shape("mine", 0.0, 1)]));
+    settle_board(cx);
+    let tool = desk.tool();
+    let request = draw_on(
+        board,
+        json!([{"type": "rectangle", "id": "theirs", "x": 300, "y": 0}]),
+    );
+    ask(cx, move || tool.add_to_board(&request)).expect("the app drew");
+    // The canvas as it was before the change, posted late.
+    fake.post_stale(&drawing(&[shape("mine", 0.0, 1)]), 1);
+    settle_board(cx);
+    assert_eq!(stored_ids(&desk, board, cx), ["mine", "theirs"]);
+
+    // A rename by an agent: the title shown follows, the next save keeps it.
+    let tool = desk.tool();
+    ask(cx, move || {
+        tool.rename_document(&RenameDocumentRequest {
+            document: board.into(),
+            title: "Plan B".into(),
+            write: claude(),
+            ..RenameDocumentRequest::default()
+        })
+    })
+    .expect("renamed");
+    assert_eq!(
+        desk.workspace
+            .read_with(cx, |w, _| w.page_title().map(str::to_string)),
+        Some("Plan B".to_string())
+    );
+    let canvas = fake.canvas();
+    let mut scene: Value = serde_json::from_str(&canvas).unwrap();
+    scene["elements"]
+        .as_array_mut()
+        .unwrap()
+        .push(shape("after", 600.0, 1));
+    fake.draw(&scene.to_string());
+    settle_board(cx);
+    let meta = desk
+        .library
+        .read_with(cx, |library, _| library.document_meta(board).unwrap());
+    assert_eq!(meta.title, "Plan B");
+    assert_eq!(stored_ids(&desk, board, cx), ["after", "mine", "theirs"]);
+}
+
+/// An adopt the view fails (it throws): the app merges in Rust, saves and
+/// reloads the view; the note offers no Undo (the view's undo history went
+/// with the reload), and nothing of either side is lost.
+#[gpui::test]
+fn a_failed_adopt_of_an_agents_change_keeps_both_and_offers_no_undo(cx: &mut TestAppContext) {
+    let (desk, fake, board, _text, cx) = desk_with_a_board(cx);
+    fake.draw(&drawing(&[shape("mine", 0.0, 1)]));
+    settle_board(cx);
+    fake.fail_adopts(FakeFailure::Throws);
+    let tool = desk.tool();
+    let request = draw_on(
+        board,
+        json!([{"type": "rectangle", "id": "theirs", "x": 300, "y": 0}]),
+    );
+    ask(cx, move || tool.add_to_board(&request)).expect("the library has it");
+    settle_board(cx);
+    assert_eq!(fake.reloads(), 1, "the view loads the stored scene");
+    assert_eq!(stored_ids(&desk, board, cx), ["mine", "theirs"]);
+    assert_eq!(
+        last_note(&desk, cx),
+        (format!("Claude drew on {}", q("Plan")), None)
+    );
+}
+
+/// An agent puts a picture from a file on the open whiteboard: the thread
+/// that accepts the request stores its bytes before the request is queued,
+/// the view takes the element in with its `files` entry, and its source
+/// serves the bytes under `_files/`.
+#[gpui::test]
+fn an_agents_picture_on_the_open_whiteboard_is_stored_adopted_and_served(cx: &mut TestAppContext) {
+    let (desk, fake, board, _text, cx) = desk_with_a_board(cx);
+    let folder = tempfile::tempdir().unwrap();
+    let png = innerword_image::fixtures::png(64, 48, [200, 40, 40]);
+    let path = folder.path().join("icon.png");
+    std::fs::write(&path, &png).unwrap();
+    let before = file_count(&desk, cx);
+
+    let tool = desk.tool();
+    let request = draw_on(
+        board,
+        json!([{"type": "image", "id": "icon", "x": 640, "y": 80, "width": 120,
+                "path": path.display().to_string()}]),
+    );
+    let drawn = ask(cx, move || tool.add_to_board(&request)).expect("the app drew");
+    assert_eq!(drawn.pictures.len(), 1, "{drawn:?}");
+    assert_eq!(
+        file_count(&desk, cx),
+        before + 1,
+        "the bytes are in images.db"
+    );
+    settle_board(cx);
+
+    let scene = stored_board(&desk, board, cx);
+    let files = scene.stored_files();
+    assert_eq!(files.len(), 1);
+    let hex = files[0].as_str().to_string();
+    // The adopt carried the picture's entry, and the view's source serves it.
+    let adopted = fake.adopted();
+    assert!(adopted[0].contains(&hex), "{}", adopted[0]);
+    assert!(fake.canvas().contains("\"icon\""));
+    let served = desk
+        .workspace
+        .update(cx, |workspace, cx| {
+            workspace.board_served(&format!("_files/{hex}"), cx)
+        })
+        .expect("served under _files/");
+    assert_eq!(served.media_type, "image/png");
+    assert_eq!(&served.bytes[..], &png[..]);
+    let line = board_line(&desk, cx);
+    assert!(line.contains("pictures=1/1"), "{line}");
+
+    // With the switch off, a picture is refused before it is stored.
+    desk.workspace.update(cx, |workspace, cx| {
+        workspace.set_agents_may_change(false, cx)
+    });
+    let other = folder.path().join("other.png");
+    std::fs::write(&other, innerword_image::fixtures::png(32, 32, [0, 90, 200])).unwrap();
+    let tool = desk.tool();
+    let request = draw_on(
+        board,
+        json!([{"type": "image", "id": "other", "x": 0, "y": 300,
+                "path": other.display().to_string()}]),
+    );
+    let refused = ask(cx, move || tool.add_to_board(&request)).unwrap_err();
+    assert!(
+        matches!(
+            &refused,
+            agent::Error::AppIsOpen {
+                why: Refusal::SwitchedOff,
+                ..
+            }
+        ),
+        "{refused:?}"
+    );
+    assert_eq!(file_count(&desk, cx), before + 1, "nothing more was stored");
+}
+
+/// A whiteboard an agent makes while a text is open: the note says so and
+/// opens it.
+#[gpui::test]
+fn an_agent_makes_a_whiteboard_and_the_note_opens_it(cx: &mut TestAppContext) {
+    let (dir, lock, library) = library_on_disk(cx);
+    let fake = cx.update(innerword_app::pages::use_fake);
+    let text = add_document(&library, None, &notes(), cx);
+    let (desk, cx) = open_desk(dir, lock, library, cx);
+    let tool = desk.tool();
+    let made = ask(cx, move || {
+        tool.create_board(&agent::CreateBoardRequest {
+            title: "Architecture".into(),
+            elements: skeletons(json!([{"type": "rectangle", "id": "api", "x": 0, "y": 0}])),
+            write: claude(),
+            ..agent::CreateBoardRequest::default()
+        })
+    })
+    .expect("made");
+    let board = made.board.id;
+    assert_eq!(open_id(&desk, cx), Some(text), "the text stays open");
+    let said = format!("Claude made the whiteboard {}", q("Architecture"));
+    assert_eq!(
+        last_note(&desk, cx),
+        (said.clone(), Some("Open".to_string()))
+    );
+    press_note(&desk, &said, cx);
+    assert_eq!(
+        desk.workspace.read_with(cx, |w, _| w.open_board_id()),
+        Some(board)
+    );
+    assert_eq!(fake.boards_opened().len(), 1);
 }

@@ -76,8 +76,12 @@ impl Global for AppKeymap {}
 /// namespace of the command's action: the commands of the workspace and
 /// the app work wherever the keyboard is, those of the text where the
 /// keys of the text work. A namespace that is not named works anywhere.
-const HOME_CONTEXTS: [(&str, Option<&str>); 7] = [
+const HOME_CONTEXTS: [(&str, Option<&str>); 8] = [
     ("workspace", None),
+    // The library's commands without a key (its New whiteboard): where its
+    // New document and New folder have theirs, on a row of the tree while
+    // nothing is typed.
+    ("library_panel", Some(innerword_library::TREE_KEY_CONTEXT)),
     // The commands of an open whiteboard (the six Add commands, Mermaid, the
     // shape library): where a whiteboard has the keyboard.
     ("board", Some(crate::boards::BOARD_VIEW)),

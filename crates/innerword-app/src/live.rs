@@ -28,16 +28,22 @@
 //!    toast; the answer goes back.
 //! 3. A change waits while text is being composed with an input method
 //!    (up to [`COMPOSITION_PATIENCE`]; a composition is never broken),
-//!    and the requests behind it wait with it.
+//!    and the requests behind it wait with it. Every request waits, at
+//!    most a second each, for a whiteboard that is closing to be saved and
+//!    for what the open whiteboard's page holds and has not posted
+//!    (`Workspace::must_wait`), so that an agent's change is merged against
+//!    the writer's last gesture and nothing late is saved over it.
 //!
-//! # The files of a page
+//! # The files of a page, the pictures of a whiteboard
 //!
 //! A page an agent adds travels with its files (`add_page`, up to 64 MB
-//! before base64). They are not written on the main thread: the thread
-//! that accepts the request stores them through a connection of its own
-//! to `images.db` before it queues the request
+//! before base64), and a drawing an agent makes on a whiteboard with the
+//! pictures its `image` elements name (`create_board`, `add_to_board`, up
+//! to 32 MB). They are not written on the main thread: the thread that
+//! accepts the request stores them through a connection of its own to
+//! `images.db` before it queues the request
 //! (`innerword_agent::live::store_page_files`), so the main thread only
-//! writes the page's row. While the owner's switch is off that thread
+//! writes the row. While the owner's switch is off that thread
 //! refuses such a request at once and stores nothing: it knows the switch
 //! ([`set_switch`], which the workspace calls whenever the setting is read
 //! or changed).
@@ -474,7 +480,7 @@ fn refuse(incoming: Incoming, refusal: Refusal) {
 
 /// What one look at the request at the head of the queue came to.
 enum Turn {
-    /// It waits for a composition to end.
+    /// It waits: for a composition to end, for a whiteboard's page.
     Wait,
     /// The tool stopped waiting and was told that nothing was changed.
     TooLate,
@@ -484,17 +490,18 @@ enum Turn {
 
 /// The task on the main thread: one request after the other.
 async fn serve(queue: Handoff<Incoming>, window: WindowHandle<Workspace>, cx: &mut AsyncApp) {
-    // Since when the request at the head of the queue has been waiting for
-    // a composition to end.
+    // Since when the request at the head of the queue has been waiting (for
+    // a composition to end, for a whiteboard: `Workspace::must_wait`, which
+    // keeps the patience of each wait).
     let mut waiting_since = None;
     while let Some(incoming) = queue.next().await {
         let now = cx.background_executor().now();
-        let waited =
-            waiting_since.map_or(Duration::ZERO, |since| now.saturating_duration_since(since));
+        let first = waiting_since.is_none();
         let turn = window.update(cx, |workspace, window, cx| {
-            // A change must not break a composition: let it wait, and the
-            // requests behind it.
-            if waited < COMPOSITION_PATIENCE && workspace.must_wait(incoming.request(), cx) {
+            // A change must not break a composition, nor be merged into a
+            // whiteboard before what its page holds is saved: let it wait,
+            // and the requests behind it.
+            if workspace.must_wait(incoming.request(), first, window, cx) {
                 return Turn::Wait;
             }
             // From here on in one go. A tool that has stopped waiting was

@@ -346,6 +346,11 @@ impl BoardState {
         self.pending_post = None;
     }
 
+    /// The number of the adopt the view is asked and has not answered.
+    pub(crate) fn adopt_in_flight(&self) -> Option<u64> {
+        self.adopting.then_some(self.adopt_seq)
+    }
+
     /// Whether the app holds a scene it has not saved.
     pub fn dirty(&self) -> bool {
         self.held.as_ref().is_some_and(|held| held.rev > self.saved)
@@ -563,6 +568,36 @@ impl Workspace {
             .or_else(|_| Scene::from_stored(&json))
             .ok()
             .map(|parsed| parsed.scene)
+    }
+
+    /// The pictures of the open whiteboard the app has stored, by
+    /// Excalidraw's file id.
+    pub(crate) fn board_stored_pictures(&self) -> super::saver::StoredPictures {
+        self.board()
+            .map(BoardState::stored_pictures)
+            .unwrap_or_default()
+    }
+
+    /// How many pictures of the open whiteboard the app has stored.
+    pub(crate) fn board_stored_picture_count(&self) -> usize {
+        self.board().map_or(0, |board| {
+            board
+                .pictures
+                .values()
+                .filter(|picture| matches!(picture, Picture::Stored { .. }))
+                .count()
+        })
+    }
+
+    /// What the open whiteboard's view is served at `path` (`board.json`,
+    /// `_files/<FileId>`, a file of the bundle) by a source over its cell as
+    /// it is now: the view of the real engine is served the same, so tests
+    /// on the fake engine look here. `None` for a path that is answered 404.
+    pub fn board_served(&self, path: &str, cx: &mut App) -> Option<innerword_web::ServedFile> {
+        let cell = self.board()?.cell.clone();
+        let assets = boards::assets(cx).ok()?;
+        let source = boards::LibraryBoardSource::new(assets, self.library.read(cx), cell);
+        innerword_web::PageSource::file(&source, path)
     }
 
     /// What was written where a drawing of the open whiteboard could not be
@@ -824,6 +859,11 @@ impl Workspace {
                 }
             }
         }
+        // The writer drew after an agent's change: the note no longer
+        // offers to undo it.
+        self.board_moved_on(id, cx);
+        // The side chat is sent the listing of what the app holds.
+        self.feed_the_side_chat();
         cx.notify();
     }
 
@@ -1670,6 +1710,7 @@ impl Workspace {
         let Some(board) = self.board_of_mut(id) else {
             return;
         };
+        let seq = board.adopt_seq;
         board.adopting = false;
         board.adopt_before = None;
         board.adopt_writer = None;
@@ -1693,6 +1734,9 @@ impl Workspace {
                 adopted.conflicts.join(", ")
             );
         }
+        // An agent's change: the note says what was not taken, and offers
+        // Undo.
+        self.agent_adopt_answered(id, seq, adopted.rev, &adopted.conflicts, cx);
         cx.notify();
     }
 
@@ -1704,6 +1748,7 @@ impl Workspace {
     /// the save fail, the merge goes to the recovery file and the view still
     /// loads it, on the stored scene's stamp, so that its next post saves it.
     fn board_adopt_failed(&mut self, id: DocumentId, cx: &mut Context<Self>) {
+        self.agent_adopt_failed(id, cx);
         let Some(board) = self.board_of_mut(id) else {
             return;
         };
@@ -3543,10 +3588,12 @@ impl innerword_ui::PickerDelegate for ShapeLibraryDelegate {
 }
 
 impl Workspace {
-    /// "New Whiteboard": an empty whiteboard at the end of the folder
-    /// selected in the library (`folder` when given), titled `title` (or
-    /// "Untitled"), opened with the keyboard on the canvas. Without a page
-    /// engine there is none.
+    /// An empty whiteboard at the end of the folder selected in the library,
+    /// titled `title` (or "Untitled") without the sidebar's field, opened
+    /// with the keyboard on the canvas: the scripted `board:new` and the
+    /// tests. "New Whiteboard" itself names it in place in the sidebar
+    /// (`Workspace::on_new_board`, the library panel's `new_board`). Without
+    /// a page engine there is none.
     pub fn new_board(
         &mut self,
         title: Option<&str>,

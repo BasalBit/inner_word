@@ -168,6 +168,7 @@ fn the_menu_bar_is_the_map_of_the_app(cx: &mut TestAppContext) {
             &[
                 "New Document",
                 "New Folder",
+                "New Whiteboard",
                 "Open Document…",
                 "Save Now",
                 "Rename…",
@@ -1300,4 +1301,92 @@ fn the_description_of_an_image_with_the_pointer_alone(cx: &mut TestAppContext) {
     // One step of undo each.
     vcx.simulate_keystrokes("cmd-z");
     assert_eq!(description(vcx), typed);
+}
+
+/// With a page engine, "New Whiteboard" in the File menu and in the
+/// library's + menu make a whiteboard in the selected folder and name it in
+/// place in the sidebar, which is shown for it when it is hidden; once
+/// named it opens with the keyboard on the canvas. Without an engine the
+/// + menu has no such item.
+#[gpui::test]
+fn new_whiteboard_from_the_file_menu_and_the_plus_menu(cx: &mut TestAppContext) {
+    init(cx);
+    cx.update(innerword_app::pages::use_fake);
+    let library = library(cx);
+    add_document(&library, None, &simple_document("Notes", "A text."), cx);
+    let (workspace, vcx) = open_workspace(&library, cx);
+    let boards = |vcx: &mut VisualTestContext| {
+        library.read_with(vcx, |library, _| {
+            library
+                .all_documents()
+                .unwrap()
+                .into_iter()
+                .filter(|entry| entry.meta.kind == innerword_library::DocumentKind::Board)
+                .map(|entry| (entry.meta.title, entry.meta.id))
+                .collect::<Vec<_>>()
+        })
+    };
+
+    // File > New Whiteboard (the menu item runs the action), with the
+    // sidebar hidden: it is shown for the name.
+    workspace.update_in(vcx, |workspace, window, cx| {
+        workspace.set_sidebar_visible(false, window, cx)
+    });
+    vcx.run_until_parked();
+    assert!(!workspace.read_with(vcx, |w, _| w.settings().sidebar_visible));
+    vcx.update(|window, cx| window.dispatch_action(Box::new(innerword_app::actions::NewBoard), cx));
+    vcx.run_until_parked();
+    assert!(
+        workspace.read_with(vcx, |w, _| w.settings().sidebar_visible),
+        "shown for the name"
+    );
+    assert!(workspace.read_with(vcx, |w, cx| w.panel().read(cx).renaming().is_some()));
+    vcx.simulate_input("Garden");
+    vcx.simulate_keystrokes("enter");
+    vcx.run_until_parked();
+    let made = boards(vcx);
+    assert_eq!(made.len(), 1);
+    assert_eq!(made[0].0, "Garden");
+    assert_eq!(
+        workspace.read_with(vcx, |w, _| w.open_board_id()),
+        Some(made[0].1)
+    );
+
+    // The + menu of the library.
+    click("library-add", vcx);
+    let labels = menu_labels(vcx).expect("the + menu is open");
+    assert!(
+        labels.iter().any(|label| label == "New Whiteboard"),
+        "{labels:?}"
+    );
+    click_menu_item("New Whiteboard", vcx);
+    assert!(workspace.read_with(vcx, |w, cx| w.panel().read(cx).renaming().is_some()));
+    vcx.simulate_input("Kitchen");
+    vcx.simulate_keystrokes("enter");
+    vcx.run_until_parked();
+    let made = boards(vcx);
+    assert_eq!(made.len(), 2);
+    let kitchen = made.iter().find(|(title, _)| title == "Kitchen").unwrap();
+    assert_eq!(
+        workspace.read_with(vcx, |w, _| w.open_board_id()),
+        Some(kitchen.1)
+    );
+}
+
+#[gpui::test]
+fn without_a_page_engine_the_plus_menu_makes_no_whiteboard(cx: &mut TestAppContext) {
+    init(cx);
+    let library = library(cx);
+    add_document(&library, None, &simple_document("Notes", "A text."), cx);
+    let (_workspace, vcx) = open_workspace(&library, cx);
+    click("library-add", vcx);
+    let labels = menu_labels(vcx).expect("the + menu is open");
+    assert!(
+        labels.iter().any(|label| label == "New Document"),
+        "{labels:?}"
+    );
+    assert!(
+        !labels.iter().any(|label| label == "New Whiteboard"),
+        "{labels:?}"
+    );
 }

@@ -236,4 +236,8 @@ fn register_commands(cx: &mut App) {
         }),
         cx,
     );
+    // The library's own "New whiteboard": a row "In the library" of the list
+    // of shortcuts, where it can be given a key (it has none). The palette
+    // leaves it out: it has the window's, which works anywhere.
+    commands::register([innerword_library::new_board_command()], cx);
 }

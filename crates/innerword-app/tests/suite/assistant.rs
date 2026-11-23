@@ -2782,3 +2782,109 @@ fn the_side_chat_over_a_page_sends_its_text(cx: &mut TestAppContext) {
             .is_empty()
     );
 }
+
+/// A text element as Excalidraw keeps it.
+fn board_text(id: &str, text: &str, y: f64) -> serde_json::Value {
+    serde_json::json!({
+        "id": id, "type": "text", "x": 0.0, "y": y, "width": 120.0, "height": 25.0,
+        "angle": 0, "strokeColor": "#1e1e1e", "backgroundColor": "transparent",
+        "fillStyle": "solid", "strokeWidth": 2, "strokeStyle": "solid", "roughness": 1,
+        "opacity": 100, "groupIds": [], "frameId": null, "roundness": null,
+        "seed": 1, "version": 1, "versionNonce": 1, "isDeleted": false,
+        "boundElements": null, "updated": 1, "link": null, "locked": false,
+        "index": format!("a{}", id.len()),
+        "text": text, "originalText": text, "fontSize": 20, "fontFamily": 5,
+        "textAlign": "left", "verticalAlign": "top", "containerId": null,
+        "autoResize": true, "lineHeight": 1.25,
+    })
+}
+
+/// The scene of `elements` as the page posts it.
+fn board_scene(elements: &[serde_json::Value]) -> String {
+    serde_json::json!({
+        "type": "excalidraw", "version": 2, "source": "inner-word",
+        "elements": elements, "appState": { "viewBackgroundColor": "#ffffff" }, "files": {},
+    })
+    .to_string()
+}
+
+/// Over an open whiteboard the side chat is sent the listing of its
+/// elements as the app holds them when the message is sent (what the writer
+/// drew since it opened included, and what the page had not posted when
+/// `cmd-3` asked it), after the sentence that says what a whiteboard is;
+/// the conversation is its own.
+#[gpui::test]
+fn the_side_chat_over_a_whiteboard_sends_its_listing(cx: &mut TestAppContext) {
+    let fake = FakeBackend::new();
+    init(cx);
+    install(&fake, cx);
+    let pages = cx.update(innerword_app::pages::use_fake);
+    let library = library(cx);
+    let text = add_document(
+        &library,
+        None,
+        &simple_document("The Lighthouse", "The keeper climbed the stairs at dusk."),
+        cx,
+    );
+    let (workspace, vcx) = open_workspace(&library, cx);
+    vcx.run_until_parked();
+    let board = workspace
+        .update_in(vcx, |w, window, cx| w.new_board(Some("Plan"), window, cx))
+        .expect("a whiteboard is made");
+    vcx.run_until_parked();
+    pages.board_ready();
+    pages.draw(&board_scene(&[board_text("title", "System overview", 0.0)]));
+    vcx.run_until_parked();
+
+    let open = workspace
+        .read_with(vcx, |w, cx| w.assistant_open_document(cx))
+        .expect("the whiteboard is the open item");
+    assert_eq!(open.id, Some(board.0));
+    assert_eq!(open.kind, innerword_assistant::OpenKind::Board);
+    assert!(
+        open.markdown.contains("System overview"),
+        "{}",
+        open.markdown
+    );
+    assert!(
+        open.markdown.starts_with(&format!("board:{}", board.0)),
+        "{}",
+        open.markdown
+    );
+
+    // A stroke the page has not posted: cmd-3 asks the page for it.
+    pages.draw_unposted(&board_scene(&[
+        board_text("title", "System overview", 0.0),
+        board_text("late", "Written just now", 60.0),
+    ]));
+    vcx.run_until_parked();
+    let asked = pages.collects_asked();
+    vcx.simulate_keystrokes("cmd-3");
+    vcx.run_until_parked();
+    assert_eq!(right_panel(&workspace, vcx), Some(RightPanel::Assistant));
+    assert!(pages.collects_asked() > asked, "the page was asked");
+    let panel = side(&workspace, vcx);
+    fake.reply("It shows the system.");
+    panel.update_in(vcx, |panel, window, cx| {
+        panel.send("What does this whiteboard show?", window, cx)
+    });
+    vcx.run_until_parked();
+    let sent = fake.last_sent().expect("a message was sent");
+    assert!(
+        sent.starts_with(innerword_assistant::BOARD_PREFACE),
+        "{sent}"
+    );
+    assert!(sent.contains("kind=\"board\""), "{sent}");
+    assert!(sent.contains("System overview"), "{sent}");
+    assert!(sent.contains("Written just now"), "{sent}");
+    assert!(sent.ends_with("What does this whiteboard show?"), "{sent}");
+
+    // The conversation is the whiteboard's own.
+    let stored = library.read_with(vcx, |library, _| conversations::load(library, board));
+    assert_eq!(answers(&stored), ["It shows the system."]);
+    assert!(
+        library
+            .read_with(vcx, |library, _| conversations::load(library, text))
+            .is_empty()
+    );
+}

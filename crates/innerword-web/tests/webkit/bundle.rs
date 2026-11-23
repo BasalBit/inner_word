@@ -1410,7 +1410,7 @@ fn shape_library(report: &mut Report, assets: &Assets, elements: &Value, rules: 
 // here, where they run with every other case: against the dist of before those fixes
 // (5f9f3b1 and 3008498), 15 of their checks fail, at least one in each case.
 
-/// The six cases.
+/// The eight cases.
 pub(super) fn the_glue_keeps_what_the_writer_does(report: &mut Report, rules: &Path) {
     let assets = match Assets::find() {
         Ok(assets) => assets,
@@ -1425,6 +1425,8 @@ pub(super) fn the_glue_keeps_what_the_writer_does(report: &mut Report, rules: &P
     adopt_while_a_new_text_is_typed(report, &assets, rules);
     a_start_without_a_stored_scene(report, &assets, rules);
     a_library_longer_than_one_message(report, &assets, rules);
+    a_picture_longer_than_one_message(report, &assets, rules);
+    what_a_paste_brings_is_kept_within_bounds(report, &assets, rules);
 }
 
 /// Three rectangles, r1 to r3, as `board.json` serves them.
@@ -1995,6 +1997,146 @@ fn a_library_longer_than_one_message(report: &mut Report, assets: &Assets, rules
                 .err()
                 .map(|e| format!(", {e}"))
                 .unwrap_or_default()
+        ),
+    );
+}
+
+/// Case 7: a picture whose `file` message would be longer than the view takes (pasted as
+/// Excalidraw JSON from elsewhere, where Excalidraw's own 4 MB limit does not hold): it is
+/// never posted (the view would drop it without a word, and the app would wait for it with
+/// every save), the scene that names it is, and the `files` call answers it as missing.
+fn a_picture_longer_than_one_message(report: &mut Report, assets: &Assets, rules: &Path) {
+    let case = "a picture longer than one message";
+    let source = BundleSource::new(assets);
+    three_rectangles(&source);
+    let host = Host::new();
+    let Some((view, events)) =
+        ready_view(report, &host, case, "board-48-1700000000000", source, rules)
+    else {
+        return;
+    };
+    let id = "ffffffffffffffffffffffffffffffff";
+    let bytes = MAX_MESSAGE_BYTES + 1024 * 1024;
+    let from = events.messages.borrow().len();
+    let added = call(
+        &view,
+        &format!(
+            "const api = window.innerwordBoard.api;
+             const dataURL = 'data:image/png;base64,' + 'A'.repeat({bytes});
+             api.addFiles([{{ id: '{id}', mimeType: 'image/png', dataURL, created: 1 }}]);
+             const base = api.getSceneElements()[0];
+             const picture = {{ ...base, id: 'big', type: 'image', x: 0, y: 600, fileId: '{id}', status: 'saved', scale: [1, 1], crop: null, index: null, version: 1, versionNonce: 7 }};
+             api.updateScene({{ elements: [...api.getSceneElementsIncludingDeleted(), picture], captureUpdate: 'IMMEDIATELY' }});
+             return '1';"
+        ),
+        "{}",
+    );
+    wait(Duration::from_millis(800));
+    let files_posted = posted(&events, "file");
+    let names_it = messages(&events, from).iter().any(|m| {
+        matches!(m, Ok(Message::Scene { scene, .. }) if scene.get().contains("\"big\"") && scene.get().contains(id))
+    });
+    report.check(
+        added.is_ok() && files_posted.is_empty() && names_it,
+        &format!(
+            "{case}: no file is posted, the scene that names it is ({added:?}, {} files posted, scene names it: {names_it})",
+            files_posted.len()
+        ),
+    );
+    let answer = call(&view, calls::FILES, &calls::files_argument(&[id.to_string()]))
+        .and_then(|text| calls::answer::<calls::FilesPosted>(&text));
+    report.check(
+        matches!(&answer, Ok(a) if a.posted.is_empty() && a.missing == [id.to_string()]),
+        &format!("{case}: the files call answers it as missing ({answer:?})"),
+    );
+    report.check(
+        view.stats().messages_dropped == 0 && posted(&events, "file").is_empty(),
+        &format!(
+            "{case}: nothing the bridge would drop was posted ({:?})",
+            view.stats()
+        ),
+    );
+}
+
+/// Case 8: Excalidraw JSON pasted from elsewhere: a link the whiteboard never keeps comes
+/// without it (an `smb:` address would be a link of the exported PDF), one of the web
+/// stays, and `customData` nested deeper than `serde_json` reads leaves the drawing
+/// readable (`innerword_board::Scene::from_view` of the scene the page posts).
+fn what_a_paste_brings_is_kept_within_bounds(report: &mut Report, assets: &Assets, rules: &Path) {
+    let case = "what a paste brings";
+    let source = BundleSource::new(assets);
+    three_rectangles(&source);
+    let host = Host::new();
+    let Some((view, events)) =
+        ready_view(report, &host, case, "board-49-1700000000000", source, rules)
+    else {
+        return;
+    };
+    let shape = |id: &str, y: f64, link: Value, custom: Value| {
+        json!({
+            "id": id, "type": "rectangle", "x": 100, "y": y, "width": 120, "height": 60, "angle": 0,
+            "strokeColor": "#1e1e1e", "backgroundColor": "transparent", "fillStyle": "solid",
+            "strokeWidth": 2, "strokeStyle": "solid", "roughness": 1, "opacity": 100,
+            "groupIds": [], "frameId": null, "index": null, "roundness": null, "seed": 3,
+            "version": 1, "versionNonce": 4, "isDeleted": false, "updated": 1, "link": link,
+            "locked": false, "boundElements": [], "customData": custom
+        })
+    };
+    let mut deep = json!(1);
+    for _ in 0..130 {
+        deep = json!([deep]);
+    }
+    let clipboard = json!({
+        "type": "excalidraw/clipboard",
+        "elements": [
+            shape("smb", 800., json!("smb://attacker.example/share"), json!({})),
+            shape("web", 900., json!("https://example.com/"), json!({})),
+            shape("deep", 1000., Value::Null, json!({ "nested": deep })),
+        ],
+        "files": {}
+    });
+    // serde_json's Value has no depth limit of its own when it writes.
+    let text = clipboard.to_string();
+    let from = events.messages.borrow().len();
+    let pasted = call(
+        &view,
+        r#"const data = new DataTransfer();
+           data.setData('text/plain', arg);
+           document.querySelector('.excalidraw-container')?.focus();
+           document.dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }));
+           await new Promise((r) => setTimeout(r, 300));
+           return '';"#,
+        &text,
+    );
+    wait(Duration::from_millis(700));
+    // The canvas's elements are not read whole here: the deep one is beyond serde_json.
+    let pasted_links: Vec<Value> = page_json(
+        &view,
+        "return JSON.stringify(window.innerwordBoard.api.getSceneElements()
+           .filter((e) => !['r1', 'r2', 'r3'].includes(e.id)).map((e) => e.link ?? null));",
+    )
+    .as_array()
+    .cloned()
+    .unwrap_or_default();
+    report.check(
+        pasted.is_ok()
+            && pasted_links.len() == 3
+            && pasted_links.contains(&json!("https://example.com/"))
+            && !pasted_links.iter().any(|l| l.as_str().is_some_and(|l| l.starts_with("smb:"))),
+        &format!("{case}: an smb link comes without it, a web link with it ({pasted:?}, {pasted_links:?})"),
+    );
+    let scene = messages(&events, from).into_iter().rev().find_map(|m| match m {
+        Ok(Message::Scene { scene, .. }) => Some(scene.get().to_string()),
+        _ => None,
+    });
+    let read = scene
+        .as_deref()
+        .map(|scene| innerword_board::Scene::from_view(scene, &|_: &str| None));
+    report.check(
+        matches!(&read, Some(Ok(parsed)) if parsed.scene.elements().len() == 6),
+        &format!(
+            "{case}: the posted scene is read, deep data and all ({:?})",
+            read.as_ref().map(|r| r.as_ref().map(|p| (p.scene.elements().len(), p.warnings.clone())))
         ),
     );
 }

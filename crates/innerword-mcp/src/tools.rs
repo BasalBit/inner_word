@@ -119,12 +119,16 @@ fn ambiguous_items(report: &ErrorReport) -> Option<String> {
         report.candidates.len()
     );
     for candidate in &report.candidates {
-        let kind = if candidate.kind == ItemKind::Folder {
-            "folder"
-        } else {
-            "doc"
-        };
-        message.push_str(&format!("\n  {kind}:{}  {}", candidate.id, candidate.path));
+        // The item's own prefix (board:12, page:12), as the agent's layer gives it.
+        let reference = candidate.reference.clone().unwrap_or_else(|| {
+            let kind = if candidate.kind == ItemKind::Folder {
+                "folder"
+            } else {
+                "doc"
+            };
+            format!("{kind}:{}", candidate.id)
+        });
+        message.push_str(&format!("\n  {reference}  {}", candidate.path));
         if candidate.trashed {
             message.push_str("  (in the trash)");
         }
@@ -1107,8 +1111,8 @@ shape room for its label. text: x, y, text, fontSize (20), fontFamily, textAlign
 height. arrow: x, y, and points ([[0,0],[200,0]]) or width and height, or start and end \
 ({\"id\":\"api\"}: an element of the whiteboard or of this call, the arrow joined to its edge); it may \
 have a label. line: x, y, and points or width and height. freedraw: x, y, points. frame: children (ids) or \
-x, y, width, height; name. Every element may have id (kept when it is new to the whiteboard; made \
-otherwise), angle, strokeColor, backgroundColor, fillStyle, strokeWidth, strokeStyle, roughness, opacity, \
+x, y, width, height; name. Every element may have id (1 to 64 of A-Za-z0-9_-, made when not given; an id the \
+whiteboard already has, or that two elements of the call share, is refused), angle, strokeColor, backgroundColor, fillStyle, strokeWidth, strokeStyle, roughness, opacity, \
 roundness, groupIds, link and locked. A picture: {\"type\":\"image\",\"x\":640,\"y\":80,\
 \"path\":\"/Users/ada/Pictures/photo.jpg\"}; a whole path of this Mac (PNG, JPEG, GIF, HEIC, TIFF, WebP, \
 BMP or SVG), drawn at its own size unless width or height is given; it is read here and the library keeps \

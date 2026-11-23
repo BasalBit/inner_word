@@ -249,7 +249,7 @@ fn tree_level(
     for document in documents {
         out.push_str(&format!(
             "{indent}{}  {}  ({}, changed {})\n",
-            document.title,
+            shown_title(document),
             reference(document),
             size_word(document),
             time(document.updated_at)
@@ -319,7 +319,7 @@ pub fn info(info: &DocumentInfo) -> String {
     out.push_str(&format!("doc:{}  {}\n", document.id.0, document.path));
     out.push_str(&format!(
         "title:     {} ({})\n",
-        document.title,
+        shown_title(document),
         if info.custom_title {
             "chosen by hand"
         } else {
@@ -406,7 +406,7 @@ fn page_info(info: &DocumentInfo, page: &PageSummary) -> String {
     out.push_str(&format!("{}  {}\n", reference(document), document.path));
     out.push_str(&format!(
         "title:     {} ({})\n",
-        document.title,
+        shown_title(document),
         if info.custom_title {
             "chosen by hand"
         } else {
@@ -483,8 +483,8 @@ fn page_size(files: usize, bytes: u64, externals: usize) -> String {
 /// “Reading Orbitarium”` in a dry run.
 fn page_name(page: &DocumentSummary) -> String {
     match page.id.0 {
-        0 => format!("a new page \u{201c}{}\u{201d}", page.title),
-        id => format!("page:{id} \u{201c}{}\u{201d}", page.title),
+        0 => format!("a new page \u{201c}{}\u{201d}", shown_title(page)),
+        id => format!("page:{id} \u{201c}{}\u{201d}", shown_title(page)),
     }
 }
 
@@ -581,19 +581,20 @@ pub fn pages(list: &PagesList) -> String {
 /// A whiteboard's name in a line about it: `board:12 “Architecture”`, or `a new whiteboard
 /// “Architecture”` in a dry run.
 fn board_name(board: &DocumentSummary) -> String {
-    let title = board_title(board);
+    let title = shown_title(board);
     match board.id.0 {
         0 => format!("a new whiteboard \u{201c}{title}\u{201d}"),
         id => format!("board:{id} \u{201c}{title}\u{201d}"),
     }
 }
 
-/// The title of a whiteboard as it is shown: "Untitled" for one that was given none.
-fn board_title(board: &DocumentSummary) -> &str {
-    if board.title.trim().is_empty() {
+/// The title of an item as it is shown: "Untitled" for one that was given none (an
+/// untitled whiteboard, a new document), as its path says.
+fn shown_title(document: &DocumentSummary) -> &str {
+    if document.title.trim().is_empty() {
         "Untitled"
     } else {
-        &board.title
+        &document.title
     }
 }
 
@@ -615,7 +616,7 @@ fn board_info(info: &DocumentInfo, board: &BoardInfo) -> String {
     out.push_str(&format!("{}  {}\n", reference(document), document.path));
     out.push_str(&format!(
         "title:     {} (its name)\n",
-        board_title(document)
+        shown_title(document)
     ));
     out.push_str(
         "kind:      a whiteboard: a drawing of shapes, arrows, text, frames and pictures; it \
@@ -628,13 +629,19 @@ fn board_info(info: &DocumentInfo, board: &BoardInfo) -> String {
         )),
         None => out.push_str("folder:    (the top level of the library)\n"),
     }
+    // The elements as the listing's header and `boards` count them: a label is part of
+    // its shape or arrow, and is said apart.
     let kinds: Vec<String> = summary
         .by_type
         .iter()
-        .map(|(kind, n)| format!("{n} {kind}"))
+        .map(|(kind, n)| plural(*n, kind, &format!("{kind}s")))
         .collect();
+    let labels = match summary.labels {
+        0 => String::new(),
+        n => format!(" with {}", plural(n, "label", "labels")),
+    };
     out.push_str(&format!(
-        "holds:     {}{}, {}, {}\n",
+        "holds:     {}{}{labels}, {}, {}\n",
         plural(summary.elements, "element", "elements"),
         if kinds.is_empty() {
             String::new()
@@ -905,7 +912,7 @@ pub fn folder_info(info: &FolderInfo) -> String {
         for document in &info.documents {
             out.push_str(&format!(
                 "  {}  {}  ({}, changed {})\n",
-                document.title,
+                shown_title(document),
                 reference(document),
                 size_word(document),
                 time(document.updated_at)
@@ -1419,25 +1426,37 @@ pub fn version_text(text: &VersionText) -> String {
 pub fn version_restored(restored: &VersionRestored) -> String {
     let written = &restored.written;
     let name = document_name(&restored.document);
+    // A whiteboard has a drawing, not a text, and its words say nothing of what changed.
+    let board = restored.document.kind == DocumentKind::Board;
+    let what = if board { "drawing" } else { "text" };
     let mut out = String::new();
     if let Some(nothing) = nothing_to_do(written) {
         out.push_str(&format!(
-            "{nothing}: {name} already has the text of version {}.\n",
+            "{nothing}: {name} already has the {what} of version {}.\n",
             restored.restored.id.0
         ));
         return out;
     }
     out.push_str(dry_run_prefix(written));
-    out.push_str(&format!(
-        "Restored version {} ({}) of {name}: {} -> {} words.\n",
-        restored.restored.id.0,
-        time(restored.restored.created_at),
-        count(restored.words_before),
-        count(restored.words_after)
-    ));
-    if let Some(snapshot) = &restored.snapshot {
+    if board {
         out.push_str(&format!(
-            "The text as it was is kept as version {}; \"innerword history restore {}\" brings it back.\n",
+            "Restored version {} ({}) of {name}: the drawing is as it was then.\n",
+            restored.restored.id.0,
+            time(restored.restored.created_at),
+        ));
+    } else {
+        out.push_str(&format!(
+            "Restored version {} ({}) of {name}: {} -> {} words.\n",
+            restored.restored.id.0,
+            time(restored.restored.created_at),
+            count(restored.words_before),
+            count(restored.words_after)
+        ));
+    }
+    if let Some(snapshot) = &restored.snapshot {
+        let it = if board { "The drawing" } else { "The text" };
+        out.push_str(&format!(
+            "{it} as it was is kept as version {}; \"innerword history restore {}\" brings it back.\n",
             snapshot.id.0, snapshot.id.0
         ));
     }

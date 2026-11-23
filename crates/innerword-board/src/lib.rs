@@ -18,7 +18,10 @@
 //! - The delta between two stored scenes ([`Scene::delta_from`], what the view's `adopt`
 //!   takes) and the merge by the base rule ([`merge`], section 4.5).
 //! - What the assistant proposes: a drawing ([`Drawing`]) read from an answer and checked
-//!   before any whiteboard is looked at.
+//!   before any whiteboard is looked at, applied whole or not at all ([`draw`]), a drawing
+//!   that stands on its own put where it is free and seen ([`place`]); and the rule both
+//!   agents and the assistant follow, that a change which sets what an element already has
+//!   changes nothing ([`changes_that_change`]).
 //! - Excalidraw's shape library as the library keeps it ([`ShapeLibrary`]).
 //! - [`sniff_svg`] (which bytes are kept as an SVG), [`well_formed_json`] (lone surrogates
 //!   mended), [`export_dir`] (what the tool hands its PDF child).
@@ -44,9 +47,13 @@ mod making;
 mod scene;
 mod skeleton;
 mod svg;
+mod unchanged;
 
 pub use delta::{Delta, Merged, merge};
-pub use drawing::{DRAWABLE_TYPES, Drawing, DrawingError, MAX_TITLE_CHARS};
+pub use drawing::{
+    DRAWABLE_TYPES, DrawError, Drawing, DrawingError, Drawn, MAX_TITLE_CHARS, PLACE_GAP,
+    PLACE_MARGIN, Placement, draw, place,
+};
 pub use file_hex::FileHex;
 pub use json::well_formed_json;
 pub use library::{LibraryItem, ParsedLibrary, ShapeLibrary};
@@ -58,6 +65,7 @@ pub use skeleton::{
     add, is_id, picture_paths, remove, update,
 };
 pub use svg::sniff_svg;
+pub use unchanged::changes_that_change;
 
 /// The version of `@excalidraw/excalidraw` whose elements this crate writes and whose
 /// rules it follows; equal to `innerword_board_web::EXCALIDRAW_VERSION` (a test of that

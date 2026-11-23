@@ -14,7 +14,15 @@ use crate::backend::{
     AssistantError, AssistantEvent, HistoryMessage, Role, Selection, ToolActivity, ToolState,
     TurnEnd, TurnId, Usage,
 };
+use crate::drawing::{
+    answer_drawing, drawing_blocks, drawing_history_note, read_block, replace_blocks,
+};
 use crate::time::now_millis;
+
+/// The most characters of drawing blocks the newest answer with a usable drawing keeps as
+/// written in the history a new conversation is told (`docs/assistant-draws-design.md`,
+/// 3.5); every other drawing block is a note.
+pub const HISTORY_DRAWING_CHARS: usize = 8_000;
 
 /// Names a message within its transcript.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -412,7 +420,20 @@ impl Transcript {
     /// ([`ConversationOptions::with_history`](crate::ConversationOptions::with_history)):
     /// questions and the answers that have text, without answers still being written.
     /// Bounded: the most recent messages within `max_chars` characters.
+    ///
+    /// The drawing blocks of an answer are the app's note of what each did ("[Inner Word
+    /// replaced a whiteboard block here: …]", [`drawing_history_note`]), except those of
+    /// the newest answer with a usable drawing when they are at most
+    /// [`HISTORY_DRAWING_CHARS`] together: those stay as written, so a request to rework
+    /// that drawing has its JSON. The transcript itself keeps every answer as written.
     pub fn history(&self, max_chars: usize) -> Vec<HistoryMessage> {
+        let kept = self
+            .messages
+            .iter()
+            .rev()
+            .filter(|message| message.role == Role::Assistant && !message.is_streaming())
+            .find(|message| matches!(answer_drawing(&message.text), Some(Ok(_))))
+            .map(|message| message.id);
         let mut history = Vec::new();
         let mut used = 0usize;
         for message in self.messages.iter().rev() {
@@ -423,6 +444,7 @@ impl Transcript {
                 (Role::User, Some(quote)) if !quote.trim().is_empty() => {
                     crate::context::quick_prompt(&message.text, Some(quote))
                 }
+                (Role::Assistant, _) => history_answer(message, kept == Some(message.id)),
                 _ => message.text.clone(),
             };
             if text.trim().is_empty() {
@@ -567,6 +589,35 @@ impl Transcript {
         transcript.trim();
         Ok(transcript)
     }
+}
+
+/// An answer as the history tells it: each drawing block the app's note, unless `kept`
+/// and its blocks are at most [`HISTORY_DRAWING_CHARS`] together.
+fn history_answer(message: &Message, kept: bool) -> String {
+    let blocks = drawing_blocks(&message.text);
+    if blocks.is_empty() {
+        return message.text.clone();
+    }
+    let size: usize = blocks
+        .iter()
+        .map(|block| message.text[block.range.clone()].chars().count())
+        .sum();
+    if kept && size <= HISTORY_DRAWING_CHARS {
+        return message.text.clone();
+    }
+    replace_blocks(&message.text, &blocks, |_, block| {
+        let what = if !block.closed {
+            "it was not finished".to_string()
+        } else {
+            match read_block(&block.body) {
+                Ok(drawing) => return Some(drawing_history_note(&drawing)),
+                Err(error) => format!("it could not be used: {error}"),
+            }
+        };
+        Some(format!(
+            "[Inner Word replaced a whiteboard block here: {what}.]"
+        ))
+    })
 }
 
 /// The note that ends an answer that was cut off at

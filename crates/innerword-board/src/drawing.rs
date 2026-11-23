@@ -3,10 +3,14 @@
 //! and 7.3), read and checked here ([`Drawing::from_json`]) before any whiteboard is
 //! looked at.
 
+use std::collections::{BTreeSet, HashSet};
+
 use serde_json::{Map, Value};
 
+use crate::geometry::element_bounds;
 use crate::limits::{MAX_ID_CHARS, MAX_REQUEST_ELEMENTS};
 use crate::skeleton::{ElementChange, Skeleton, is_id, limit_words};
+use crate::{AddedElement, BoardError, Bounds, Making, Pictures, Scene};
 
 /// The most characters of a new whiteboard's title taken from a drawing.
 pub const MAX_TITLE_CHARS: usize = 120;
@@ -470,5 +474,536 @@ fn canonical(value: &Value, out: &mut String) {
             out.push(']');
         }
         other => out.push_str(&other.to_string()),
+    }
+}
+
+// ----- applying a drawing ---------------------------------------------------------------
+
+/// The room kept free around a placed drawing.
+pub const PLACE_MARGIN: f64 = 40.0;
+/// The distance from the drawn area of a drawing put beside it.
+pub const PLACE_GAP: f64 = 100.0;
+/// The most places in view [`place`] tries.
+const MAX_PLACES: usize = 2_500;
+
+/// Where a drawing that stands on its own was put (section 5.3).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Placement {
+    /// How far its elements were moved from where the answer wrote them.
+    pub dx: f64,
+    pub dy: f64,
+    /// Whether all of it lies within the view given (`false` without a view).
+    pub in_view: bool,
+}
+
+/// What [`draw`] did.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Drawn {
+    /// The elements added, as `add` reports them (ids as made).
+    pub added: Vec<AddedElement>,
+    /// Every element its changes changed, followers included, after the changes that set
+    /// what an element already had were left out.
+    pub changed: Vec<String>,
+    /// Changes left out because they set what their element already had (by index in
+    /// `update`).
+    pub unchanged: Vec<usize>,
+    /// The elements removed, labels included.
+    pub removed: Vec<String>,
+    /// Arrows left unbound by a removal.
+    pub unbound: Vec<String>,
+    /// Ids its removals named that the whiteboard no longer has: left out.
+    pub already_gone: Vec<String>,
+    /// Ids the answer gave new elements that the whiteboard had: (as written, as made).
+    pub renamed: Vec<(String, String)>,
+    /// `Some` for a drawing that stands on its own (only `add`, naming nothing that was on
+    /// the whiteboard); `None`: it stays where it was written.
+    pub placement: Option<Placement>,
+    /// The converter's warnings ("db sticks out of frame backend: …"), after placement.
+    pub warnings: Vec<String>,
+}
+
+impl Drawn {
+    /// Whether the scene is as it was: nothing added, every change left out (it set what
+    /// its element had) and every removal gone already. Then [`draw`] left the scene
+    /// untouched, and the caller keeps no version, saves nothing and adopts nothing.
+    pub fn is_nothing(&self) -> bool {
+        self.added.is_empty() && self.changed.is_empty() && self.removed.is_empty()
+    }
+}
+
+/// Why nothing was drawn.
+#[derive(Clone, Debug, PartialEq)]
+pub enum DrawError {
+    /// It names elements the scene does not have: `changed` by the ids of its changes,
+    /// `named` by references (an arrow's `start` or `end`, a frame's `children`, in `add`
+    /// or in `update`) that are neither in the scene nor among its own adds.
+    Gone {
+        changed: Vec<String>,
+        named: Vec<String>,
+    },
+    /// The converter's refusal: a field, a value, the whiteboard's limits for agents.
+    Board(BoardError),
+}
+
+/// "api", "api and db", "a, b, c, d, e and 3 more", with "is" or "are".
+fn ids_and_verb(ids: &[String]) -> (String, &'static str) {
+    let shown: Vec<&str> = ids.iter().take(5).map(String::as_str).collect();
+    let list = if ids.len() > 5 {
+        format!("{} and {} more", shown.join(", "), ids.len() - 5)
+    } else if shown.len() > 1 {
+        format!(
+            "{} and {}",
+            shown[..shown.len() - 1].join(", "),
+            shown[shown.len() - 1]
+        )
+    } else {
+        shown.join("")
+    };
+    (list, if ids.len() == 1 { "is" } else { "are" })
+}
+
+/// The open whiteboard's words: "the answer changes api and db, which are no longer on
+/// the whiteboard" / "the answer joins arrows or frames to cache, which is no longer on
+/// the whiteboard"; [`BoardError`]'s words.
+impl std::fmt::Display for DrawError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DrawError::Gone { changed, named } => {
+                let mut clauses = Vec::new();
+                if !changed.is_empty() {
+                    let (list, verb) = ids_and_verb(changed);
+                    clauses.push(format!(
+                        "the answer changes {list}, which {verb} no longer on the whiteboard"
+                    ));
+                }
+                if !named.is_empty() {
+                    let (list, verb) = ids_and_verb(named);
+                    clauses.push(format!(
+                        "the answer joins arrows or frames to {list}, which {verb} no longer on the whiteboard"
+                    ));
+                }
+                f.write_str(&clauses.join("; "))
+            }
+            DrawError::Board(error) => error.fmt(f),
+        }
+    }
+}
+
+impl std::error::Error for DrawError {}
+
+impl From<BoardError> for DrawError {
+    fn from(error: BoardError) -> Self {
+        DrawError::Board(error)
+    }
+}
+
+/// The ids an element or a change names besides its own: `start.id`, `end.id`, and the
+/// entries of `children`.
+fn references(map: &Map<String, Value>) -> Vec<String> {
+    let mut out = Vec::new();
+    for field in ["start", "end"] {
+        if let Some(Value::Object(end)) = map.get(field)
+            && let Some(id) = end.get("id").and_then(Value::as_str)
+        {
+            out.push(id.to_string());
+        }
+    }
+    if let Some(Value::Array(children)) = map.get("children") {
+        out.extend(
+            children
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string),
+        );
+    }
+    out
+}
+
+/// Renames the references of an element of `add` (its `start`, `end` and `children`)
+/// that name a renamed id.
+fn rename_references(map: &mut Map<String, Value>, renamed: &[(String, String)]) {
+    let new_name = |id: &str| {
+        renamed
+            .iter()
+            .find(|(old, _)| old == id)
+            .map(|(_, new)| new.clone())
+    };
+    for field in ["start", "end"] {
+        if let Some(Value::Object(end)) = map.get_mut(field)
+            && let Some(new) = end.get("id").and_then(Value::as_str).and_then(new_name)
+        {
+            end.insert("id".into(), Value::String(new));
+        }
+    }
+    if let Some(Value::Array(children)) = map.get_mut("children") {
+        for child in children {
+            if let Some(new) = child.as_str().and_then(new_name) {
+                *child = Value::String(new);
+            }
+        }
+    }
+}
+
+/// A free name for `id`: `<stem>-<n>` for the smallest `n` from 2 that `taken` does not
+/// have, `<stem>` cut so that the name is at most [`MAX_ID_CHARS`].
+fn free_name(id: &str, taken: &HashSet<String>) -> String {
+    let mut n = 2usize;
+    loop {
+        let suffix = format!("-{n}");
+        let room = MAX_ID_CHARS.saturating_sub(suffix.len());
+        // Ids are ASCII (`is_id`), so a byte is a character.
+        let stem = &id[..id.len().min(room)];
+        let name = format!("{stem}{suffix}");
+        if !taken.contains(&name) {
+            return name;
+        }
+        n += 1;
+    }
+}
+
+/// The union of rectangles `[x1, y1, x2, y2]`.
+fn union(rects: impl IntoIterator<Item = [f64; 4]>) -> Option<[f64; 4]> {
+    rects.into_iter().reduce(|a, b| {
+        [
+            a[0].min(b[0]),
+            a[1].min(b[1]),
+            a[2].max(b[2]),
+            a[3].max(b[3]),
+        ]
+    })
+}
+
+fn rect_of(bounds: Bounds) -> [f64; 4] {
+    [
+        bounds.x,
+        bounds.y,
+        bounds.x + bounds.width,
+        bounds.y + bounds.height,
+    ]
+}
+
+fn bounds_of(rect: [f64; 4]) -> Bounds {
+    Bounds {
+        x: rect[0],
+        y: rect[1],
+        width: rect[2] - rect[0],
+        height: rect[3] - rect[1],
+    }
+}
+
+/// Applies `drawing` to `scene`, whole or not at all (on an error the scene is as it was;
+/// `docs/assistant-draws-design.md`, section 5):
+/// 1. removals of ids the scene does not have are left out (`already_gone`);
+/// 2. a change of an id the scene does not have, or a reference (`start`, `end`,
+///    `children`, in `add` and in `update`) to an id that is neither in the scene nor
+///    among the drawing's own adds, is [`DrawError::Gone`] (every such id, each once);
+/// 3. an id of `add` that the scene has is renamed, with every reference to it inside
+///    `add`; `update` and `remove`, their `start`, `end` and `children` included, always
+///    mean the whiteboard's element when the whiteboard has that id;
+/// 4. [`add`](crate::add) with no pictures, then, for a drawing that stands on its own,
+///    [`place`] and the added elements moved by its offset (one rigid move);
+/// 5. [`update`](crate::update) with only the changes that change something
+///    ([`changes_that_change`](crate::changes_that_change)), then
+///    [`remove`](crate::remove);
+/// 6. the warnings of frames computed again after the move.
+///
+/// **Renaming**: the new name is `<stem>-<n>` for the smallest `n` from 2 that is free
+/// against every id of the scene, every id written in `add` and every name given by an
+/// earlier renaming; `<stem>` is the id cut so that the name is at most 64 characters.
+///
+/// The limits are the agents'. `view` is where the writer is looking, in scene
+/// coordinates (`None`: unknown, or a new whiteboard).
+pub fn draw(
+    scene: &mut Scene,
+    drawing: &Drawing,
+    view: Option<Bounds>,
+    making: &mut dyn Making,
+) -> Result<Drawn, DrawError> {
+    let on_board: HashSet<String> = scene
+        .elements()
+        .iter()
+        .map(|e| e.id().to_string())
+        .collect();
+    let written: HashSet<String> = drawing
+        .add
+        .iter()
+        .filter_map(|s| s.0.get("id").and_then(Value::as_str))
+        .map(str::to_string)
+        .collect();
+
+    // 1, 2: what is gone.
+    let mut already_gone = Vec::new();
+    let mut to_remove = Vec::new();
+    for id in drawing.removed_ids() {
+        if on_board.contains(&id) {
+            to_remove.push(id);
+        } else {
+            already_gone.push(id);
+        }
+    }
+    let mut gone_changed: Vec<String> = Vec::new();
+    let mut gone_named: Vec<String> = Vec::new();
+    let note = |list: &mut Vec<String>, id: &str| {
+        if !list.iter().any(|known| known == id) {
+            list.push(id.to_string());
+        }
+    };
+    for change in &drawing.update {
+        if let Some(id) = change.0.get("id").and_then(Value::as_str)
+            && !on_board.contains(id)
+        {
+            note(&mut gone_changed, id);
+        }
+    }
+    for map in drawing
+        .add
+        .iter()
+        .map(|s| &s.0)
+        .chain(drawing.update.iter().map(|c| &c.0))
+    {
+        for id in references(map) {
+            if !on_board.contains(&id) && !written.contains(&id) {
+                note(&mut gone_named, &id);
+            }
+        }
+    }
+    if !gone_changed.is_empty() || !gone_named.is_empty() {
+        return Err(DrawError::Gone {
+            changed: gone_changed,
+            named: gone_named,
+        });
+    }
+
+    // 3: ids of new elements that the whiteboard has.
+    let mut taken: HashSet<String> = on_board.iter().cloned().collect();
+    taken.extend(written.iter().cloned());
+    let mut renamed: Vec<(String, String)> = Vec::new();
+    for skeleton in &drawing.add {
+        if let Some(id) = skeleton.0.get("id").and_then(Value::as_str)
+            && on_board.contains(id)
+            && !renamed.iter().any(|(old, _)| old == id)
+        {
+            let name = free_name(id, &taken);
+            taken.insert(name.clone());
+            renamed.push((id.to_string(), name));
+        }
+    }
+    let skeletons: Vec<Skeleton> = drawing
+        .add
+        .iter()
+        .map(|skeleton| {
+            let mut map = skeleton.0.clone();
+            if let Some(new) = map
+                .get("id")
+                .and_then(Value::as_str)
+                .and_then(|id| renamed.iter().find(|(old, _)| old == id))
+                .map(|(_, new)| new.clone())
+            {
+                map.insert("id".into(), Value::String(new));
+            }
+            rename_references(&mut map, &renamed);
+            Skeleton(map)
+        })
+        .collect();
+
+    // 4: add, and place what stands on its own.
+    let mut work = scene.clone();
+    let added = if skeletons.is_empty() {
+        Vec::new()
+    } else {
+        crate::add(&mut work, &skeletons, &Pictures::new(), making)?.elements
+    };
+    let added_ids: Vec<String> = added
+        .iter()
+        .flat_map(|e| std::iter::once(e.id.clone()).chain(e.with.iter().cloned()))
+        .collect();
+    let stands_alone = !added.is_empty()
+        && drawing.update.is_empty()
+        && drawing.remove.is_empty()
+        && skeletons
+            .iter()
+            .all(|s| references(&s.0).iter().all(|id| !on_board.contains(id)));
+    let mut placement = None;
+    if stands_alone {
+        let mine: HashSet<&str> = added_ids.iter().map(String::as_str).collect();
+        let group = union(
+            work.elements()
+                .iter()
+                .filter(|e| mine.contains(e.id()))
+                .filter_map(element_bounds),
+        );
+        if let Some(group) = group {
+            let occupied: Vec<Bounds> = scene
+                .elements()
+                .iter()
+                .filter_map(element_bounds)
+                .map(bounds_of)
+                .collect();
+            let placed = place(bounds_of(group), &occupied, view);
+            if placed.dx != 0.0 || placed.dy != 0.0 {
+                for element in work.elements.iter_mut() {
+                    if mine.contains(element.id()) {
+                        let (x, y) = (element.x(), element.y());
+                        element.set_f64("x", x + placed.dx);
+                        element.set_f64("y", y + placed.dy);
+                    }
+                }
+            }
+            placement = Some(placed);
+        }
+    }
+    let mut warnings: Vec<String> = crate::frames::sticking_out(&work, &added_ids);
+
+    // 5: the changes that change something, then the removals.
+    let mut changed = Vec::new();
+    let mut unchanged = Vec::new();
+    if !drawing.update.is_empty() {
+        let before = work.clone();
+        crate::update(&mut work, &drawing.update, making)?;
+        let kept =
+            crate::changes_that_change(&drawing.update, &before, &work, |scene, changes| {
+                crate::update(scene, changes, making).map(|_| ())
+            })?;
+        let effective: Vec<ElementChange> = drawing
+            .update
+            .iter()
+            .zip(&kept)
+            .filter(|(_, kept)| **kept)
+            .map(|(change, _)| change.clone())
+            .collect();
+        unchanged = kept
+            .iter()
+            .enumerate()
+            .filter(|(_, kept)| !**kept)
+            .map(|(n, _)| n)
+            .collect();
+        work = before;
+        if !effective.is_empty() {
+            let updated = crate::update(&mut work, &effective, making)?;
+            changed = updated.changed;
+            warnings.extend(updated.warnings);
+        }
+    }
+    let (removed, unbound) = if to_remove.is_empty() {
+        (Vec::new(), Vec::new())
+    } else {
+        let removed = crate::remove(&mut work, &to_remove, making)?;
+        (removed.removed, removed.unbound)
+    };
+
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+    warnings.retain(|warning| seen.insert(warning.clone()));
+    let drawn = Drawn {
+        added,
+        changed,
+        unchanged,
+        removed,
+        unbound,
+        already_gone,
+        renamed,
+        placement,
+        warnings,
+    };
+    if !drawn.is_nothing() {
+        *scene = work;
+    }
+    Ok(drawn)
+}
+
+/// Whether two rectangles `[x1, y1, x2, y2]` overlap (touching edges do not).
+fn meets(a: &[f64; 4], b: &[f64; 4]) -> bool {
+    a[0] < b[2] && b[0] < a[2] && a[1] < b[3] && b[1] < a[3]
+}
+
+/// Where a group of elements with bounds `group` goes, given the bounds of what is on the
+/// whiteboard and the view (section 5.3), with `PLACE_MARGIN` free around it:
+/// 1. where it was written, when that is free and wholly in the view;
+/// 2. else the free place in the view nearest to where it was written (a grid of places
+///    over the view shrunk by the margin, at most 2,500, and the place as written clamped
+///    into it), nearest first, then by `y`, then by `x`;
+/// 3. else (it is larger than the view, or the view is full) as written when free, else
+///    beside the drawn area, `PLACE_GAP` to its right.
+///
+/// Without a view: as written when free, else beside the drawn area.
+pub fn place(group: Bounds, occupied: &[Bounds], view: Option<Bounds>) -> Placement {
+    let m = PLACE_MARGIN;
+    let (w, h) = (group.width.max(0.0), group.height.max(0.0));
+    let rects: Vec<[f64; 4]> = occupied.iter().map(|b| rect_of(*b)).collect();
+    let free_among = |rects: &[[f64; 4]], x: f64, y: f64| {
+        let grown = [x - m, y - m, x + w + m, y + h + m];
+        !rects.iter().any(|r| meets(&grown, r))
+    };
+    let in_view = |x: f64, y: f64| {
+        view.is_some_and(|v| {
+            x >= v.x && y >= v.y && x + w <= v.x + v.width && y + h <= v.y + v.height
+        })
+    };
+    let at = |x: f64, y: f64| Placement {
+        dx: x - group.x,
+        dy: y - group.y,
+        in_view: in_view(x, y),
+    };
+    let free_as_written = free_among(&rects, group.x, group.y);
+    if free_as_written && in_view(group.x, group.y) {
+        return Placement {
+            dx: 0.0,
+            dy: 0.0,
+            in_view: true,
+        };
+    }
+    if let Some(v) = view {
+        let (x_min, x_max) = (v.x + m, v.x + v.width - m - w);
+        let (y_min, y_max) = (v.y + m, v.y + v.height - m - h);
+        if x_min <= x_max && y_min <= y_max {
+            let near_view = [v.x - m, v.y - m, v.x + v.width + m, v.y + v.height + m];
+            let nearby: Vec<[f64; 4]> = rects
+                .iter()
+                .filter(|r| meets(r, &near_view))
+                .copied()
+                .collect();
+            let mut step = (v.width.min(v.height) / 24.0).max(16.0);
+            let count = |step: f64| {
+                let nx = ((x_max - x_min) / step).floor() as usize + 1;
+                let ny = ((y_max - y_min) / step).floor() as usize + 1;
+                nx.saturating_mul(ny)
+            };
+            while count(step) > MAX_PLACES {
+                step *= 1.25;
+            }
+            let wanted = (group.x.clamp(x_min, x_max), group.y.clamp(y_min, y_max));
+            let nx = ((x_max - x_min) / step).floor() as usize + 1;
+            let ny = ((y_max - y_min) / step).floor() as usize + 1;
+            let mut places: Vec<(f64, f64)> = Vec::with_capacity(nx * ny + 1);
+            places.push(wanted);
+            for j in 0..ny {
+                for i in 0..nx {
+                    places.push((x_min + i as f64 * step, y_min + j as f64 * step));
+                }
+            }
+            let distance = |p: &(f64, f64)| (p.0 - wanted.0).hypot(p.1 - wanted.1);
+            places.sort_by(|a, b| {
+                distance(a)
+                    .total_cmp(&distance(b))
+                    .then(a.1.total_cmp(&b.1))
+                    .then(a.0.total_cmp(&b.0))
+            });
+            if let Some((x, y)) = places
+                .into_iter()
+                .find(|(x, y)| free_among(&nearby, *x, *y))
+            {
+                return Placement {
+                    dx: x - group.x,
+                    dy: y - group.y,
+                    in_view: true,
+                };
+            }
+        }
+    }
+    if free_as_written {
+        return at(group.x, group.y);
+    }
+    match union(rects.iter().copied()) {
+        Some(drawn) => at(drawn[2] + PLACE_GAP, drawn[1]),
+        None => at(group.x, group.y),
     }
 }

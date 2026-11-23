@@ -86,7 +86,8 @@ pub use drawing::{
 pub use events::{EventSink, EventStream, event_channel};
 pub use fake::{FakeBackend, FakeReply, FakeSent, fake_catalog, fake_info};
 pub use prompts::{
-    QUICK_SYSTEM_PROMPT, SIDE_SYSTEM_PROMPT, drawing_prompt, side_system_prompt, system_prompt,
+    DRAWING_ELEMENTS, QUICK_SYSTEM_PROMPT, SIDE_SYSTEM_PROMPT, drawing_prompt, side_system_prompt,
+    system_prompt,
 };
 pub use session::{ChatSession, privacy_notice};
 pub use tools::{
@@ -94,5 +95,6 @@ pub use tools::{
     library_observer, library_tools, library_tools_named, read_only_tools, withheld_tools,
 };
 pub use transcript::{
-    Attachment, AttachmentKind, CUT_OFF_NOTE, Message, MessageId, MessageState, Transcript,
+    Attachment, AttachmentKind, CUT_OFF_NOTE, HISTORY_DRAWING_CHARS, Message, MessageId,
+    MessageState, Transcript,
 };

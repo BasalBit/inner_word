@@ -238,7 +238,7 @@ thread_local! {
 
 /// The drawing of a closed block's body, read once while it stays among the last
 /// [`CACHE_ENTRIES`] read.
-fn read_block(body: &str) -> Read {
+pub(crate) fn read_block(body: &str) -> Read {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     body.hash(&mut hasher);
     let key = (hasher.finish(), body.len());
@@ -353,7 +353,7 @@ fn without_blank_start(text: &str) -> &str {
 
 /// Puts `between` in place of each block's range, the blank lines around each made part
 /// of one paragraph break: `between` is `None` to leave the block out.
-fn replace_blocks<'a>(
+pub(crate) fn replace_blocks<'a>(
     markdown: &'a str,
     blocks: &[DrawingBlock],
     mut between: impl FnMut(usize, &DrawingBlock) -> Option<String>,

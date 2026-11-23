@@ -120,18 +120,159 @@ pub const SIDE_WITHOUT_TOOLS_NOTE: &str = "\n\nIn this conversation you have no 
 cannot read the library. You see the open document as it is sent to you and nothing else. \
 If the user attaches other documents or asks about them, say that you cannot read them now.";
 
-/// The section of the side prompt for `target`, `None` for [`DrawingTarget::None`].
-pub fn drawing_prompt(target: DrawingTarget) -> Option<String> {
-    let _ = target;
-    None
+/// What both drawing sections say about elements (`docs/assistant-draws-design.md`, 3.2):
+/// the agents' element skeletons, as the skill teaches them.
+pub const DRAWING_ELEMENTS: &str = "\
+The elements are Excalidraw's element skeletons, JSON objects with Excalidraw's own field names:
+- Every element has \"type\", \"x\" and \"y\" (its top left corner) and an \"id\" of your own (letters, digits, \"-\" and \"_\"), by which arrows, frames and later changes name it.
+- \"rectangle\", \"ellipse\" and \"diamond\" may have \"width\" and \"height\" and a \"label\": {\"text\": \"API\"}. A shape with a label and no size is fitted to its label; make one that holds a few words about 160 x 80.
+- \"text\" has \"text\" and may have \"fontSize\" (20; 28 for a heading). Never give a text a width or a height.
+- \"arrow\" joins two elements: \"start\": {\"id\": \"api\"} and \"end\": {\"id\": \"db\"}, with \"x\" and \"y\" near its start; it may have a \"label\". An arrow or a \"line\" that joins nothing has \"points\" relative to its x and y, such as [[0, 0], [200, 0]].
+- \"frame\" holds elements: \"children\": [\"api\", \"db\"] and a \"name\"; without a size it is fitted around them.
+- Any element may have \"strokeColor\" and \"backgroundColor\" (\"#1971c2\", \"#a5d8ff\", \"transparent\"), \"fillStyle\" (\"solid\", \"hachure\", \"cross-hatch\"), \"strokeWidth\" (1, 2 or 4), \"strokeStyle\" (\"solid\", \"dashed\", \"dotted\"), \"roughness\" (0 neat, 1, 2 sketchy), \"opacity\" (0 to 100), \"angle\" (in radians) and \"link\" (an http, https or mailto address).
+- A drawing cannot bring a picture: there is no \"image\" element.
+Leave room: 60 to 120 between shapes, rows and columns lined up, few colours.";
+
+/// The paragraph both sections end their instructions with: what the history's note is.
+const HISTORY_NOTE_PARAGRAPH: &str = "\
+Earlier drawings of this conversation may appear above as a note in square brackets, \"[Inner Word replaced a whiteboard block here: …]\". That note is the app's, not a way to answer: always write a new drawing as a whiteboard block.";
+
+/// The whiteboard the example of the open whiteboard's section draws on: one labelled
+/// rectangle, as `innerword_board::add` makes it.
+pub(crate) const EXAMPLE_SKELETON: &str = r#"[{"type": "rectangle", "id": "api", "x": 100, "y": 80, "width": 200, "height": 90, "label": {"text": "API"}}]"#;
+
+/// The example whiteboard of the open whiteboard's section (3.5): the same every time.
+pub(crate) fn example_scene() -> innerword_board::Scene {
+    let mut scene = innerword_board::Scene::empty();
+    let skeletons: Vec<innerword_board::Skeleton> =
+        serde_json::from_str(EXAMPLE_SKELETON).expect("the example skeleton is JSON");
+    let mut making = innerword_board::HashedMaking::new(&[b"the prompt's example"], 0);
+    innerword_board::add(
+        &mut scene,
+        &skeletons,
+        &innerword_board::Pictures::new(),
+        &mut making,
+    )
+    .expect("the converter makes the example");
+    scene
 }
 
+/// The listing of the example whiteboard, as the side chat is sent a whiteboard's.
+pub(crate) fn example_listing() -> String {
+    example_scene().listing(&innerword_board::ListingHeader {
+        reference: "board:12",
+        title: "Plan",
+        folder: None,
+    })
+}
+
+/// The example of the open whiteboard's section: the drawing it answers with.
+pub(crate) const WHITEBOARD_EXAMPLE: &str = r##"```whiteboard
+{"add": [
+  {"type": "ellipse", "id": "db", "x": 420, "y": 80, "width": 160, "height": 90, "label": {"text": "Postgres"}},
+  {"type": "arrow", "id": "reads", "x": 300, "y": 125, "start": {"id": "api"}, "end": {"id": "db"}, "label": {"text": "reads"}}],
+ "update": [{"id": "api", "backgroundColor": "#a5d8ff", "fillStyle": "solid"}]}
+```"##;
+
+/// The example of the document's section: a new whiteboard's drawing.
+pub(crate) const DOCUMENT_EXAMPLE: &str = r##"```whiteboard
+{"title": "Who serves whom", "add": [
+  {"type": "ellipse", "id": "keeper", "x": 0, "y": 0, "width": 180, "height": 80, "label": {"text": "The keeper"}},
+  {"type": "ellipse", "id": "ada", "x": 320, "y": 0, "width": 180, "height": 80, "label": {"text": "Ada"}},
+  {"type": "arrow", "id": "serves", "x": 180, "y": 40, "start": {"id": "keeper"}, "end": {"id": "ada"}, "label": {"text": "serves"}}]}
+```"##;
+
+/// "Drawing on the open whiteboard" (3.3).
+fn whiteboard_section() -> String {
+    format!(
+        "\
+Drawing on the open whiteboard. You cannot change the whiteboard yourself, but you can propose a drawing: a button under your answer lets the writer apply it, as one step they can undo, and the whiteboard as it was is kept as a version. Propose a drawing when the writer asks you to draw, add, arrange, connect, restyle, relabel or remove something on the whiteboard. Never say that you drew or changed anything: say what the drawing will do.
+
+Write the drawing as one fenced code block whose info string is whiteboard, holding one JSON object with up to three lists:
+
+```whiteboard
+{{\"add\": [new elements], \"update\": [changes], \"remove\": [\"id\"]}}
+```
+
+The writer does not see the JSON: in its place the app shows one line that says what the drawing adds, changes and removes. Write one such block per answer, with a sentence or two around it on what it does; to offer alternatives, describe them and draw the one the writer chooses.
+
+{DRAWING_ELEMENTS}
+
+\"update\" changes elements of the whiteboard by the ids of the listing: {{\"id\": \"api\", \"dx\": 40, \"dy\": 0}} moves one (\"x\" and \"y\" move it to a place); a change may also set \"width\", \"height\", \"angle\", \"text\" (of a text, or the label of a shape or an arrow), \"fontSize\", \"name\" (of a frame), \"start\" or \"end\" (an arrow joined to another element), \"link\" (null removes it) and any style field above. A label, the ends of arrows and what a frame holds follow by themselves. \"remove\" takes ids: a shape goes with its label and the arrows joined to it stay; a frame goes and what it held stays.
+
+Positions are the whiteboard's own, as the listing gives them: x grows to the right and y downwards, in pixels at 100 %; \"at (x, y)\" is an element's top left corner, and the listing's first line gives the drawn area. Give new elements ids the listing does not have. A drawing that stands on its own goes beside what is drawn, 100 or more to the right of or below the drawn area; one that would cover the drawing is moved by the app to free space.
+
+{HISTORY_NOTE_PARAGRAPH}
+
+For example, with this listing:
+{listing}
+asked to add the database the API reads from and to make the API blue, answer:
+
+{WHITEBOARD_EXAMPLE}",
+        listing = example_listing().trim_end(),
+    )
+}
+
+/// "Drawing a new whiteboard" (3.4).
+fn document_section() -> String {
+    format!(
+        "\
+Drawing a new whiteboard. When the writer asks you to draw, diagram, map or chart something (how the characters are related, the outline as boxes, a timeline, how the parts of an argument connect), answer with a drawing: a button under your answer makes it into a new whiteboard beside the document. Never say that you made the whiteboard: say what the drawing shows.
+
+Write the drawing as one fenced code block whose info string is whiteboard, holding one JSON object with a short \"title\" for the whiteboard and the elements to \"add\":
+
+```whiteboard
+{{\"title\": \"Who serves whom\", \"add\": [elements]}}
+```
+
+The writer does not see the JSON: in its place the app shows one line that says what the drawing holds. Write one such block per answer, with a sentence before or after it on what it shows.
+
+{DRAWING_ELEMENTS}
+
+x grows to the right and y downwards, in pixels; start near (0, 0). Draw what was asked, usually under a hundred elements.
+
+{HISTORY_NOTE_PARAGRAPH} To change a drawing you wrote before, write it again whole.
+
+For example, asked who serves whom in the chapter:
+
+{DOCUMENT_EXAMPLE}"
+    )
+}
+
+/// The section of the side prompt for `target` (`docs/assistant-draws-design.md`, 3.3 and
+/// 3.4), `None` for [`DrawingTarget::None`].
+pub fn drawing_prompt(target: DrawingTarget) -> Option<String> {
+    match target {
+        DrawingTarget::None => None,
+        DrawingTarget::OpenWhiteboard => Some(whiteboard_section()),
+        DrawingTarget::NewWhiteboard => Some(document_section()),
+    }
+}
+
+/// The clauses of the base side prompt that change when a drawing section follows: (as
+/// today, with a drawing section).
+const DRAWING_CLAUSES: [(&str, &str); 2] = [
+    (
+        "Answer about it, sum it up and suggest changes in words, and do not offer text to put \
+into it.",
+        "Answer about it, sum it up and suggest changes, and do not offer text to put into it.",
+    ),
+    (
+        "No code blocks around prose.",
+        "No code blocks around prose (a whiteboard block, below, is the one exception).",
+    ),
+];
+
 /// The system prompt of the side chat, with or without the tools of the library, and with
-/// the drawing section of `target`. For [`DrawingTarget::None`] exactly
-/// [`SIDE_SYSTEM_PROMPT`] (and the note without tools).
+/// the drawing section of `target` after the base prompt. For [`DrawingTarget::None`]
+/// exactly [`SIDE_SYSTEM_PROMPT`] (and the note without tools).
 pub fn side_system_prompt(tools: bool, target: DrawingTarget) -> String {
     let mut prompt = SIDE_SYSTEM_PROMPT.to_string();
     if let Some(section) = drawing_prompt(target) {
+        for (today, with_drawings) in DRAWING_CLAUSES {
+            debug_assert!(prompt.contains(today), "the base prompt says: {today}");
+            prompt = prompt.replace(today, with_drawings);
+        }
         prompt.push_str("\n\n");
         prompt.push_str(&section);
     }
@@ -185,5 +326,138 @@ the pictures on it. It cannot be changed by you: only its owner draws on it, in 
         assert!(side_system_prompt(true, DrawingTarget::None).contains(SENTENCE));
         assert!(side_system_prompt(false, DrawingTarget::None).contains(SENTENCE));
         assert!(!QUICK_SYSTEM_PROMPT.contains("whiteboard"));
+    }
+
+    const TARGETS: [DrawingTarget; 3] = [
+        DrawingTarget::None,
+        DrawingTarget::OpenWhiteboard,
+        DrawingTarget::NewWhiteboard,
+    ];
+
+    /// Each target's section is in its side prompt and only there; without a target the
+    /// side prompt is today's text exactly, with and without tools.
+    #[test]
+    fn each_target_has_its_section() {
+        assert_eq!(drawing_prompt(DrawingTarget::None), None);
+        assert_eq!(
+            side_system_prompt(true, DrawingTarget::None),
+            SIDE_SYSTEM_PROMPT
+        );
+        assert_eq!(
+            side_system_prompt(false, DrawingTarget::None),
+            format!("{SIDE_SYSTEM_PROMPT}{SIDE_WITHOUT_TOOLS_NOTE}")
+        );
+        const BOARD: &str = "Drawing on the open whiteboard.";
+        const NEW: &str = "Drawing a new whiteboard.";
+        for tools in [true, false] {
+            let none = side_system_prompt(tools, DrawingTarget::None);
+            let board = side_system_prompt(tools, DrawingTarget::OpenWhiteboard);
+            let new = side_system_prompt(tools, DrawingTarget::NewWhiteboard);
+            assert!(!none.contains(BOARD) && !none.contains(NEW));
+            assert!(board.contains(BOARD) && !board.contains(NEW));
+            assert!(new.contains(NEW) && !new.contains(BOARD));
+            for prompt in [&board, &new] {
+                // The base prompt first, the section after it, the note without tools last.
+                assert!(prompt.starts_with("You are the writing assistant inside Inner Word"));
+                assert_eq!(prompt.ends_with(SIDE_WITHOUT_TOOLS_NOTE), !tools);
+                // The two clauses that change, and the sentence that stays.
+                assert!(prompt.contains(
+                    "Answer about it, sum it up and suggest changes, and do not offer text to put into it."
+                ));
+                assert!(!prompt.contains("suggest changes in words"));
+                assert!(prompt.contains(
+                    "No code blocks around prose (a whiteboard block, below, is the one exception)."
+                ));
+                assert!(prompt.contains(
+                    "It cannot be changed by you: only its owner draws on it, in the app."
+                ));
+                assert!(prompt.contains(DRAWING_ELEMENTS));
+                assert!(prompt.contains(HISTORY_NOTE_PARAGRAPH));
+            }
+        }
+        assert!(!QUICK_SYSTEM_PROMPT.contains("whiteboard"));
+    }
+
+    /// The budget of the sections (3.5): they are in every request of a conversation.
+    #[test]
+    fn the_sections_keep_to_their_budget() {
+        let board = drawing_prompt(DrawingTarget::OpenWhiteboard).unwrap();
+        let new = drawing_prompt(DrawingTarget::NewWhiteboard).unwrap();
+        assert!(board.chars().count() <= 4_600, "{}", board.chars().count());
+        assert!(new.chars().count() <= 3_600, "{}", new.chars().count());
+        for target in TARGETS {
+            assert_eq!(
+                side_system_prompt(true, target).chars().count(),
+                SIDE_SYSTEM_PROMPT.chars().count()
+                    + drawing_prompt(target).map_or(0, |section| section.chars().count() + 2)
+                    + match target {
+                        DrawingTarget::None => 0,
+                        // The two clauses: " in words" out, the exception in.
+                        _ =>
+                            " (a whiteboard block, below, is the one exception)".len()
+                                - " in words".len(),
+                    }
+            );
+        }
+    }
+
+    /// The example listing is the real format: `Scene::listing` of the example scene.
+    #[test]
+    fn the_example_listing_is_made_by_the_listing() {
+        let listing = example_scene().listing(&innerword_board::ListingHeader {
+            reference: "board:12",
+            title: "Plan",
+            folder: None,
+        });
+        assert!(listing.contains("api"));
+        let section = drawing_prompt(DrawingTarget::OpenWhiteboard).unwrap();
+        assert!(section.contains(listing.trim_end()), "{section}");
+        assert!(section.contains(WHITEBOARD_EXAMPLE));
+        let new = drawing_prompt(DrawingTarget::NewWhiteboard).unwrap();
+        assert!(new.contains(DOCUMENT_EXAMPLE));
+    }
+
+    /// The examples of the prompts draw, with the counts their prose claims: a prompt
+    /// that teaches a field the converter refuses fails here.
+    #[test]
+    fn the_examples_in_the_prompts_draw() {
+        let drawing = crate::answer_drawing(WHITEBOARD_EXAMPLE).unwrap().unwrap();
+        let mut scene = example_scene();
+        let mut making = innerword_board::HashedMaking::new(&[b"example"], 0);
+        let drawn = innerword_board::draw(&mut scene, &drawing, None, &mut making).unwrap();
+        let added: Vec<&str> = drawn.added.iter().map(|e| e.id.as_str()).collect();
+        assert_eq!(added, vec!["db", "reads"], "the database and the arrow");
+        assert!(drawn.changed.contains(&"api".to_string()), "the API");
+        assert!(drawn.unchanged.is_empty() && drawn.renamed.is_empty());
+        assert!(drawn.warnings.is_empty(), "{:?}", drawn.warnings);
+        assert_eq!(
+            scene.element("api").unwrap().json()["backgroundColor"],
+            "#a5d8ff"
+        );
+        assert_eq!(
+            scene.element("reads").unwrap().binding("start"),
+            Some("api")
+        );
+        assert_eq!(scene.element("reads").unwrap().binding("end"), Some("db"));
+        assert_eq!(
+            crate::drawing_sentence(&drawing, DrawingTarget::OpenWhiteboard, None),
+            "Drawing: adds an ellipse and an arrow; changes api."
+        );
+
+        let drawing = crate::answer_drawing(DOCUMENT_EXAMPLE).unwrap().unwrap();
+        assert_eq!(drawing.title.as_deref(), Some("Who serves whom"));
+        assert!(
+            !drawing.has_changes(),
+            "a new whiteboard's drawing only adds"
+        );
+        let mut scene = innerword_board::Scene::empty();
+        let drawn = innerword_board::draw(&mut scene, &drawing, None, &mut making).unwrap();
+        let added: Vec<&str> = drawn.added.iter().map(|e| e.id.as_str()).collect();
+        assert_eq!(added, vec!["keeper", "ada", "serves"]);
+        assert_eq!(scene.element("serves").unwrap().binding("end"), Some("ada"));
+        assert_eq!(
+            crate::drawing_sentence(&drawing, DrawingTarget::NewWhiteboard, None),
+            "Drawing: adds 2 ellipses and an arrow (new whiteboard “Who serves whom”)."
+        );
     }
 }

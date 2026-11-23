@@ -453,11 +453,22 @@ fn the_side_prompt_is_a_collaborator_who_reads_and_advises() {
             "{tool} is not a read-only tool of the server"
         );
     }
-    for tool in innerword_assistant::withheld_tools() {
-        assert!(
-            !prompt.contains(&tool),
-            "the prompt names {tool}, which the assistant does not have"
-        );
+    // With every target's drawing section too: a drawing is text in an answer, never a
+    // tool, and no section names a tool that writes.
+    for target in [
+        DrawingTarget::None,
+        DrawingTarget::OpenWhiteboard,
+        DrawingTarget::NewWhiteboard,
+    ] {
+        for tools in [true, false] {
+            let prompt = side_system_prompt(tools, target);
+            for tool in innerword_assistant::withheld_tools() {
+                assert!(
+                    !prompt.contains(&tool),
+                    "the prompt of {target:?} names {tool}, which the assistant does not have"
+                );
+            }
+        }
     }
     // Without tools it says so.
     assert_eq!(side_system_prompt(true, DrawingTarget::None), prompt);

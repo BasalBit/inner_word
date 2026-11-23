@@ -575,3 +575,89 @@ fn an_answer_drawn_is_recorded_and_kept() {
         None
     );
 }
+
+#[test]
+fn the_history_tells_older_drawings_as_notes_and_keeps_the_newest() {
+    let fake = FakeBackend::new();
+    let newest = r#"{"add": [{"type": "rectangle", "id": "cache", "x": 700, "y": 80}]}"#;
+    fake.reply(answer("First.", BLOCK, "Done."));
+    fake.reply("Just words.");
+    fake.reply(answer("Second.", newest, ""));
+    fake.reply(answer("Third.", "{\"add\": [", "Broken."));
+    let mut chat = ChatSession::side(Arc::new(fake.clone()), None)
+        .with_drawing_target(DrawingTarget::OpenWhiteboard);
+    for question in ["Draw one.", "Talk.", "Draw two.", "Draw three."] {
+        chat.ask_side(question, Some(&whiteboard()));
+        pump(&mut chat);
+    }
+    let history = chat
+        .transcript()
+        .history(innerword_assistant::HISTORY_LIMIT);
+    let answers: Vec<&str> = history
+        .iter()
+        .filter(|m| m.role == Role::Assistant)
+        .map(|m| m.text.as_str())
+        .collect();
+    assert_eq!(
+        answers[0],
+        "First.\n\n[Inner Word replaced a whiteboard block here: it added an ellipse and an arrow and changed api.]\n\nDone."
+    );
+    assert_eq!(answers[1], "Just words.");
+    // The newest usable drawing as written.
+    assert_eq!(answers[2], answer("Second.", newest, ""));
+    assert!(
+        answers[3].starts_with(
+            "Third.\n\n[Inner Word replaced a whiteboard block here: it could not be used: it is not JSON (line "
+        ),
+        "{}",
+        answers[3]
+    );
+    // The transcript keeps every answer as written.
+    assert!(
+        chat.transcript().messages[1]
+            .text
+            .contains("backgroundColor")
+    );
+
+    // A newest drawing over 8,000 characters is a note too.
+    let fake = FakeBackend::new();
+    let many: Vec<String> = (0..120)
+        .map(|n| format!(r#"{{"type": "rectangle", "id": "box{n}", "x": {}, "y": 0, "width": 100, "height": 60}}"#, n * 140))
+        .collect();
+    let large = format!("[{}]", many.join(",\n"));
+    assert!(large.len() > innerword_assistant::HISTORY_DRAWING_CHARS);
+    fake.reply(answer("Big.", &large, ""));
+    let mut chat = ChatSession::side(Arc::new(fake.clone()), None);
+    chat.ask_side("Draw a lot.", None);
+    pump(&mut chat);
+    let history = chat
+        .transcript()
+        .history(innerword_assistant::HISTORY_LIMIT);
+    assert_eq!(
+        history[1].text,
+        "Big.\n\n[Inner Word replaced a whiteboard block here: it added 120 rectangles.]"
+    );
+}
+
+#[test]
+fn a_chat_with_a_target_is_told_how_to_draw() {
+    let fake = FakeBackend::new();
+    let mut chat = ChatSession::side(Arc::new(fake.clone()), None)
+        .with_drawing_target(DrawingTarget::OpenWhiteboard);
+    chat.ask_side("Add a database.", Some(&whiteboard()));
+    pump(&mut chat);
+    let prompt = fake.last_started().unwrap().system_prompt;
+    assert!(prompt.contains("Drawing on the open whiteboard."));
+    assert!(prompt.contains("```whiteboard"));
+    let fake = FakeBackend::new();
+    let mut chat = ChatSession::side(Arc::new(fake.clone()), None)
+        .with_drawing_target(DrawingTarget::NewWhiteboard);
+    chat.ask_side("Draw the outline.", None);
+    pump(&mut chat);
+    assert!(
+        fake.last_started()
+            .unwrap()
+            .system_prompt
+            .contains("Drawing a new whiteboard.")
+    );
+}

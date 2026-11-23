@@ -853,6 +853,7 @@ impl FakeBoard {
         self.given(rev);
         self.status.editing = false;
         self.status.pointer_down = false;
+        self.status.library_waiting = false;
         json!({
             "rev": rev,
             "scene": scene,
@@ -1191,27 +1192,42 @@ impl crate::pages::FakePages {
     }
 
     /// The shape library changed: the page posts `library` with the next
-    /// counter, as `onLibraryChange` does.
+    /// counter, as `onLibraryChange` does 300 ms later, with the statuses
+    /// the glue posts around it (`libraryWaiting` true at the change, false
+    /// once the change is posted).
     pub fn change_library(&self, items_json: &str) {
-        let (lrev, items) = {
+        let waiting = self.library_changed(items_json);
+        self.post_board(Message::Status(waiting));
+        let (lrev, items, status) = {
             let mut board = self.board.borrow_mut();
-            board.library = serde_json::from_str(items_json).unwrap_or_else(|_| json!([]));
-            board.lrev += 1;
             board.library_posted = board.lrev;
-            (board.lrev, board.library.to_string())
+            board.status.library_waiting = false;
+            (board.lrev, board.library.to_string(), board.status.clone())
         };
         self.post_board(Message::Library {
             lrev,
             items: raw(items),
             too_large: false,
         });
+        self.post_board(Message::Status(status));
     }
 
-    /// The shape library changed and the page has not posted it yet.
+    /// The shape library changed and the page has not posted it yet (inside
+    /// the glue's 300 ms): the status it posts at once says
+    /// `libraryWaiting`, and a `collect` brings the change.
     pub fn change_library_unposted(&self, items_json: &str) {
+        let waiting = self.library_changed(items_json);
+        self.post_board(Message::Status(waiting));
+    }
+
+    /// The canvas's library is `items_json` with the next counter, and the
+    /// status says a change waits; returns that status.
+    fn library_changed(&self, items_json: &str) -> Status {
         let mut board = self.board.borrow_mut();
         board.library = serde_json::from_str(items_json).unwrap_or_else(|_| json!([]));
         board.lrev += 1;
+        board.status.library_waiting = true;
+        board.status.clone()
     }
 
     /// Whether the closing view is parked.
@@ -1595,9 +1611,9 @@ impl crate::pages::FakeView {
                 let lrev = {
                     let mut board = pages.board.borrow_mut();
                     board.calls.push(format!("library {words}"));
-                    // As the glue: the selection becomes an item, and the
-                    // change is posted a moment later (never, here: a
-                    // collect takes it).
+                    // As the glue: the selection becomes an item, the status
+                    // says a change waits, and the change is posted a moment
+                    // later (never, here: a collect takes it).
                     if words == "addSelection" {
                         let id = format!("added-{}", board.lrev + 1);
                         let shape = json!({
@@ -1618,9 +1634,16 @@ impl crate::pages::FakeView {
                             board.library = json!([item]);
                         }
                         board.lrev += 1;
+                        // The glue posts a status at once when a change
+                        // starts to wait for its post.
+                        board.status.library_waiting = true;
                     }
-                    board.lrev
+                    (board.lrev, (words == "addSelection").then(|| board.status.clone()))
                 };
+                let (lrev, waiting) = lrev;
+                if let Some(status) = waiting {
+                    pages.post_board(Message::Status(status));
+                }
                 done(Ok(
                     json!({ "lrev": lrev, "added": null, "refused": null }).to_string()
                 ));

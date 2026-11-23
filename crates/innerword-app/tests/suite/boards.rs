@@ -1448,6 +1448,50 @@ fn a_shape_library_change_not_posted_comes_with_the_collect_at_quit(cx: &mut Tes
 }
 
 #[gpui::test]
+fn a_shape_library_change_waiting_its_post_is_kept_by_a_switch_at_once(cx: &mut TestAppContext) {
+    // A change made in Excalidraw's own sidebar, the drawing untouched: the
+    // page posts it 300 ms later, and the writer opens a text before that.
+    let (fake, library, workspace, _board, text, vcx) = open_board(cx);
+    fake.change_library_unposted(&json!([item("sidebar", 1)]).to_string());
+    vcx.run_until_parked();
+    assert!(workspace.read_with(vcx, |w, _| w.board_holds_more()));
+    let collects = fake.collects_asked();
+    workspace.update_in(vcx, |w, window, cx| {
+        w.open_document(text, true, window, cx);
+    });
+    vcx.run_until_parked();
+    assert_eq!(fake.collects_asked(), collects + 1, "the page is asked");
+    assert_eq!(library_items(&library, vcx), ["sidebar"]);
+    assert_eq!(
+        workspace.read_with(vcx, |w, _| w.open_document_id()),
+        Some(text)
+    );
+}
+
+#[gpui::test]
+fn a_shape_library_change_a_call_answered_is_collected_without_the_status(
+    cx: &mut TestAppContext,
+) {
+    // An older glue's status has no `libraryWaiting`: the call's answer
+    // alone says the page holds a change.
+    let (fake, library, workspace, _board, text, vcx) = open_board(cx);
+    let focus = workspace.read_with(vcx, |w, _| w.page_focus_handle().unwrap());
+    vcx.update(|window, _| window.focus(&focus));
+    vcx.update(|window, cx| window.dispatch_action(Box::new(AddToShapeLibrary), cx));
+    vcx.run_until_parked();
+    let mut status = fake.board_status();
+    status.library_waiting = false;
+    fake.set_status(status);
+    vcx.run_until_parked();
+    assert!(workspace.read_with(vcx, |w, _| w.board_holds_more()));
+    workspace.update_in(vcx, |w, window, cx| {
+        w.open_document(text, true, window, cx);
+    });
+    vcx.run_until_parked();
+    assert_eq!(library_items(&library, vcx), ["added-1"]);
+}
+
+#[gpui::test]
 fn an_item_of_the_shape_library_with_a_picture_is_dropped(cx: &mut TestAppContext) {
     let (fake, library, _workspace, _board, _, vcx) = open_board(cx);
     let with_picture = json!({ "id": "pictured", "status": "unpublished", "created": 2,

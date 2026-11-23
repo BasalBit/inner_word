@@ -390,10 +390,16 @@ impl BoardState {
 
     /// Whether the page holds something the app has not been given: a
     /// newer scene, a text being edited, a gesture in its middle (its
-    /// status), or a change of the shape library a call answered and the
-    /// page has not posted yet. A deliberate end asks it first then.
+    /// status), a change of the shape library waiting for its post (the
+    /// status's `libraryWaiting`: a change made in Excalidraw's sidebar is
+    /// posted 300 ms later, or never while it is too long for one message),
+    /// or a change of the shape library a call answered and the page has
+    /// not posted yet. A deliberate end asks it first then.
     pub fn holds_more(&self) -> bool {
-        self.ready && (self.status.holds_more() || self.library_answered > self.library_lrev)
+        self.ready
+            && (self.status.holds_more()
+                || self.status.library_waiting
+                || self.library_answered > self.library_lrev)
     }
 
     /// Whether the held scene is the one last written to the recovery file.

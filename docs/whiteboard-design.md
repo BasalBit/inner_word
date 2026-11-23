@@ -1777,7 +1777,23 @@ the library** (answer 6).
   of the page. `collect` brings a waiting change at once (its `library` field), and the
   status it answers says false. It is **not** part of `Status::holds_more`, which is about
   the drawing: the app collects at a deliberate end while either holds
-  (`BoardState::holds_more`). The WebKit case `a_library_change_waiting_its_post` holds
+  (`BoardState::holds_more`: the drawing's `Status::holds_more`, `library_waiting`, or a
+  call's answered `lrev` above the last post taken, which still covers a status of an
+  older glue). So switching to another item, closing, quitting, Duplicate and a PDF
+  export collect a change made in Excalidraw's sidebar inside its 300 ms. The calls that
+  collect only for the drawing (an agent's request on the open whiteboard, a message of
+  the side chat, an Add command) keep to `Status::holds_more`: none of them reads or
+  changes the shape library, and a waiting change still reaches the setting at its post or
+  at the next deliberate end. The fake page engine models the field (a change not posted
+  yet posts a status saying true; its post, and `collect`, say false); the app's tests
+  `a_shape_library_change_waiting_its_post_is_kept_by_a_switch_at_once` (a sidebar change,
+  the drawing untouched, another document opened at once: the page is asked and the
+  setting holds the change) and
+  `a_shape_library_change_a_call_answered_is_collected_without_the_status`. Checked in a
+  scripted run of the debug app on a temporary library: Excalidraw's own `updateLibrary`
+  (`board:js`), `wait:40`, `keys:cmd-n`: the new item was in the setting and came back
+  after a relaunch; the same run with the field left out of `holds_more` lost it. The
+  same for "Add selection to shape library" followed by `cmd-n` 50 ms later. The WebKit case `a_library_change_waiting_its_post` holds
   the status posted at the change, the `state` call, `collect` bringing it inside the
   300 ms and answering false, nothing posted after it, and the post and false without
   `collect`; `a_library_longer_than_one_message` holds the status true while too large and

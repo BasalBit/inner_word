@@ -2347,8 +2347,9 @@ the shape library, closing and quitting), `workspace/board_pdf.rs` (its PDF),
   one for every whiteboard, kept in the library's setting `board.shape_library`
   (Excalidraw's `.excalidrawlib` form, at most 8 MB and 1,000 items, an item with a
   picture dropped), posted by the page 300 ms after it changes (meanwhile the page's status
-  says `libraryWaiting: true`, `Status::library_waiting`, and `collect` brings it at once)
-  and served to the next view; "Show
+  says `libraryWaiting: true`, `Status::library_waiting`, and `collect` brings it at once;
+  `BoardState::holds_more` reads it, so switching away, closing or quitting inside those
+  300 ms collects the change first) and served to the next view; "Show
   or hide the shape library", "Add selection to shape library", "Insert from shape
   library…" (a picker of the app). Pictures come by paste, a drop from the Finder,
   Insert > Image… and agents.

@@ -212,7 +212,10 @@ seconds for it (`single_instance::TOOL_PATIENCE`) before it says the library is 
 
 A scripted run stays in the background and draws its own frames, so it works while the
 window is covered. Do not script anything that writes the system clipboard (copy, cut,
-"Copy as Markdown"): it is the user's clipboard. A scripted run does not write user defaults
+"Copy as Markdown"): it is the user's clipboard. The export picker filtered on "markdown"
+or "plain text" can have "Copy as Markdown" or "Copy as plain text" marked, so a `keys:down` or
+`keys:enter` after it writes the clipboard (it happened in the whiteboard's acceptance runs):
+script `type:markdown file` or `type:.md`, and check the marked row with `state` before `enter`. A scripted run does not write user defaults
 either (the accent-menu default below) unless `INNER_WORD_USER_DEFAULTS=1` is set. A tiling window
 manager (macOS's own tiling, or a third-party one) can tile the window and then ignore
 `resize:`; check with `info`.

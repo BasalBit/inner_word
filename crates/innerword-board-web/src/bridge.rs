@@ -303,7 +303,7 @@ pub fn parse(body: &str) -> Result<Message, String> {
     })
 }
 
-/// The text with every lone surrogate escape (`\ud800` without its pair) made `�`, as
+/// The text with every lone surrogate escape (`\ud800` without its pair) made the escape of U+FFFD, as
 /// the glue does before it posts: serde_json refuses one in a string. An escaped backslash
 /// is passed over whole, so `\\ud800` (a backslash and the letters) stays.
 pub(crate) fn well_formed(text: &str) -> std::borrow::Cow<'_, str> {
@@ -333,13 +333,13 @@ pub(crate) fn well_formed(text: &str) -> std::borrow::Cow<'_, str> {
         };
         let high = (0xd800..=0xdbff).contains(&first);
         let low = (0xdc00..=0xdfff).contains(&first);
-        if high && bytes.get(i + 6) == Some(&b'\\') && bytes.get(i + 7) == Some(&b'u') {
-            if let Some(second) = unit(i + 6) {
-                if (0xdc00..=0xdfff).contains(&second) {
-                    i += 12;
-                    continue;
-                }
-            }
+        let paired = high
+            && bytes.get(i + 6) == Some(&b'\\')
+            && bytes.get(i + 7) == Some(&b'u')
+            && unit(i + 6).is_some_and(|second| (0xdc00..=0xdfff).contains(&second));
+        if paired {
+            i += 12;
+            continue;
         }
         if high || low {
             let out = out.get_or_insert_with(|| String::with_capacity(text.len()));

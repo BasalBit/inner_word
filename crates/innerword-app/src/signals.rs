@@ -112,7 +112,8 @@ pub fn quit_on_termination_signals(cx: &mut App) {
     let signalled = cx.background_spawn(async move { wait(fd) });
     cx.spawn(async move |cx| {
         if signalled.await {
-            cx.update(|cx| cx.quit()).ok();
+            // As `cmd-q`: an open whiteboard is asked for its last gesture first.
+            cx.update(crate::quit::request).ok();
         }
     })
     .detach();

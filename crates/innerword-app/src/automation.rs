@@ -1135,6 +1135,55 @@ async fn execute(
             }
             frame_pause(window, view, cx).await;
         }
+        Step::Print(step)
+            if workspace_handle(window, cx)?
+                .update(cx, |workspace, _, _| workspace.open_board_id().is_some())? =>
+        {
+            // A whiteboard: its PDF from the stored scene (after what the page
+            // holds is saved), and on paper scaled down to fit (A4 for the
+            // save job, so nothing depends on this Mac's printer).
+            let started = Instant::now();
+            let made = workspace_handle(window, cx)?
+                .update(cx, |workspace, window, cx| workspace.board_pdf_now(window, cx))?
+                .await
+                .map_err(|why| anyhow!("the whiteboard was not printed: {why}"))?;
+            let path = absolute(match &step {
+                PrintStep::Pdf(path) | PrintStep::Job(path) => path.clone(),
+            });
+            if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+                std::fs::create_dir_all(parent)
+                    .with_context(|| format!("creating {}", parent.display()))?;
+            }
+            match step {
+                PrintStep::Pdf(_) => {
+                    std::fs::write(&path, &made.bytes)
+                        .with_context(|| format!("writing {}", path.display()))?;
+                    eprintln!(
+                        "[automation] print: {} page, {:.2} x {:.2} pt (a whiteboard, WebKit), made in {:.2} s",
+                        made.pages,
+                        made.paper.0,
+                        made.paper.1,
+                        started.elapsed().as_secs_f64()
+                    );
+                }
+                PrintStep::Job(_) => {
+                    let pdf = innerword_print::Pdf::from_bytes(made.bytes, made.pages);
+                    let request = innerword_print::PrintRequest {
+                        pdf: &pdf,
+                        paper: Some((595.28, 841.89)),
+                        scaling: innerword_print::Scaling::DownToFit,
+                        title: "Whiteboard",
+                    };
+                    match innerword_print::run_save_job(&request, &path) {
+                        Ok(()) => {
+                            eprintln!("[automation] print: job saved to {}", path.display())
+                        }
+                        Err(error) => bail!("the print job was not saved: {error}"),
+                    }
+                }
+            }
+            frame_pause(window, view, cx).await;
+        }
         Step::Print(PrintStep::Pdf(path))
             if workspace_handle(window, cx)?
                 .update(cx, |workspace, _, _| workspace.open_page_id().is_some())? =>

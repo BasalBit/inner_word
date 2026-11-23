@@ -78,6 +78,7 @@ pub mod pinch;
 pub mod press_and_hold;
 pub mod printing;
 pub mod quick_open;
+pub mod quit;
 pub mod screenshot;
 pub mod settings;
 pub mod settings_view;
@@ -161,7 +162,8 @@ pub fn init(cx: &mut App) {
     // menu bar's own bindings).
     keymap::take_defaults(cx);
 
-    cx.on_action(|_: &actions::Quit, cx| cx.quit());
+    // The app's own quit asks an open whiteboard for its last gesture first.
+    cx.on_action(|_: &actions::Quit, cx| quit::request(cx));
     cx.on_action(|_: &actions::Hide, cx| cx.hide());
     cx.on_action(|_: &actions::HideOthers, cx| cx.hide_other_apps());
     cx.on_action(|_: &actions::ShowAll, cx| cx.unhide_other_apps());

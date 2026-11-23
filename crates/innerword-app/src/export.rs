@@ -259,6 +259,9 @@ pub struct PreparedExport {
     /// How many pages of the folder were left out (a page is exported on
     /// its own, as a folder).
     pub pages_left_out: usize,
+    /// How many whiteboards of the folder were left out (a whiteboard is
+    /// exported as a PDF).
+    pub boards_left_out: usize,
 }
 
 /// What an export holds, taken as it is when the export is chosen
@@ -278,6 +281,36 @@ pub(crate) struct Gathered {
     pub modified: i64,
     /// How many pages of the folder were left out.
     pub pages_left_out: usize,
+    /// The whiteboards of the folder, in the order the folder is walked:
+    /// left out of a Markdown, DOCX or plain-text export, a page each after
+    /// the documents in its PDF.
+    pub boards: Vec<DocumentId>,
+}
+
+/// What an export of a folder says about the pages and whiteboards it left
+/// out (empty when it left out neither).
+pub fn left_out_sentence(pages: usize, boards: usize) -> String {
+    let counted = |count: usize, one: &str, many: &str| {
+        format!("{count} {}", if count == 1 { one } else { many })
+    };
+    match (pages, boards) {
+        (0, 0) => String::new(),
+        (pages, 0) => pages_left_out_sentence(pages),
+        (0, boards) => format!(
+            "{} left out: a whiteboard is exported as a PDF, on its own or in the folder's PDF.",
+            if boards == 1 {
+                "1 whiteboard was".to_string()
+            } else {
+                format!("{boards} whiteboards were")
+            }
+        ),
+        (pages, boards) => format!(
+            "{} and {} were left out: a page is exported on its own, as a folder; a whiteboard \
+             as a PDF, on its own or in the folder's PDF.",
+            counted(pages, "page", "pages"),
+            counted(boards, "whiteboard", "whiteboards")
+        ),
+    }
 }
 
 /// What an export of a folder says about the pages it left out.
@@ -345,6 +378,8 @@ pub struct ExportDelegate {
     document: Option<String>,
     folder: String,
     rows: Vec<Row>,
+    /// A whiteboard: one row, "PDF file", under its title.
+    pdf_only: bool,
 }
 
 impl ExportDelegate {
@@ -375,6 +410,21 @@ impl ExportDelegate {
             document,
             folder,
             rows: Vec::new(),
+            pdf_only: false,
+        }
+    }
+
+    /// The picker of a whiteboard (`target`, titled `title`): one row, "PDF
+    /// file", under the heading "“<title>”". The same picker everywhere,
+    /// saying what a whiteboard offers.
+    pub fn for_board(workspace: WeakEntity<Workspace>, target: ExportTarget, title: &str) -> Self {
+        Self {
+            workspace,
+            target,
+            document: Some(format!("\u{201c}{}\u{201d}", short_title(title))),
+            folder: String::new(),
+            rows: Vec::new(),
+            pdf_only: true,
         }
     }
 
@@ -398,10 +448,17 @@ impl ExportDelegate {
 impl PickerDelegate for ExportDelegate {
     fn update_matches(&mut self, query: &str, _: &mut Window, _: &mut Context<Picker<Self>>) {
         let query = query.trim();
+        let pdf_only = self.pdf_only;
         let matching = |scope: ExportScope| {
             ExportChoice::ALL
                 .into_iter()
                 .filter(move |choice| choice.scope == scope)
+                .filter(move |choice| {
+                    !pdf_only
+                        || (choice.format == FileFormat::Pdf
+                            && choice.destination == ExportDestination::File
+                            && choice.scope == ExportScope::Document)
+                })
                 .filter(|choice| {
                     query.is_empty()
                         || crate::palette::words_match(
@@ -420,7 +477,11 @@ impl PickerDelegate for ExportDelegate {
                 self.rows.extend(document);
             }
         }
-        let folder = matching(ExportScope::Folder);
+        let folder = if pdf_only {
+            Vec::new()
+        } else {
+            matching(ExportScope::Folder)
+        };
         if !folder.is_empty() {
             self.rows.push(Row::Header(
                 format!("Whole folder “{}” as one file", self.folder).into(),
@@ -565,12 +626,43 @@ impl Workspace {
         // A page has an export of its own: a folder that opens offline, or
         // a PDF as printed.
         let page = match target {
-            ExportTarget::Open => self.open_page_id(),
+            ExportTarget::Open => self.open_page_id().filter(|_| self.open_board_id().is_none()),
             ExportTarget::Document(id) if self.is_page(id, cx) => Some(id),
             _ => None,
         };
         if let Some(page) = page {
             self.show_page_export(page, window, cx);
+            return;
+        }
+        // A whiteboard: one row, "PDF file".
+        let board = match target {
+            ExportTarget::Open => self.open_board_id(),
+            ExportTarget::Document(id)
+                if self.kind_of(id, cx) == Some(innerword_library::DocumentKind::Board) =>
+            {
+                Some(id)
+            }
+            _ => None,
+        };
+        if let Some(board) = board {
+            let title = self
+                .library
+                .read(cx)
+                .document_meta(board)
+                .map(|meta| session_title(&meta.title))
+                .unwrap_or_default();
+            let workspace = cx.weak_entity();
+            let target = ExportTarget::Document(board);
+            self.modal_layer.update(cx, |layer, cx| {
+                let picker = cx.new(|cx| {
+                    let delegate = ExportDelegate::for_board(workspace, target, &title);
+                    let rows = crate::workspace::picker_rows(window, 12);
+                    Picker::modal(delegate, window, cx)
+                        .width(gpui::px(crate::workspace::MODAL_WIDTH))
+                        .max_visible_rows(rows)
+                });
+                layer.show(picker, window, cx);
+            });
             return;
         }
         // A row of the open document is the open document.
@@ -660,6 +752,10 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> Result<PreparedExport, String> {
         let gathered = self.gather_export(target, scope, cx)?;
+        // A folder of whiteboards only: they go into a PDF, not into this.
+        if gathered.parts.is_empty() {
+            return Err("The folder has no documents".to_string());
+        }
         let library = self.library.read(cx);
         let images = StoreImages::new(library.store());
         let source = if gathered.collection {
@@ -687,6 +783,7 @@ impl Workspace {
             assets: exported.assets,
             documents: gathered.parts.len(),
             pages_left_out: gathered.pages_left_out,
+            boards_left_out: gathered.boards.len(),
         })
     }
 
@@ -726,6 +823,14 @@ impl Workspace {
 
         match (scope, meta) {
             (ExportScope::Document, None) => Err("A folder is exported as a whole".to_string()),
+            (ExportScope::Document, Some(meta))
+                if meta.kind == innerword_library::DocumentKind::Board =>
+            {
+                Err(format!(
+                    "\u{201c}{}\u{201d} is a whiteboard, and a whiteboard is exported as a PDF only",
+                    session_title(&meta.title)
+                ))
+            }
             (ExportScope::Document, Some(meta)) => {
                 let title = session_title(&meta.title);
                 Ok(Gathered {
@@ -735,6 +840,7 @@ impl Workspace {
                     created: meta.created_at,
                     modified: meta.updated_at,
                     pages_left_out: 0,
+                    boards: Vec::new(),
                 })
             }
             (ExportScope::Folder, meta) => {
@@ -760,15 +866,22 @@ impl Workspace {
                     .iter()
                     .filter(|meta| meta.kind == innerword_library::DocumentKind::Page)
                     .count();
+                // A whiteboard is exported as a PDF: a page of its own after
+                // the documents of the folder's PDF, left out of the rest.
+                let boards: Vec<DocumentId> = metas
+                    .iter()
+                    .filter(|meta| meta.kind == innerword_library::DocumentKind::Board)
+                    .map(|meta| meta.id)
+                    .collect();
                 let metas: Vec<DocumentMeta> = metas
                     .into_iter()
-                    .filter(|meta| meta.kind != innerword_library::DocumentKind::Page)
+                    .filter(|meta| meta.kind == innerword_library::DocumentKind::Text)
                     .collect();
                 let mut parts: Vec<(String, Document)> = Vec::with_capacity(metas.len());
                 for part in &metas {
                     parts.push((session_title(&part.title), text_of(part.id)?));
                 }
-                if parts.is_empty() {
+                if parts.is_empty() && boards.is_empty() {
                     return Err("The folder has no documents".to_string());
                 }
                 Ok(Gathered {
@@ -778,6 +891,7 @@ impl Workspace {
                     created: metas.iter().map(|m| m.created_at).min().unwrap_or(0),
                     modified: metas.iter().map(|m| m.updated_at).max().unwrap_or(0),
                     pages_left_out,
+                    boards,
                 })
             }
         }
@@ -901,12 +1015,16 @@ impl Workspace {
                                     prepared.documents,
                                 ));
                             }
-                            if prepared.pages_left_out > 0 {
+                            let left_out = left_out_sentence(
+                                prepared.pages_left_out,
+                                prepared.boards_left_out,
+                            );
+                            if !left_out.is_empty() {
                                 if !said.ends_with('.') {
                                     said.push('.');
                                 }
                                 said.push(' ');
-                                said.push_str(&pages_left_out_sentence(prepared.pages_left_out));
+                                said.push_str(&left_out);
                             }
                             this.show_toast(Toast::new(said).success(), cx);
                         }

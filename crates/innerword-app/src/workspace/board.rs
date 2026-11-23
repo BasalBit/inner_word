@@ -2008,9 +2008,14 @@ impl Workspace {
     }
 
     /// The app's list of keyboard shortcuts, asked for by the page (its `?`).
-    fn open_shortcuts_on_a_whiteboard(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.modal_layer.read(cx).has_modal() {
-            self.toggle_shortcuts(window, cx);
+    /// It opens nothing else: the bridge can ask for no other window.
+    pub(crate) fn open_shortcuts_on_a_whiteboard(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(list) = self.show_shortcuts(window, cx) {
+            list.update(cx, |list, cx| list.set_query("On a whiteboard", cx));
         }
     }
 
@@ -3050,5 +3055,88 @@ impl Workspace {
                 false
             }
         }
+    }
+}
+
+/// What [`Workspace::end_then`] does once what a whiteboard's page holds is
+/// saved.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum End {
+    /// `cmd-w`, File > Close Window, the window's close button.
+    CloseWindow,
+    /// `cmd-q`, Inner Word > Quit, a signal in the terminal.
+    Quit,
+}
+
+impl Workspace {
+    /// The one routine of closing the window and quitting (section 4.6): when
+    /// the open whiteboard's page holds more than it posted, or a whiteboard
+    /// is closing, the page is asked for it and it is saved first (at most a
+    /// second for both together, and pictures still being stored are waited
+    /// for); then everything is saved and the window goes or the app quits.
+    /// A second request while one is under way ends at once, after the
+    /// synchronous save.
+    pub fn end_then(&mut self, end: End, window: &mut Window, cx: &mut Context<Self>) {
+        if self.ending.is_some() || !self.board_holds_more() {
+            self.ending = None;
+            self.perform_end(end, window, cx);
+            return;
+        }
+        self.ending = Some(end);
+        let collect = self
+            .open_board_id()
+            .filter(|_| {
+                self.board()
+                    .is_some_and(|board| board.ready && board.status.holds_more())
+            })
+            .map(|id| self.collect_board(id, cx));
+        cx.spawn_in(window, async move |this, cx| {
+            let started = Instant::now();
+            if let Some(collect) = collect {
+                let timer = cx
+                    .background_executor()
+                    .timer(boards::VIEW_COLLECT_PATIENCE);
+                crate::pages::within(collect, timer).await;
+            }
+            // The whiteboard that was closing saves by itself.
+            loop {
+                let closing = this
+                    .update(cx, |this, _| this.closing_board.is_some())
+                    .unwrap_or(false);
+                if !closing || started.elapsed() > boards::VIEW_COLLECT_PATIENCE {
+                    break;
+                }
+                cx.background_executor().timer(PICTURE_POLL).await;
+            }
+            this.update_in(cx, |this, window, cx| {
+                if this.ending.take().is_some() {
+                    this.finish_closing_board_now(window, cx);
+                    this.perform_end(end, window, cx);
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Saves everything and closes the window or quits.
+    fn perform_end(&mut self, end: End, window: &mut Window, cx: &mut Context<Self>) {
+        self.keep_what_the_tools_hold(window, cx);
+        self.flush(cx);
+        self.store_assistant_conversation(cx);
+        match end {
+            End::CloseWindow => {
+                self.store_zoom_now(cx);
+                self.window_bounds = Some(window.window_bounds());
+                self.save_window_bounds(cx);
+                window.remove_window();
+            }
+            End::Quit => cx.quit(),
+        }
+    }
+
+    /// Whether a close or a quit waits for a whiteboard's page.
+    pub fn ending(&self) -> Option<End> {
+        self.ending
     }
 }

@@ -130,7 +130,7 @@ pub use assistant::{library_attachments, library_tool_server};
 pub(crate) use board::post_board_message;
 pub use board::{
     AddArrow, AddDiamond, AddEllipse, AddFrame, AddRectangle, AddText, AddToShapeLibrary,
-    BOARD_SAVE_DELAY, BOARD_STOPPED, InsertFromShapeLibrary, LARGE_BOARD, LIBRARY_TOO_LARGE,
+    BOARD_SAVE_DELAY, End, BOARD_STOPPED, InsertFromShapeLibrary, LARGE_BOARD, LIBRARY_TOO_LARGE,
     MermaidToDrawing, NO_COMMENTS_ON_A_BOARD, NO_PAPER_ON_A_BOARD, NO_SETTINGS_ON_A_BOARD,
     NO_SPELLING_ON_A_BOARD, NO_VIM_ON_A_BOARD, OpenContextMenu as OpenBoardContextMenu, RELOADED,
     Recovered, STILL_LOADING, ShapeLibraryDelegate, TITLE_OF_A_BOARD, ToggleShapeLibrary,
@@ -174,7 +174,8 @@ pub use session::{
 };
 pub(crate) use session::{Session, display_title as session_title};
 pub use shortcuts::{
-    ALSO_FIXED_NOTE, NOT_CHANGEABLE_NOTE, VIM_TAKES_KEYS_FIRST, changed_command_count,
+    ALSO_FIXED_NOTE, BOARD_NAME, BOARD_TAKES_KEYS_FIRST, NOT_CHANGEABLE_NOTE,
+    VIM_TAKES_KEYS_FIRST, changed_command_count,
     choose_import_file_beforehand, commands_counted, file_catalogue as shortcuts_file_catalogue,
     imported_toast, list_catalogue as shortcuts_list_catalogue, listing as shortcuts_listing,
     own_keys_sentence, reset_all_detail,
@@ -249,6 +250,8 @@ pub struct Workspace {
     pub(crate) closing_board: Option<board::ClosingBoard>,
     /// Excalidraw's shape library, one for every whiteboard (`board.rs`).
     pub(crate) shape_library: board::ShapeLibraryState,
+    /// A close of the window or a quit that waits for a whiteboard's page.
+    pub(crate) ending: Option<board::End>,
     /// The background half of the autosave.
     pub(crate) saver: saver::Saver,
     /// What the last save cost.
@@ -491,17 +494,23 @@ impl Workspace {
             });
         });
         // Closing the window (red button, cmd-w through the system) flushes too.
+        // While a whiteboard's page holds more than it posted, the window
+        // stays until that is saved (`board.rs`, `end_then`).
         let weak = cx.weak_entity();
         window.on_window_should_close(cx, move |window, cx| {
             weak.update(cx, |this, cx| {
+                if this.board_holds_more() || this.ending.is_some() {
+                    this.end_then(board::End::CloseWindow, window, cx);
+                    return false;
+                }
                 this.keep_what_the_tools_hold(window, cx);
                 this.flush(cx);
                 this.store_assistant_conversation(cx);
                 this.store_zoom_now(cx);
                 this.save_window_bounds(cx);
+                true
             })
-            .ok();
-            true
+            .unwrap_or(true)
         });
 
         let saver = saver::Saver::new(library.read(cx));
@@ -526,6 +535,7 @@ impl Workspace {
             page: None,
             closing_board: None,
             shape_library: board::ShapeLibraryState::default(),
+            ending: None,
             saver,
             last_save: None,
             sidebar_dragging: false,
@@ -1938,12 +1948,9 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.keep_what_the_tools_hold(window, cx);
-        self.flush(cx);
-        self.store_assistant_conversation(cx);
-        self.window_bounds = Some(window.window_bounds());
-        self.save_window_bounds(cx);
-        window.remove_window();
+        // Through the one routine of closing and quitting: an open
+        // whiteboard's last gesture is saved first.
+        self.end_then(board::End::CloseWindow, window, cx);
     }
 
     pub(crate) fn on_about(&mut self, _: &About, window: &mut Window, cx: &mut Context<Self>) {

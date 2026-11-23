@@ -52,15 +52,33 @@ pub struct PrintJob {
     /// The pages, with the report of how they were made
     /// ([`innerword_print::Report`]).
     pub pdf: Pdf,
+    /// How the pages go on paper: at their own size (a text's), or put on
+    /// the user's paper and scaled down to fit (a whiteboard's drawing).
+    pub fit: Fit,
+}
+
+/// How a job's pages go on paper.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Fit {
+    /// At their real size, on the paper of the job (a text, a page).
+    #[default]
+    Actual,
+    /// On the user's paper, turned to the drawing's orientation, scaled down
+    /// when larger (never up): a whiteboard.
+    ShrinkOntoPaper,
 }
 
 impl PrintJob {
     /// The job as the print operation of `innerword-print` takes it.
     pub fn request(&self) -> PrintRequest<'_> {
+        let (paper, scaling) = match self.fit {
+            Fit::Actual => (Some(self.paper), Scaling::Actual),
+            Fit::ShrinkOntoPaper => (None, Scaling::DownToFit),
+        };
         PrintRequest {
             pdf: &self.pdf,
-            paper: Some(self.paper),
-            scaling: Scaling::Actual,
+            paper,
+            scaling,
             title: &self.title,
         }
     }

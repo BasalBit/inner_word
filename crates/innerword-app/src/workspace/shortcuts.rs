@@ -61,7 +61,24 @@ pub const NOT_CHANGEABLE_NOTE: &str = "Not here, because they are not shortcuts:
 /// right-click menu reads itself (it has no key context a binding could
 /// apply in, and its way out must not depend on the keymap), the insert
 /// menu's own completion key, and what the pointer does with a key held.
-pub const ALSO_FIXED_NOTE: &str = "Also fixed: the keys inside a right-click menu, ⇥ in the insert menu, and clicks with ⌘, ⇧ or ⌃";
+pub const ALSO_FIXED_NOTE: &str = "Also fixed: the keys inside a right-click menu, ⇥ in the insert menu, clicks with ⌘, ⇧ or ⌃, and a whiteboard's own keys (listed On a whiteboard)";
+
+/// What the heading of that question calls what sees a key first on a
+/// whiteboard ("⌘D: the whiteboard sees it first"; after a colon, so in
+/// lower case).
+pub const BOARD_NAME: &str = "the whiteboard";
+
+/// What the question about a key says for a key that is one of the
+/// whiteboard's own keys and would work on a whiteboard.
+pub const BOARD_TAKES_KEYS_FIRST: &str =
+    "On a whiteboard the whiteboard uses this key itself, so there the shortcut does not run.";
+
+/// Whether the whiteboard leaves `key` to the keymap: every key that is not
+/// one of its own (`WHITEBOARD_KEYS`; the tool letters cannot be bound
+/// where text is typed anyway).
+fn board_leaves(key: &innerword_keymap::KeySequence) -> bool {
+    !crate::boards::is_whiteboard_keys(&key.to_string())
+}
 
 /// What the heading of that question calls what sees the key first:
 /// "⌃Y: Vim mode sees it first".
@@ -537,7 +554,13 @@ impl Workspace {
     /// [`listing`] as this window's list shows it: with what it says about
     /// a key while Vim mode is on ([`VIM_TAKES_KEYS_FIRST`]).
     fn shortcuts_listing(&self, cx: &App) -> Option<Listing> {
-        let listing = listing(cx)?;
+        // The whiteboard sees its own keys first, always.
+        let listing = listing(cx)?.sees_keys_first(
+            BOARD_NAME,
+            [crate::boards::BOARD_VIEW],
+            board_leaves,
+            BOARD_TAKES_KEYS_FIRST,
+        );
         Some(if self.vim.read(cx).is_attached() {
             listing.sees_keys_first(
                 VIM_MODE_NAME,

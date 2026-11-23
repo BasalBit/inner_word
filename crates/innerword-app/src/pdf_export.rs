@@ -65,6 +65,7 @@ use std::{path::PathBuf, time::Instant};
 
 use gpui::{App, AsyncWindowContext, Context, Stateful, WeakEntity, Window, prelude::*};
 use innerword_core::{Block, BlockKind, Document};
+use innerword_library::DocumentId;
 use innerword_editor::PrintPass;
 use innerword_ui::Toast;
 
@@ -77,7 +78,7 @@ use crate::{
     page_export::PageExportChoice,
     printing::PrintJob,
     settings::keys,
-    workspace::{PagesPurpose, PdfExporting, Workspace},
+    workspace::{PagesPurpose, PdfExporting, Workspace, session_title},
 };
 
 /// Where the PDF of an export goes once its pages are made, and what the
@@ -89,6 +90,13 @@ pub(crate) struct Destination {
     title: String,
     /// How many documents it holds.
     documents: usize,
+    /// How many whiteboards it holds (a page each).
+    boards: usize,
+    /// The titles of the folder's whiteboards that were empty and left out.
+    empty_boards: Vec<String>,
+    /// How many whiteboards were left out because this run shows none, and
+    /// why.
+    boards_not_shown: Option<(usize, String)>,
     /// How many pages of the folder were left out.
     pages_left_out: usize,
     /// When the pages began to be made.
@@ -102,6 +110,8 @@ struct Planned {
     file_name: String,
     documents: Vec<Document>,
     pages_left_out: usize,
+    /// The folder's whiteboards, as they are when the export is chosen.
+    boards: Vec<DocumentId>,
 }
 
 impl Workspace {
@@ -136,6 +146,10 @@ impl Workspace {
     /// "Export as PDF…": the open page as WebKit prints it, else the open
     /// document. Does nothing with neither.
     pub fn export_as_pdf(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(board) = self.open_board_id() {
+            self.export_board_pdf(board, window, cx);
+            return;
+        }
         if let Some(page) = self.open_page_id() {
             if crate::pages::engine(cx).is_some() {
                 self.export_page(page, PageExportChoice::Pdf, window, cx);
@@ -151,6 +165,49 @@ impl Workspace {
     /// document it names, or the folder it names or its document is in
     /// (`scope`). Asks where first; the outcome is told in a toast.
     pub fn export_pdf(
+        &mut self,
+        target: ExportTarget,
+        scope: ExportScope,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // A whiteboard has a PDF of its own (section 5).
+        let board = match (target, scope) {
+            (ExportTarget::Open, ExportScope::Document) => self.open_board_id(),
+            (ExportTarget::Document(id), ExportScope::Document)
+                if self.kind_of(id, cx) == Some(innerword_library::DocumentKind::Board) =>
+            {
+                Some(id)
+            }
+            _ => None,
+        };
+        if let Some(board) = board {
+            self.export_board_pdf(board, window, cx);
+            return;
+        }
+        // A folder's PDF holds its whiteboards as the library has them: the
+        // open one is asked for what its page holds first.
+        if scope == ExportScope::Folder
+            && let Some(open) = self.open_board_id()
+            && self.board_holds_more()
+        {
+            let collect = self.collect_board(open, cx);
+            cx.spawn_in(window, async move |this, cx| {
+                collect.await;
+                this.update_in(cx, |this, window, cx| {
+                    this.export_pdf_as_it_is(target, scope, window, cx)
+                })
+                .ok();
+            })
+            .detach();
+            return;
+        }
+        self.export_pdf_as_it_is(target, scope, window, cx);
+    }
+
+    /// [`Workspace::export_pdf`] once the open whiteboard's page has handed
+    /// over what it held.
+    fn export_pdf_as_it_is(
         &mut self,
         target: ExportTarget,
         scope: ExportScope,
@@ -213,6 +270,100 @@ impl Workspace {
         .detach();
     }
 
+    /// "Export as PDF…" of whiteboard `id` (section 5): the save panel first
+    /// (a cancelled panel makes nothing), then what its page holds is
+    /// collected and saved, then the PDF of the stored scene as WebKit makes
+    /// it, written by a background thread. It runs as the job of pages of a
+    /// PDF export: one job at a time, the note, Cancel, `export:wait`.
+    pub(crate) fn export_board_pdf(
+        &mut self,
+        id: DocumentId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(sentence) = self.pages_under_way() {
+            self.print.last_export = Some(Err(sentence.clone()));
+            self.show_toast(Toast::new(sentence), cx);
+            return;
+        }
+        let title = match self.library.read(cx).document_meta(id) {
+            Ok(meta) => session_title(&meta.title),
+            Err(error) => {
+                self.toast_error(format!("Could not export: {error}"), cx);
+                return;
+            }
+        };
+        let file_name = pdf_file_name(&title);
+        let scripted = crate::automation::export_directory();
+        let receiver = scripted.is_none().then(|| {
+            let directory = self.export_directory(cx);
+            cx.prompt_for_new_path(&directory, Some(&file_name))
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            let chosen = match (scripted, receiver) {
+                (Some(directory), _) => directory.join(&file_name),
+                (None, Some(receiver)) => match receiver.await {
+                    Ok(Ok(Some(path))) => path,
+                    Ok(Ok(None)) | Err(_) => return,
+                    Ok(Err(error)) => {
+                        this.update(cx, |this, cx| {
+                            this.toast_error(format!("Could not open the save panel: {error}"), cx);
+                        })
+                        .ok();
+                        return;
+                    }
+                },
+                (None, None) => return,
+            };
+            let path = with_extension(chosen, FileFormat::Pdf);
+            // What the open whiteboard's page holds goes to the library first.
+            let collect = this
+                .update(cx, |this, cx| {
+                    (this.open_board_id() == Some(id)).then(|| this.collect_board(id, cx))
+                })
+                .ok()
+                .flatten();
+            if let Some(collect) = collect {
+                collect.await;
+            }
+            this.update_in(cx, |this, window, cx| {
+                if let Some(sentence) = this.pages_under_way() {
+                    this.print.last_export = Some(Err(sentence.clone()));
+                    this.show_toast(Toast::new(sentence), cx);
+                    return;
+                }
+                let input = match this.board_pdf_input(id, false, cx) {
+                    Ok(input) => input,
+                    Err(sentence) => {
+                        this.print.last_export = Some(Err(sentence.clone()));
+                        this.show_toast(Toast::new(sentence), cx);
+                        return;
+                    }
+                };
+                let destination = Destination {
+                    path,
+                    title: title.clone(),
+                    documents: 0,
+                    boards: 1,
+                    empty_boards: Vec::new(),
+                    boards_not_shown: None,
+                    pages_left_out: 0,
+                    started: Instant::now(),
+                };
+                this.make_pages_with_boards(
+                    Vec::new(),
+                    vec![input],
+                    title.clone(),
+                    PagesPurpose::Export(destination),
+                    window,
+                    cx,
+                );
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     /// Starts making the pages of `planned` for the file at `path`.
     fn make_the_pdf(
         &mut self,
@@ -227,10 +378,59 @@ impl Workspace {
             self.show_toast(Toast::new(sentence), cx);
             return;
         }
+        // The folder's whiteboards as the library holds them now: an empty
+        // one is left out and named, and without a page engine none is made.
+        let mut boards = Vec::new();
+        let mut empty_boards = Vec::new();
+        let mut not_shown = 0;
+        for id in &planned.boards {
+            let Ok(meta) = self.library.read(cx).document_meta(*id) else {
+                continue;
+            };
+            let empty = self
+                .library
+                .read(cx)
+                .document(*id)
+                .ok()
+                .and_then(|stored| innerword_board::Scene::from_stored(&stored.content).ok())
+                .is_none_or(|parsed| parsed.scene.is_empty());
+            if empty {
+                empty_boards.push(session_title(&meta.title));
+                continue;
+            }
+            if crate::pages::engine(cx).is_none() {
+                not_shown += 1;
+                continue;
+            }
+            match self.board_pdf_input(*id, false, cx) {
+                Ok(input) => boards.push(input),
+                Err(sentence) => {
+                    let sentence = format!(
+                        "the PDF of the whiteboard \u{201c}{}\u{201d} could not be made \
+                         ({sentence}), so nothing was written",
+                        session_title(&meta.title)
+                    );
+                    self.print.last_export = Some(Err(sentence.clone()));
+                    self.toast_error(format!("Could not export: {sentence}"), cx);
+                    return;
+                }
+            }
+        }
+        if planned.documents.is_empty() && boards.is_empty() {
+            let sentence = "The folder has no documents".to_string();
+            self.print.last_export = Some(Err(sentence.clone()));
+            self.toast_error(format!("Could not export: {sentence}"), cx);
+            return;
+        }
         let destination = Destination {
             path,
             title: planned.title.clone(),
             documents: planned.documents.len(),
+            boards: boards.len(),
+            empty_boards,
+            boards_not_shown: (not_shown > 0).then(|| {
+                (not_shown, crate::boards::not_shown_sentence(cx))
+            }),
             pages_left_out: planned.pages_left_out,
             started: Instant::now(),
         };
@@ -239,8 +439,9 @@ impl Workspace {
             .into_iter()
             .map(|document| PrintPass::new(document, window, cx))
             .collect();
-        self.make_pages(
+        self.make_pages_with_boards(
             passes,
+            boards,
             planned.title,
             PagesPurpose::Export(destination),
             window,
@@ -278,6 +479,7 @@ fn plan(gathered: Gathered) -> Planned {
         file_name,
         documents,
         pages_left_out: gathered.pages_left_out,
+        boards: gathered.boards,
     }
 }
 
@@ -394,6 +596,7 @@ pub(crate) async fn write(
         lines.extend(job.pdf.report.missing_line());
         lines.join("; ")
     };
+    let pages = job.pdf.report.pages;
     let bytes = (!job.pdf.is_empty()).then(|| job.pdf.bytes().to_vec());
     drop(job);
     if this
@@ -421,15 +624,53 @@ pub(crate) async fn write(
                         })
                         .ok();
                 }
-                let what = if destination.documents == 1 {
+                let what = if destination.documents + destination.boards == 1
+                    || destination.boards > 0
+                {
                     format!("“{}”", short_title(&destination.title))
                 } else {
                     format!("{} documents", destination.documents)
                 };
                 let mut said = format!("Exported {what} to {}", short_path(&destination.path));
+                // A folder's PDF with whiteboards says how many pages it has and
+                // how many of them are whiteboards.
+                if destination.boards > 0 && destination.documents > 0 {
+                    said.push_str(&format!(
+                        ": {} pages, {}",
+                        pages,
+                        if destination.boards == 1 {
+                            "1 whiteboard".to_string()
+                        } else {
+                            format!("{} whiteboards", destination.boards)
+                        }
+                    ));
+                }
                 if destination.pages_left_out > 0 {
                     said.push_str(". ");
                     said.push_str(&pages_left_out_sentence(destination.pages_left_out));
+                }
+                for title in &destination.empty_boards {
+                    if !said.ends_with('.') {
+                        said.push('.');
+                    }
+                    said.push_str(&format!(
+                        " \u{201c}{}\u{201d} is empty and was left out.",
+                        short_title(title)
+                    ));
+                }
+                if let Some((count, why)) = &destination.boards_not_shown {
+                    if !said.ends_with('.') {
+                        said.push('.');
+                    }
+                    said.push_str(&format!(
+                        " {} left out: {}",
+                        if *count == 1 {
+                            "1 whiteboard was".to_string()
+                        } else {
+                            format!("{count} whiteboards were")
+                        },
+                        lowercase_first(why)
+                    ));
                 }
                 this.print.last_export = Some(Ok(format!(
                     "“{}” written to {}: {report}",
@@ -447,4 +688,13 @@ pub(crate) async fn write(
         this.print_ended(cx);
     })
     .ok();
+}
+
+/// `text` with its first letter in lower case (a sentence put after a colon).
+fn lowercase_first(text: &str) -> String {
+    let mut chars = text.chars();
+    match chars.next() {
+        Some(first) => first.to_lowercase().chain(chars).collect(),
+        None => String::new(),
+    }
 }

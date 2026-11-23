@@ -330,6 +330,10 @@ impl Workspace {
             }
             return;
         }
+        if let Some(board) = self.open_board_id() {
+            self.print_board(board, window, cx);
+            return;
+        }
         if self.page.is_some() {
             self.print_page(window, cx);
             return;
@@ -352,13 +356,27 @@ impl Workspace {
     /// under way.
     pub(crate) fn make_pages(
         &mut self,
-        mut passes: Vec<PrintPass>,
+        passes: Vec<PrintPass>,
         title: String,
         purpose: Purpose,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if passes.is_empty() || self.print.stage.is_some() {
+        self.make_pages_with_boards(passes, Vec::new(), title, purpose, window, cx);
+    }
+
+    /// [`Workspace::make_pages`] with whiteboards after the documents (a
+    /// folder's PDF): each one page of its own size.
+    pub(crate) fn make_pages_with_boards(
+        &mut self,
+        mut passes: Vec<PrintPass>,
+        boards: Vec<super::board_pdf::BoardPdfInput>,
+        title: String,
+        purpose: Purpose,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if (passes.is_empty() && boards.is_empty()) || self.print.stage.is_some() {
             return;
         }
         // The pictures of every pass, each once, read in the background
@@ -410,9 +428,21 @@ impl Workspace {
                 let pictures = pictures.clone();
                 pass.set_images(Rc::new(move |image| pictures.get(&image).cloned()));
             }
-            let Some(job) = prepare(passes, title, slice, &this, cx).await else {
+            let job = match prepare(passes, boards, title, slice, &this, cx).await {
+                Some(Ok(job)) => job,
+                Some(Err(sentence)) => {
+                    this.update(cx, |this, cx| {
+                        if matches!(purpose, Purpose::Export(_)) {
+                            this.print.last_export = Some(Err(sentence.clone()));
+                        }
+                        this.toast_error(format!("Could not export: {sentence}"), cx);
+                        this.print_ended(cx);
+                    })
+                    .ok();
+                    return;
+                }
                 // The workspace is gone.
-                return;
+                None => return,
             };
             match purpose {
                 Purpose::Print(target) => hand_over(job, target, &this, cx).await,
@@ -462,12 +492,62 @@ impl Workspace {
                         title,
                         paper: (printed.paper.0 as f32, printed.paper.1 as f32),
                         pdf: innerword_print::Pdf::from_bytes(printed.bytes, printed.pages),
+                        fit: printing::Fit::Actual,
                     };
                     hand_over(job, target, &this, cx).await;
                 }
                 Err(error) => {
                     this.update(cx, |this, cx| {
                         this.toast_error(format!("The page could not be printed: {error}"), cx);
+                        this.print_ended(cx);
+                    })
+                    .ok();
+                }
+            }
+        }));
+        cx.notify();
+    }
+
+    /// "Print…" on a whiteboard (section 5): what its page holds is collected
+    /// and saved, its PDF made from the stored scene, and the job goes to
+    /// the target to be put on the user's paper, turned to the drawing and
+    /// scaled down to fit (`Fit::ShrinkOntoPaper`). An empty whiteboard has
+    /// nothing to print.
+    fn print_board(&mut self, id: innerword_library::DocumentId, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(target) = printing::target(cx) else {
+            return;
+        };
+        let title = self.display_title();
+        self.print.stage = Some((Kind::Print, Stage::Preparing));
+        self.print.progress = None;
+        self.print.waiting = 0;
+        self.print.note = None;
+        self.print.title = title.clone();
+        self.print.note_task = Some(cx.spawn({
+            let title = title.clone();
+            async move |this, cx| {
+                cx.background_executor().timer(NOTE_DELAY).await;
+                this.update(cx, |this, cx| this.show_print_note(&title, cx))
+                    .ok();
+            }
+        }));
+        let collect = self.collect_board(id, cx);
+        self.print.task = Some(cx.spawn_in(window, async move |this, cx| {
+            collect.await;
+            let made = super::board_pdf::board_pdf(this.clone(), id, true, cx).await;
+            match made {
+                Ok(printed) => {
+                    let job = PrintJob {
+                        title,
+                        paper: (printed.paper.0 as f32, printed.paper.1 as f32),
+                        pdf: innerword_print::Pdf::from_bytes(printed.bytes, printed.pages),
+                        fit: printing::Fit::ShrinkOntoPaper,
+                    };
+                    hand_over(job, target, &this, cx).await;
+                }
+                Err(sentence) => {
+                    this.update(cx, |this, cx| {
+                        this.show_toast(Toast::new(sentence), cx);
                         this.print_ended(cx);
                     })
                     .ok();
@@ -632,6 +712,7 @@ impl Workspace {
             numbered += pass.progress().pages_done;
         }
         PrintJob {
+            fit: printing::Fit::Actual,
             title,
             paper,
             pdf: writer.finish(),
@@ -764,12 +845,16 @@ fn progress_of(passes: &[PrintPass], before: PrintProgress) -> PrintProgress {
 /// the job. `None` when the workspace went away meanwhile.
 async fn prepare(
     passes: Vec<PrintPass>,
+    boards: Vec<super::board_pdf::BoardPdfInput>,
     title: String,
     slice: Duration,
     this: &gpui::WeakEntity<Workspace>,
     cx: &mut gpui::AsyncWindowContext,
-) -> Option<PrintJob> {
-    let paper = passes.first().map_or((0., 0.), PrintPass::paper);
+) -> Option<Result<PrintJob, String>> {
+    let mut paper = passes.first().map_or((0., 0.), PrintPass::paper);
+    // A whiteboard on its own (its Export as PDF…): WebKit's PDF is the
+    // file, as it is (its links kept).
+    let alone = passes.is_empty() && boards.len() == 1;
     let mut passes: VecDeque<PrintPass> = passes.into();
     // What the passes that are done came to: all of their blocks, and
     // their pages.
@@ -835,11 +920,70 @@ async fn prepare(
         // as long as the test likes.
         cx.background_executor().timer(SLICE_PAUSE).await;
     }
-    Some(PrintJob {
+    // The whiteboards of a folder's PDF, after its documents: one page each,
+    // the whiteboard's own PDF page drawn in (vectors and text kept). Made
+    // by WebKit one at a time, from this task between two awaits; Cancel
+    // drops this task between two.
+    let count = boards.len();
+    for (done, board) in boards.into_iter().enumerate() {
+        let title = super::session_title(&board.title);
+        let made = super::board_pdf::pdf_of(board).await;
+        if alone {
+            return Some(match made {
+                Ok(printed) => {
+                    let mut pdf = innerword_print::Pdf::from_bytes(printed.bytes, printed.pages);
+                    pdf.report.embedded_pages = printed.pages;
+                    Ok(PrintJob {
+                        title: title.clone(),
+                        paper: (printed.paper.0 as f32, printed.paper.1 as f32),
+                        pdf,
+                        fit: printing::Fit::ShrinkOntoPaper,
+                    })
+                }
+                Err(why) => Err(format!(
+                    "the PDF of the whiteboard \u{201c}{title}\u{201d} could not be made ({why}), \
+                     so nothing was written"
+                )),
+            });
+        }
+        let added = made
+            .map_err(|why| why.to_string())
+            .and_then(|printed| {
+                writer
+                    .add_pdf_page(&printed.bytes, 1)
+                    .ok_or_else(|| "its PDF could not be read".to_string())
+            });
+        match added {
+            Ok(size) => {
+                if paper == (0., 0.) {
+                    paper = size;
+                }
+            }
+            Err(why) => {
+                return Some(Err(format!(
+                    "the PDF of the whiteboard \u{201c}{title}\u{201d} could not be made ({why}), \
+                     so nothing was written"
+                )));
+            }
+        }
+        let progress = PrintProgress {
+            blocks: before.blocks + count,
+            blocks_done: before.blocks_done + done + 1,
+            pages_done: before.pages_done + done + 1,
+        };
+        this.update(cx, |this, cx| {
+            this.print.progress = Some(progress);
+            cx.notify();
+        })
+        .ok()?;
+        cx.background_executor().timer(SLICE_PAUSE).await;
+    }
+    Some(Ok(PrintJob {
         title,
         paper,
         pdf: writer.finish(),
-    })
+        fit: printing::Fit::Actual,
+    }))
 }
 
 /// How much of a slice the layout gets, when laying out has taken

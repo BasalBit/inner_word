@@ -70,7 +70,7 @@ use crate::commands;
 /// Action namespaces whose bindings are listed even without a command
 /// descriptor, with the category they are listed under (empty: the place
 /// says it all).
-const KEY_GROUPS: [(&str, &str); 20] = [
+const KEY_GROUPS: [(&str, &str); 21] = [
     // The keys of the menu bar that are no commands of the palette: hide
     // the app, hide the others, minimize the window. They are keys like
     // every other (and were in the shortcuts file without being in the
@@ -103,6 +103,8 @@ const KEY_GROUPS: [(&str, &str); 20] = [
     ("keymap_view", ""),
     // An open page: its context menu.
     ("page", ""),
+    // An open whiteboard: its menu.
+    ("board", ""),
 ];
 
 /// The action namespaces of the assistant's chats. Their keys are left out
@@ -142,6 +144,9 @@ pub enum Place {
     /// On an open page (a web page of the library): the page has the
     /// keyboard, and text is typed there (its fields).
     Page,
+    /// On an open whiteboard: Excalidraw has the keyboard (its tools, its
+    /// texts).
+    Board,
     /// In the list of comment threads.
     CommentList,
     /// In the comment list while it asks whether a comment is to be
@@ -201,6 +206,7 @@ impl Place {
             Place::FindBar => "In the find bar",
             Place::LinkField => "In the link field",
             Place::Page => "On a page",
+            Place::Board => "On a whiteboard",
             Place::CommentList => "In the comment list",
             Place::CommentConfirm => "Confirming in the comment list",
             Place::CommentField => "Writing a comment",
@@ -244,6 +250,8 @@ impl Place {
             Place::LinkField
         } else if has(crate::pages::PAGE_VIEW) {
             Place::Page
+        } else if has(crate::boards::BOARD_VIEW) {
+            Place::Board
         } else if has("CommentComposer") {
             Place::CommentField
         } else if has("CommentThreads") && has("confirming") && !has("!confirming") {
@@ -564,12 +572,77 @@ fn plain_words(title: &str) -> String {
 
 /// Keys without a descriptor whose action's name alone does not say what
 /// they do: the action, and the title of its row.
-const KEY_TITLES: [(&str, &str); 4] = [
+const KEY_TITLES: [(&str, &str); 5] = [
     ("app::Hide", "Hide Inner Word"),
     ("app::HideOthers", "Hide the other apps"),
     ("app::Minimize", "Minimize the window"),
     ("page::OpenContextMenu", "Show the page's context menu"),
+    ("board::OpenContextMenu", "Show the whiteboard's context menu"),
 ];
+
+/// What the row of one of the whiteboard's own keys says about why it stays.
+pub const BOARD_KEY_NOTE: &str =
+    "This is the whiteboard's own key: Excalidraw acts on it there. It cannot be changed.";
+
+/// What the row of the tool keys says.
+pub const TOOL_KEYS_NOTE: &str = "On a whiteboard the letters and digits choose Excalidraw's \
+     tools (V selection, R rectangle, D diamond, O ellipse, A arrow, L line, P pencil, T text, \
+     E eraser, H hand, 1 to 0). They cannot be changed.";
+
+/// The category the whiteboard's own keys are listed under.
+pub const BOARD_KEYS_CATEGORY: &str = "The whiteboard's own keys";
+
+/// The rows of the whiteboard's own keys (`WHITEBOARD_KEYS`) and of its tool
+/// keys: fixed rows "On a whiteboard", which are no bindings of commands
+/// (the keymap's `NoAction` bindings that keep GPUI off them are fixed) and
+/// no entries of the shortcuts file.
+fn whiteboard_key_rows() -> Vec<Shortcut> {
+    let place = Place::Board;
+    let category: SharedString = BOARD_KEYS_CATEGORY.into();
+    let heading: SharedString = place.heading(&category).into();
+    let mut rows: Vec<Shortcut> = innerword_board_web::keys::WHITEBOARD_KEYS
+        .iter()
+        .map(|key| {
+            let typed = KeySequence::parse(key.keys).ok();
+            let hint = typed.as_ref().and_then(hint_of);
+            Shortcut {
+                title: key.what.into(),
+                category: category.clone(),
+                place,
+                heading: heading.clone(),
+                keys: hint.as_ref().map(KeyHint::text).unwrap_or_default(),
+                all_keys: Vec::new(),
+                default_keys: Vec::new(),
+                changed: false,
+                target: None,
+                targets: Vec::new(),
+                fixed: Some(BOARD_KEY_NOTE.into()),
+                typed,
+                described: false,
+                action: Box::new(gpui::NoAction),
+                hint,
+            }
+        })
+        .collect();
+    rows.push(Shortcut {
+        title: innerword_board_web::keys::TOOL_KEYS_ROW.into(),
+        category: category.clone(),
+        place,
+        heading,
+        keys: String::new(),
+        all_keys: Vec::new(),
+        default_keys: Vec::new(),
+        changed: false,
+        target: None,
+        targets: Vec::new(),
+        fixed: Some(TOOL_KEYS_NOTE.into()),
+        typed: None,
+        described: false,
+        action: Box::new(gpui::NoAction),
+        hint: None,
+    });
+    rows
+}
 
 /// The title of a command that has no descriptor, from its action's name.
 pub fn title_of_action(name: &str) -> String {
@@ -743,6 +816,9 @@ fn collect(cx: &App) -> Vec<(Shortcut, bool)> {
             );
         }
     }
+
+    // The whiteboard's own keys: fixed rows "On a whiteboard".
+    shortcuts.extend(whiteboard_key_rows().into_iter().map(|row| (row, false)));
 
     // Without the assistant its chats are not a place: the context menu
     // that opens in an answer is not shown either.

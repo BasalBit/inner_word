@@ -39,7 +39,6 @@ pub fn empty_sentence(title: &str, print: bool) -> String {
 pub(crate) struct BoardPdfInput {
     pub title: String,
     pub scene: Scene,
-    pub content: Arc<str>,
     /// The export page's source (WebKit); `None` on the fake engine.
     pub source: Option<Arc<dyn innerword_web::PageSource>>,
     pub rules_dir: std::path::PathBuf,
@@ -98,7 +97,6 @@ impl Workspace {
         Ok(BoardPdfInput {
             title: stored.meta.title,
             scene,
-            content,
             source,
             rules_dir: self.web_rules_dir(cx),
             engine,

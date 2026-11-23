@@ -34,7 +34,7 @@ use std::{
 };
 
 use gpui::{App, Global, Window};
-use innerword_print::{JobInfo, Pdf, PrintError, PrintRequest};
+use innerword_print::{JobInfo, Pdf, PrintError, PrintRequest, Scaling};
 
 /// How long one slice of preparing works unless [`set_slice`] says
 /// otherwise: half a frame, so a key pressed meanwhile is not kept
@@ -59,7 +59,8 @@ impl PrintJob {
     pub fn request(&self) -> PrintRequest<'_> {
         PrintRequest {
             pdf: &self.pdf,
-            paper: self.paper,
+            paper: Some(self.paper),
+            scaling: Scaling::Actual,
             title: &self.title,
         }
     }

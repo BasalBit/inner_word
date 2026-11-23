@@ -20,7 +20,8 @@ use std::{cell::Cell, path::PathBuf, process::ExitCode, rc::Rc, sync::Arc};
 
 use innerword_print::{
     Anchor, Color, FontSpec, GlyphStart, Item, JobInfo, Label, Page, PdfFile, PdfWriter,
-    PrintError, PrintRequest, RectItem, RowRun, TextRow, check_selectors, run_save_job, run_sheet,
+    PrintError, PrintRequest, RectItem, RowRun, Scaling, TextRow, check_selectors, run_save_job,
+    run_sheet,
 };
 use objc::{
     class, msg_send,
@@ -182,6 +183,84 @@ fn check(holds: bool, what: &str, failures: &mut Vec<String>) {
     }
 }
 
+/// A drawing of its own size, 1,600 x 900 points, printed as a whiteboard is:
+/// made smaller to fit A4 and the paper turned to its orientation. The paper is
+/// named, never the user's (`None`), which would depend on the Mac's default
+/// printer.
+fn drawing_down_to_fit(folder: &std::path::Path, failures: &mut Vec<String>) {
+    const DRAWING: (f32, f32) = (1600., 900.);
+    let mut writer = PdfWriter::new(&JobInfo {
+        title: "Plan".to_string(),
+        creator: "Inner Word (a test)".to_string(),
+    });
+    let mut items = vec![Item::Rect(RectItem {
+        x: 32.,
+        y: 32.,
+        width: DRAWING.0 - 64.,
+        height: DRAWING.1 - 64.,
+        radius: 0.,
+        fill: None,
+        border: Some((2., INK)),
+    })];
+    items.push(row("System overview", 100., 100.));
+    writer.add_page(&Page {
+        width: DRAWING.0,
+        height: DRAWING.1,
+        items,
+    });
+    let pdf = writer.finish();
+    let to = folder.join("Plan.pdf");
+    let ran = run_save_job(
+        &PrintRequest {
+            pdf: &pdf,
+            paper: Some(A4),
+            scaling: Scaling::DownToFit,
+            title: "Plan",
+        },
+        &to,
+    );
+    check(
+        ran.is_ok(),
+        &format!("a drawing ran as a save job, down to fit ({ran:?})"),
+        failures,
+    );
+    let Some(file) = std::fs::read(&to)
+        .ok()
+        .and_then(|bytes| PdfFile::open(&bytes))
+    else {
+        check(false, "the drawing's job wrote a PDF", failures);
+        return;
+    };
+    check(file.page_count() == 1, "the drawing is one sheet", failures);
+    let (width, height) = file.page_size(0);
+    check(
+        (width - A4.1).abs() < 0.6 && (height - A4.0).abs() < 0.6,
+        &format!("the sheet is A4 turned landscape ({width} x {height})"),
+        failures,
+    );
+    let source = PdfFile::open(pdf.bytes()).expect("the writer's PDF");
+    let before = source.find(0, "overview");
+    let after = file.find(0, "overview");
+    println!("save_job: the drawing's word in the PDF {before:?}, on the sheet {after:?}");
+    // Made smaller by at most what fits the sheet (A4's long side over the
+    // drawing's: 0.526), and not by much more (the printer's margins).
+    let fits = f64::from(A4.1 / DRAWING.0).min(f64::from(A4.0 / DRAWING.1));
+    check(
+        match (before, after) {
+            (Some(before), Some(after)) => {
+                let scale = f64::from(after.2 / before.2);
+                scale <= fits + 0.005 && scale > fits * 0.85
+            }
+            _ => false,
+        },
+        &format!(
+            "the drawing is made smaller to fit, its text still text (at most {fits:.3}: \
+             in the PDF {before:?}, on the sheet {after:?})"
+        ),
+        failures,
+    );
+}
+
 fn main() -> ExitCode {
     let mut failures = Vec::new();
 
@@ -239,7 +318,8 @@ fn main() -> ExitCode {
     let ran = run_save_job(
         &PrintRequest {
             pdf: &pdf,
-            paper: A4,
+            paper: Some(A4),
+            scaling: Scaling::Actual,
             title: "Save job",
         },
         &to,
@@ -376,6 +456,8 @@ fn main() -> ExitCode {
             }
         }
     }
+    drawing_down_to_fit(&folder, &mut failures);
+
     // What is no PDF is refused before AppKit is asked for anything, and so is
     // a sheet without a window: `done` is dropped without having run.
     let nothing = PdfWriter::new(&JobInfo {
@@ -386,7 +468,8 @@ fn main() -> ExitCode {
     let refused = run_save_job(
         &PrintRequest {
             pdf: &nothing,
-            paper: A4,
+            paper: Some(A4),
+            scaling: Scaling::Actual,
             title: "Nothing",
         },
         &folder.join("Nothing.pdf"),
@@ -406,7 +489,8 @@ fn main() -> ExitCode {
         run_sheet(
             &PrintRequest {
                 pdf: &pdf,
-                paper: A4,
+                paper: Some(A4),
+                scaling: Scaling::Actual,
                 title: "Save job",
             },
             std::ptr::null_mut(),

@@ -983,6 +983,7 @@ fn the_report_is_one_line() {
         missing_families: Vec::new(),
         images: 3,
         images_unreadable: 0,
+        embedded_pages: 0,
     };
     assert_eq!(
         report.line(A4),
@@ -998,6 +999,7 @@ fn the_report_is_one_line() {
         missing_families: vec!["Sabon".to_string(), "Scala".to_string()],
         images: 1,
         images_unreadable: 2,
+        embedded_pages: 0,
     };
     assert_eq!(
         one.line((612., 792.)),
@@ -1006,5 +1008,212 @@ fn the_report_is_one_line() {
     assert_eq!(
         one.missing_line().as_deref(),
         Some("missing fonts: Sabon, Scala")
+    );
+    let with_whiteboards = Report {
+        pages: 14,
+        embedded_pages: 2,
+        ..Report::default()
+    };
+    assert_eq!(
+        with_whiteboards.line(A4),
+        "14 pages, 2 whiteboards, 595.28 x 841.89 pt, 0 rows, 0 rows off, 0 images, fonts: none"
+    );
+    let one_whiteboard = Report {
+        pages: 1,
+        embedded_pages: 1,
+        ..Report::default()
+    };
+    assert!(
+        one_whiteboard
+            .line(A4)
+            .starts_with("1 page, 1 whiteboard, ")
+    );
+}
+
+/// A page of another PDF (a whiteboard's, which WebKit makes) is added as it
+/// is: its own size, its text still text in its own place, its pixels the same.
+#[test]
+fn a_page_of_another_pdf_is_added_as_it_is() {
+    const WIDE: (f32, f32) = (900., 500.);
+    let jpeg: Arc<[u8]> = Arc::from(picture_file(160, 120, &picture(160, 120), true));
+    // The source: two pages of different sizes, the second with rows, a
+    // picture, strokes and a rectangle.
+    let (source, source_file) = write(&[
+        page(
+            A4,
+            vec![Item::Row(fixed_row(
+                "Not this page.",
+                courier(),
+                12.,
+                72.,
+                100.,
+            ))],
+        ),
+        page(
+            WIDE,
+            vec![
+                Item::Rect(RectItem {
+                    x: 40.,
+                    y: 40.,
+                    width: 300.,
+                    height: 120.,
+                    radius: 8.,
+                    fill: Some(BLUE),
+                    border: Some((3., INK)),
+                }),
+                Item::Row(fixed_row("System overview", courier(), 18., 60., 100.)),
+                Item::Row(fixed_row("Postgres reads", courier(), 12., 420., 300.)),
+                Item::Stroke(StrokeItem {
+                    points: vec![(340., 100.), (600., 100.), (600., 260.)],
+                    width: 4.,
+                    color: RED,
+                }),
+                Item::Image(ImageItem {
+                    key: [7; 16],
+                    bytes: jpeg.clone(),
+                    x: 650.,
+                    y: 300.,
+                    width: 160.,
+                    height: 120.,
+                }),
+            ],
+        ),
+    ]);
+    assert_eq!(source_file.page_count(), 2);
+
+    let mut writer = PdfWriter::new(&JobInfo {
+        title: "A folder".to_string(),
+        creator: "Inner Word 0.0.0".to_string(),
+    });
+    writer.add_page(&page(
+        A4,
+        vec![Item::Row(fixed_row(
+            "A chapter first.",
+            courier(),
+            12.,
+            72.,
+            100.,
+        ))],
+    ));
+    // What is no PDF, and pages the PDF does not have, add nothing.
+    assert_eq!(writer.add_pdf_page(b"these bytes are no PDF", 1), None);
+    assert_eq!(writer.add_pdf_page(&[], 1), None);
+    assert_eq!(writer.add_pdf_page(source.bytes(), 0), None);
+    assert_eq!(writer.add_pdf_page(source.bytes(), 3), None);
+    assert_eq!(writer.pages(), 1);
+    let added = writer
+        .add_pdf_page(source.bytes(), 2)
+        .expect("its second page");
+    assert!(
+        close(added.0, WIDE.0, 0.01) && close(added.1, WIDE.1, 0.01),
+        "{added:?}"
+    );
+    assert_eq!(writer.pages(), 2);
+    let pdf = writer.finish();
+    assert_eq!(pdf.report.pages, 2);
+    assert_eq!(pdf.report.embedded_pages, 1);
+    assert_eq!(pdf.report.rows, 1, "the rows of the writer's own pages");
+    assert!(
+        pdf.report
+            .line(A4)
+            .starts_with("2 pages, 1 whiteboard, 595.28 x 841.89 pt"),
+        "{}",
+        pdf.report.line(A4)
+    );
+
+    let file = PdfFile::open(pdf.bytes()).expect("a PDF");
+    assert_eq!(file.page_count(), 2);
+    assert_eq!(file.page_text(0).trim(), "A chapter first.");
+    let (width, height) = file.page_size(1);
+    assert!(
+        close(width, WIDE.0, 0.01) && close(height, WIDE.1, 0.01),
+        "{width} x {height}"
+    );
+    // The same text, still text, where it was.
+    assert_eq!(
+        squeezed(&file.page_text(1)),
+        squeezed(&source_file.page_text(1))
+    );
+    for word in ["overview", "Postgres"] {
+        let before = source_file.find(1, word).expect("in the source");
+        let after = file.find(1, word).expect("still text in the new PDF");
+        assert!(
+            close(before.0, after.0, 0.05)
+                && close(before.1, after.1, 0.05)
+                && close(before.2, after.2, 0.05)
+                && close(before.3, after.3, 0.05),
+            "{word}: {before:?} against {after:?}"
+        );
+    }
+    // The same pixels.
+    let (w1, h1, before) = source_file.page_pixels(1, 2.).expect("the source's pixels");
+    let (w2, h2, after) = file.page_pixels(1, 2.).expect("the new pixels");
+    assert_eq!((w1, h1), (w2, h2));
+    let differing = before
+        .chunks(4)
+        .zip(after.chunks(4))
+        .filter(|(a, b)| {
+            a.iter()
+                .zip(b.iter())
+                .any(|(a, b)| (i32::from(*a) - i32::from(*b)).abs() > 8)
+        })
+        .count();
+    assert!(
+        differing * 1000 <= w1 * h1,
+        "{differing} of {} pixels differ",
+        w1 * h1
+    );
+    // And what is drawn is there: the rectangle, the stroke, the picture.
+    let at = |x: f32, y: f32| pixel(&file, 1, x, y);
+    assert!(is(at(100., 140.), BLUE));
+    assert!(is(at(600., 200.), RED));
+    let left = at(654., 360.);
+    assert!(left[0] > 180 && left[2] < 80, "the picture: {left:?}");
+    assert!(is(at(880., 20.), WHITE));
+}
+
+/// A page that is to be turned a quarter is added as a reader shows it, and the
+/// first page's size is what the print operation turns the paper by.
+#[test]
+fn a_page_is_added_as_a_reader_shows_it() {
+    let (source, _) = write(&[page(
+        (400., 300.),
+        vec![Item::Row(fixed_row("Turned.", courier(), 12., 40., 60.))],
+    )]);
+    // The first page turned a quarter: `/Rotate 90` in its dictionary.
+    let bytes = source.bytes();
+    let key = b"/Type /Page";
+    let at = bytes
+        .windows(key.len())
+        .enumerate()
+        .filter(|(_, window)| window == key)
+        .map(|(at, _)| at + key.len())
+        .find(|&end| bytes.get(end) != Some(&b's'))
+        .expect("a page dictionary, not the tree's");
+    let mut turned = bytes[..at].to_vec();
+    turned.extend_from_slice(b" /Rotate 90");
+    turned.extend_from_slice(&bytes[at..]);
+    let mut writer = PdfWriter::new(&JobInfo {
+        title: String::new(),
+        creator: String::new(),
+    });
+    // The cross-reference table is off by the inserted bytes; CoreGraphics
+    // reads such a file all the same (it rebuilds the table and logs "has
+    // logged an error"), as Preview does.
+    let added = writer.add_pdf_page(&turned, 1).expect("the turned page");
+    assert!(
+        close(added.0, 300., 0.01) && close(added.1, 400., 0.01),
+        "{added:?}"
+    );
+    let pdf = writer.finish();
+    let file = PdfFile::open(pdf.bytes()).unwrap();
+    assert_eq!(file.page_size(0), (300., 400.));
+    assert_eq!(squeezed(&file.page_text(0)), "Turned.");
+    // The first page's size, as the print operation turns the paper by it.
+    assert_eq!(source.first_page_size(), Some((400., 300.)));
+    assert_eq!(pdf.first_page_size(), Some((300., 400.)));
+    assert_eq!(
+        Pdf::from_bytes(b"no PDF".to_vec(), 1).first_page_size(),
+        None
     );
 }

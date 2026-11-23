@@ -21,8 +21,14 @@
 //!   [`check_selectors`] asks the runtime for every one this module sends.
 //! * A print operation runs once: a new one for every job.
 //!
-//! No struct comes back through `msg_send!` here (sizes go in, results are
-//! objects and booleans), so nothing depends on how a platform returns one.
+//! One struct comes back through `msg_send!` here, the user's `paperSize` (an
+//! `NSSize`, two doubles: sixteen bytes, which both platforms return in
+//! registers, so `objc_msgSend` is the right call on either); everything else
+//! that comes back is an object or a boolean.
+//!
+//! Two scalings ([`Scaling`]): a document's pages at their real size on the
+//! paper they were made for, and a drawing of its own size made smaller to fit
+//! the user's paper, turned to the drawing's orientation.
 
 // `objc`'s macros ask for a cfg this crate does not have.
 #![allow(unexpected_cfgs)]
@@ -60,6 +66,9 @@ unsafe extern "C" {}
 
 /// `kPDFPrintPageScaleNone`: the page at its real size.
 const SCALE_NONE: isize = 0;
+/// `kPDFPrintPageScaleDownToFit`: a page larger than the paper made smaller
+/// until it fits, never larger.
+const SCALE_DOWN_TO_FIT: isize = 2;
 
 /// `NSSize`.
 #[repr(C)]
@@ -80,12 +89,59 @@ unsafe impl objc::Encode for Size {
 pub struct PrintRequest<'a> {
     /// The finished PDF. PDFKit is handed the very data it holds.
     pub pdf: &'a Pdf,
-    /// The size of the document's paper in points, orientation applied (a size
-    /// that is wider than high is landscape). The panel opens on it.
-    pub paper: (f32, f32),
+    /// The size of the paper in points, orientation applied (a size that is
+    /// wider than high is landscape): the panel opens on it. `None`: the
+    /// user's paper, as `NSPrintInfo.sharedPrintInfo` has it (which depends on
+    /// the Mac's default printer: a test always names one).
+    ///
+    /// With [`Scaling::DownToFit`] the paper, given or the user's, is turned
+    /// landscape when the PDF's first page is wider than high, and portrait
+    /// otherwise.
+    pub paper: Option<(f32, f32)>,
+    /// Whether the pages are printed at their real size or made smaller to fit
+    /// the paper.
+    pub scaling: Scaling,
     /// The name of the job: what the print queue shows and what "Save as PDF"
     /// suggests as the file's name.
     pub title: &'a str,
+}
+
+/// How the pages of a PDF are put on the paper.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Scaling {
+    /// At their real size, a point being 1/72 inch (`kPDFPrintPageScaleNone`):
+    /// the pages of a document, made on the paper they are printed on.
+    #[default]
+    Actual,
+    /// Made smaller when larger than the paper, never larger
+    /// (`kPDFPrintPageScaleDownToFit`): a drawing of its own size, printed on
+    /// whatever paper the user has, turned to the drawing's orientation.
+    DownToFit,
+}
+
+impl Scaling {
+    /// PDFKit's `PDFPrintScalingMode`.
+    fn mode(self) -> isize {
+        match self {
+            Scaling::Actual => SCALE_NONE,
+            Scaling::DownToFit => SCALE_DOWN_TO_FIT,
+        }
+    }
+}
+
+/// `paper` turned to the orientation of a page of `page` size: landscape for a
+/// page wider than high, portrait otherwise. A square paper stays as it is.
+pub(crate) fn turned_to(paper: (f32, f32), page: (f32, f32)) -> (f32, f32) {
+    let (short, long) = if paper.0 <= paper.1 {
+        (paper.0, paper.1)
+    } else {
+        (paper.1, paper.0)
+    };
+    if page.0 > page.1 {
+        (long, short)
+    } else {
+        (short, long)
+    }
 }
 
 /// Why nothing was printed.
@@ -129,11 +185,11 @@ fn on_main_thread() -> bool {
     main != NO
 }
 
-/// The user's print settings with the document's paper and no margins: a copy
+/// The user's print settings with the request's paper and no margins: a copy
 /// the caller owns. Null when AppKit has none.
 ///
 /// Centering is on: PDFKit puts the page exactly on the paper only then.
-unsafe fn print_info(paper: (f32, f32)) -> *mut Object {
+unsafe fn print_info(request: &PrintRequest<'_>) -> *mut Object {
     let Some(class) = Class::get("NSPrintInfo") else {
         return std::ptr::null_mut();
     };
@@ -148,6 +204,20 @@ unsafe fn print_info(paper: (f32, f32)) -> *mut Object {
         if info.is_null() {
             return info;
         }
+        let paper = match request.paper {
+            Some(paper) => paper,
+            None => {
+                let size: Size = msg_send![info, paperSize];
+                (size.width as f32, size.height as f32)
+            }
+        };
+        let paper = match request.scaling {
+            Scaling::Actual => paper,
+            Scaling::DownToFit => match request.pdf.first_page_size() {
+                Some(page) => turned_to(paper, page),
+                None => paper,
+            },
+        };
         // A size that is wider than high makes the orientation landscape by
         // itself.
         let size = Size {
@@ -189,7 +259,7 @@ unsafe fn operation(
         }
         let operation: *mut Object = msg_send![document,
             printOperationForPrintInfo: info
-            scalingMode: SCALE_NONE
+            scalingMode: request.scaling.mode()
             autoRotate: YES];
         if operation.is_null() {
             let _: () = msg_send![document, release];
@@ -299,7 +369,7 @@ pub unsafe fn run_sheet(
         // SAFETY: on the main thread, with a valid window (the caller's
         // promise); every object is held until the sheet has ended.
         unsafe {
-            let info = print_info(request.paper);
+            let info = print_info(request);
             if info.is_null() {
                 return Err(PrintError::Failed(
                     "macOS has no print settings.".to_string(),
@@ -347,7 +417,7 @@ pub fn run_save_job(request: &PrintRequest<'_>, to: &Path) -> Result<(), PrintEr
         // SAFETY: on the main thread; AppKit's own selectors with the argument
         // types its headers declare; what is made here is released here.
         unsafe {
-            let info = print_info(request.paper);
+            let info = print_info(request);
             if info.is_null() {
                 return Err(PrintError::Failed(
                     "macOS has no print settings.".to_string(),
@@ -381,11 +451,12 @@ pub fn run_save_job(request: &PrintRequest<'_>, to: &Path) -> Result<(), PrintEr
 
 /// Every class and selector [`run_sheet`] and [`run_save_job`] send, with whether
 /// it goes to the class itself.
-const USED: [(&str, bool, &str); 20] = [
+const USED: [(&str, bool, &str); 21] = [
     ("NSThread", true, "isMainThread"),
     ("NSMutableDictionary", false, "setObject:forKey:"),
     ("NSPrintInfo", true, "sharedPrintInfo"),
     ("NSPrintInfo", false, "copy"),
+    ("NSPrintInfo", false, "paperSize"),
     ("NSPrintInfo", false, "setPaperSize:"),
     ("NSPrintInfo", false, "setTopMargin:"),
     ("NSPrintInfo", false, "setBottomMargin:"),
@@ -564,7 +635,8 @@ mod tests {
         let pdf = a_pdf();
         let request = PrintRequest {
             pdf: &pdf,
-            paper: (595.276, 841.89),
+            paper: Some((595.276, 841.89)),
+            scaling: Scaling::Actual,
             title: "A page",
         };
         let saved = run_save_job(&request, Path::new("/nonexistent/never-written.pdf"));
@@ -585,6 +657,21 @@ mod tests {
             "`done` is dropped without having run"
         );
         assert_eq!(Arc::strong_count(&ran), 1, "and it is dropped");
+    }
+
+    #[test]
+    fn the_paper_is_turned_to_the_drawing() {
+        const A4: (f32, f32) = (595.276, 841.89);
+        const A4_LANDSCAPE: (f32, f32) = (841.89, 595.276);
+        assert_eq!(turned_to(A4, (1600., 900.)), A4_LANDSCAPE);
+        assert_eq!(turned_to(A4_LANDSCAPE, (1600., 900.)), A4_LANDSCAPE);
+        assert_eq!(turned_to(A4, (300., 900.)), A4);
+        assert_eq!(turned_to(A4_LANDSCAPE, (300., 900.)), A4);
+        // A square drawing is portrait.
+        assert_eq!(turned_to(A4_LANDSCAPE, (500., 500.)), A4);
+        assert_eq!(Scaling::default(), Scaling::Actual);
+        assert_eq!(Scaling::Actual.mode(), 0);
+        assert_eq!(Scaling::DownToFit.mode(), 2);
     }
 
     #[test]

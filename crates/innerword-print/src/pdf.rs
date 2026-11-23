@@ -13,6 +13,12 @@
 //!   JPEG's own compressed data goes into the PDF as it is; nothing is decoded and
 //!   kept (a 4096-pixel picture would be 64 MB of pixels).
 //!
+//! * A page of another PDF ([`PdfWriter::add_pdf_page`]: the PDF of a whiteboard,
+//!   which WebKit made) is a page of its own, drawn with `CGContextDrawPDFPage`:
+//!   Quartz writes its content again into this PDF, so its lines stay paths, its
+//!   text stays text in its embedded fonts and its pictures stay the files they
+//!   are.
+//!
 //! Colours are sRGB. A page has no transparency: [`crate::Color`] has no alpha.
 
 use std::{
@@ -33,6 +39,7 @@ use core_graphics::{
     base::CGFloat,
     color::{CGColor, SysCGColorRef},
     context::{CGContext, CGLineCap, CGLineJoin},
+    geometry::CGAffineTransform,
     geometry::{CGPoint, CGRect, CGSize},
 };
 use core_text::font::CTFont;
@@ -74,6 +81,25 @@ unsafe extern "C" {
         alpha: CGFloat,
     ) -> SysCGColorRef;
     fn CGImageRelease(image: *mut c_void);
+    fn CGDataProviderCreateWithCFData(data: CFDataRef) -> *mut c_void;
+    fn CGDataProviderRelease(provider: *mut c_void);
+    fn CGPDFDocumentCreateWithProvider(provider: *mut c_void) -> *mut c_void;
+    fn CGPDFDocumentRelease(document: *mut c_void);
+    fn CGPDFDocumentGetNumberOfPages(document: *mut c_void) -> usize;
+    fn CGPDFDocumentGetPage(document: *mut c_void, number: usize) -> *mut c_void;
+    fn CGPDFPageGetBoxRect(page: *mut c_void, kind: i32) -> CGRect;
+    fn CGPDFPageGetRotationAngle(page: *mut c_void) -> i32;
+    fn CGPDFPageGetDrawingTransform(
+        page: *mut c_void,
+        kind: i32,
+        rect: CGRect,
+        rotate: i32,
+        preserve_aspect_ratio: bool,
+    ) -> CGAffineTransform;
+    fn CGContextConcatCTM(context: RawContext, transform: CGAffineTransform);
+    fn CGContextDrawPDFPage(context: RawContext, page: *mut c_void);
+    fn CGContextSaveGState(context: RawContext);
+    fn CGContextRestoreGState(context: RawContext);
     static kCGPDFContextMediaBox: CFStringRef;
     static kCGPDFContextTitle: CFStringRef;
     static kCGPDFContextCreator: CFStringRef;
@@ -127,19 +153,30 @@ pub struct Report {
     /// The number of distinct pictures whose bytes are no picture: nothing was
     /// drawn for them.
     pub images_unreadable: usize,
+    /// The number of pages that are pages of other PDFs
+    /// ([`PdfWriter::add_pdf_page`]: the app's whiteboards), counted in `pages`
+    /// too.
+    pub embedded_pages: usize,
 }
 
 impl Report {
     /// The report as one line, for a log: `12 pages, 595.28 x 841.89 pt, 5214
     /// rows, 0 rows off, 3 images, fonts: .SFNS-Regular, Charter-Bold,
-    /// Charter-Roman`. `paper` is the size of the sheets in points.
+    /// Charter-Roman`. `paper` is the size of the sheets in points. Pages of
+    /// other PDFs are named after the pages, by what the app puts there: `14
+    /// pages, 2 whiteboards, 595.28 x 841.89 pt, …`.
     pub fn line(&self, paper: (f32, f32)) -> String {
         let counted = |count: usize, one: &str, many: &str| {
             format!("{count} {}", if count == 1 { one } else { many })
         };
+        let mut pages = counted(self.pages, "page", "pages");
+        if self.embedded_pages > 0 {
+            pages.push_str(", ");
+            pages.push_str(&counted(self.embedded_pages, "whiteboard", "whiteboards"));
+        }
         let mut line = format!(
             "{}, {:.2} x {:.2} pt, {}, {}, {}",
-            counted(self.pages, "page", "pages"),
+            pages,
             paper.0,
             paper.1,
             counted(self.rows, "row", "rows"),
@@ -296,6 +333,54 @@ impl PdfWriter {
         // SAFETY: the page that was begun above.
         unsafe { CGPDFContextEndPage(raw) };
         self.report.pages += 1;
+    }
+
+    /// Adds page `page` (from 1) of the PDF `pdf` as a page of its own: its
+    /// media box is the size that page shows (its crop box, turned as the page
+    /// says it is to be turned), and the page is drawn into it with
+    /// `CGContextDrawPDFPage`, so its paths, its text with its embedded fonts
+    /// and its pictures stay what they are. Nothing of the page is scaled.
+    ///
+    /// `None`, and nothing added, for bytes that are no PDF, for a page it does
+    /// not have (0 included) and for a page of no size; else the size of the
+    /// added page in points. Counted in [`Report::pages`] and
+    /// [`Report::embedded_pages`].
+    pub fn add_pdf_page(&mut self, pdf: &[u8], page: usize) -> Option<(f32, f32)> {
+        let raw = self.context.as_ref()?.raw;
+        let source = SourcePdf::open(pdf)?;
+        let pdf_page = source.page(page)?;
+        let size = shown_size(pdf_page);
+        if !(size.0 > 0. && size.1 > 0.) {
+            return None;
+        }
+        let media_box = CGRect::new(&CGPoint::new(0., 0.), &CGSize::new(size.0, size.1));
+        // SAFETY: as in `add_page`; then a valid context, a page that belongs
+        // to `source`, which lives to the end of this function, and a graphics
+        // state saved and restored around the drawing.
+        unsafe {
+            let bytes = std::slice::from_raw_parts(
+                (&raw const media_box).cast::<u8>(),
+                std::mem::size_of::<CGRect>(),
+            );
+            let info: CFDictionary<CFString, CFType> = CFDictionary::from_CFType_pairs(&[(
+                CFString::wrap_under_get_rule(kCGPDFContextMediaBox),
+                CFData::from_buffer(bytes).as_CFType(),
+            )]);
+            CGPDFContextBeginPage(raw, info.as_concrete_TypeRef() as CFDictionaryRef);
+            CGContextSaveGState(raw);
+            // The crop box onto the new media box, the page's rotation
+            // applied; the rectangle is the crop box's own size (turned), so
+            // nothing is scaled.
+            let transform = CGPDFPageGetDrawingTransform(pdf_page, CROP_BOX, media_box, 0, true);
+            CGContextConcatCTM(raw, transform);
+            CGContextDrawPDFPage(raw, pdf_page);
+            CGContextRestoreGState(raw);
+            CGPDFContextEndPage(raw);
+        }
+        self.fill = None;
+        self.report.pages += 1;
+        self.report.embedded_pages += 1;
+        Some((size.0 as f32, size.1 as f32))
     }
 
     /// The number of pages added so far.
@@ -466,6 +551,86 @@ impl PdfWriter {
     }
 }
 
+/// `kCGPDFCropBox`: what a reader shows of a page (the media box when the page
+/// names no crop box).
+const CROP_BOX: i32 = 1;
+
+/// A PDF read with CoreGraphics, for drawing its pages.
+struct SourcePdf {
+    /// A `CGPDFDocumentRef` this struct owns.
+    document: *mut c_void,
+}
+
+impl SourcePdf {
+    /// `None` for bytes that are no PDF, or one without a page.
+    fn open(bytes: &[u8]) -> Option<SourcePdf> {
+        if bytes.is_empty() {
+            return None;
+        }
+        Self::over(&CFData::from_buffer(bytes))
+    }
+
+    /// The PDF in `data`, which the document holds on to (through its
+    /// provider) for as long as it lives.
+    fn over(data: &CFData) -> Option<SourcePdf> {
+        // SAFETY: valid CoreFoundation objects; the provider is released here
+        // (the document keeps its own reference) and the document is owned by
+        // the `SourcePdf`.
+        let document = unsafe {
+            let provider = CGDataProviderCreateWithCFData(data.as_concrete_TypeRef());
+            if provider.is_null() {
+                return None;
+            }
+            let document = CGPDFDocumentCreateWithProvider(provider);
+            CGDataProviderRelease(provider);
+            document
+        };
+        if document.is_null() {
+            return None;
+        }
+        let source = SourcePdf { document };
+        // SAFETY: the document this struct owns.
+        (unsafe { CGPDFDocumentGetNumberOfPages(document) } > 0).then_some(source)
+    }
+
+    /// Page `number` (from 1), owned by the document. `None` for one it does
+    /// not have.
+    fn page(&self, number: usize) -> Option<*mut c_void> {
+        // SAFETY: the document this struct owns.
+        if number == 0 || number > unsafe { CGPDFDocumentGetNumberOfPages(self.document) } {
+            return None;
+        }
+        // SAFETY: a number inside the document.
+        let page = unsafe { CGPDFDocumentGetPage(self.document, number) };
+        (!page.is_null()).then_some(page)
+    }
+}
+
+impl Drop for SourcePdf {
+    fn drop(&mut self) {
+        // SAFETY: the reference this struct owns.
+        unsafe { CGPDFDocumentRelease(self.document) };
+    }
+}
+
+/// The size a page shows: its crop box, width and height swapped when the page
+/// is turned a quarter or three.
+fn shown_size(page: *mut c_void) -> (f64, f64) {
+    // SAFETY: a page of a live document.
+    let (crop, angle) = unsafe {
+        (
+            CGPDFPageGetBoxRect(page, CROP_BOX),
+            CGPDFPageGetRotationAngle(page),
+        )
+    };
+    let (width, height) = (crop.size.width.abs(), crop.size.height.abs());
+    if angle.rem_euclid(180) == 90 {
+        (height, width)
+    } else {
+        (width, height)
+    }
+}
+
 fn color_key(color: Color) -> [u32; 3] {
     [color.r.to_bits(), color.g.to_bits(), color.b.to_bits()]
 }
@@ -566,6 +731,17 @@ impl Pdf {
     /// Whether there is no PDF: the system could not make one.
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+
+    /// The size of its first page as a reader shows it, in points. `None` when
+    /// the bytes are no PDF.
+    pub(crate) fn first_page_size(&self) -> Option<(f32, f32)> {
+        if self.is_empty() {
+            return None;
+        }
+        let source = SourcePdf::over(&self.data)?;
+        let (width, height) = shown_size(source.page(1)?);
+        Some((width as f32, height as f32))
     }
 
     /// The data as the `NSData *` it is.

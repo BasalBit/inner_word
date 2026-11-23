@@ -10,8 +10,9 @@
 //!   labels, images. All lengths are points (1/72 inch); a page's origin is its top
 //!   left corner, y down; items are painted in order.
 //! * [`mod@pdf`]: [`PdfWriter`] draws pages into a PDF in memory (CoreGraphics for
-//!   shapes and pictures, CoreText for glyphs, in the fonts the layout named) and
-//!   hands out a [`Pdf`] with a [`Report`] of what it did.
+//!   shapes and pictures, CoreText for glyphs, in the fonts the layout named), and
+//!   pages of other PDFs as they are ([`PdfWriter::add_pdf_page`]), and hands out a
+//!   [`Pdf`] with a [`Report`] of what it did.
 //! * [`mod@read`]: [`PdfFile`] reads a PDF back: page count, page sizes, the text of
 //!   a page, where a word stands, a page as a picture. For tests and for looking.
 //! * [`mod@system`]: the print operation. [`run_sheet`] shows the print panel on a
@@ -25,7 +26,8 @@
 //! }
 //! let pdf = writer.finish();
 //! // From a foreground task, outside any GPUI update:
-//! unsafe { run_sheet(&PrintRequest { pdf: &pdf, paper, title: &title }, ns_window, done)? };
+//! let request = PrintRequest { pdf: &pdf, paper: Some(paper), scaling: Scaling::Actual, title: &title };
+//! unsafe { run_sheet(&request, ns_window, done)? };
 //! ```
 //!
 //! # What decides where a glyph stands
@@ -60,4 +62,4 @@ pub use page::{
 };
 pub use pdf::{JobInfo, Pdf, PdfWriter, Report};
 pub use read::PdfFile;
-pub use system::{PrintError, PrintRequest, check_selectors, run_save_job, run_sheet};
+pub use system::{PrintError, PrintRequest, Scaling, check_selectors, run_save_job, run_sheet};

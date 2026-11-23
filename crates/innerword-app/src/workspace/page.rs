@@ -10,11 +10,10 @@
 //!   the row, the page is the last open item.
 //! - **The element** ([`Workspace::render_page`]): a canvas that fills the
 //!   editor area (below the find strip while it is open). In its prepaint it
-//!   makes the view at the first frame and keeps it on its bounds; in its
-//!   paint it draws the snapshot that stands in for the view while a GPUI
-//!   overlay is open. The view itself (`innerword_web::WebPage`) is a native
-//!   subview above GPUI's view; with the fake engine a GPUI element draws
-//!   the page's text.
+//!   makes the view at the first frame and keeps it on its bounds, its cover
+//!   and its holes; in its paint it looks whether the overlays moved. The
+//!   view itself (`innerword_web::WebPage`) is a native subview above GPUI's
+//!   view; with the fake engine a GPUI element draws the page's text.
 //! - **One focus, kept in step** ([`Workspace::sync_page_view`], every
 //!   frame): the web view is AppKit's first responder exactly while the page
 //!   element has GPUI's focus and no GPUI overlay that takes keys (a modal, a
@@ -24,10 +23,14 @@
 //! - **AppKit's callbacks never enter GPUI**: the view's callbacks post to
 //!   the page's inbox (`crate::pages`), and the task made at open drains it
 //!   ([`Workspace::on_page_event`]).
-//! - **Overlays**: a modal or a context menu over the page gets a snapshot
-//!   of the page (the view is hidden once it arrives; the picture is handed
-//!   to `Window::drop_image` when the overlay closes); toasts get holes in
-//!   the view, where it draws nothing and takes no click.
+//! - **Overlays**: GPUI draws under the view, so whatever it draws over the
+//!   page is seen through holes in the view, where the view draws nothing
+//!   and takes no click: toasts, and a modal or a context menu. While a
+//!   modal or a context menu is open the view is covered (it stays shown and
+//!   live, under the modal's backdrop drawn natively, and takes no event, so
+//!   a press outside the overlay reaches GPUI and closes it). Nothing waits:
+//!   the overlay is up in the frame it opens, its hole a frame later, when
+//!   GPUI has drawn it once ([`Workspace::sync_page_view`]).
 //! - **The find strip**, the context menu of `ctrl-enter`, the title and the
 //!   status items of a page, the zoom of the view, the theme, a crashed
 //!   WebContent process.
@@ -35,21 +38,20 @@
 use std::{
     cell::RefCell,
     rc::Rc,
-    sync::Arc,
     time::{Duration, Instant},
 };
 
 use gpui::{
-    Action, AnyElement, App, Bounds, Context, Corners, Entity, FocusHandle, Pixels, RenderImage,
-    SharedString, Subscription, Task, Transformation, Window, actions, canvas, div, percentage,
-    point, prelude::*, px, svg,
+    Action, AnyElement, App, Bounds, Context, Entity, FocusHandle, Pixels, SharedString,
+    Subscription, Task, Transformation, Window, actions, canvas, div, percentage, point,
+    prelude::*, px, svg,
 };
 use innerword_editor_tools::actions as tools;
 use innerword_library::{DocumentId, DocumentKind, LibraryItem};
 use innerword_page::Manifest;
 use innerword_ui::{
-    ContextMenu, ContextMenuItem, Icon, IconName, KeyHint, TextField, TextFieldEvent, Toast,
-    Tooltip,
+    ContextMenu, ContextMenuItem, Icon, IconName, KeyHint, ModalLayer, TextField, TextFieldEvent,
+    Toast, ToastLayer, Tooltip,
     button::Button,
     theme::{ActiveTheme, RADIUS_SM, SPACE_2, SPACE_3, SPACE_4, ThemeMode, UI_TEXT_SM},
 };
@@ -120,8 +122,8 @@ pub const PAGE_ZOOM_AT_MOST: &str = "A page is drawn at 300 % at most.";
 /// What a page shows when its WebContent process ended twice in a row.
 pub const PAGE_STOPPED: &str = "This page stopped working.";
 
-/// How many frames in a row are asked for while the holes of the view do
-/// not match the toasts (a toast coming in moves for a few frames).
+/// How many frames in a row are asked for while the holes of the view are
+/// not where the overlays are (a toast coming in moves for a few frames).
 const MAX_UNSETTLED_FRAMES: u8 = 30;
 
 /// How soon after a crash a second one shows the placeholder instead of
@@ -142,17 +144,110 @@ pub enum PageState {
     },
 }
 
-/// What stands in for the view while a GPUI overlay is over it.
-#[derive(Clone, Default)]
+/// What GPUI draws over the view, and what the view does about it. GPUI
+/// draws under the native view, so each overlay is seen through a hole in
+/// the view at its bounds (window coordinates), as the last frame drew it.
+#[derive(Clone, Debug, Default, PartialEq)]
 pub enum Overlay {
     #[default]
     None,
-    /// A snapshot is asked for; the view stays shown until it is there.
-    Waiting,
-    /// The snapshot is drawn, the view hidden.
-    Snapshot(Arc<RenderImage>),
-    /// Toasts are over the page: holes in the view at their bounds.
+    /// Toasts are over the live page: holes in the view at their bounds.
     Holes(Vec<Bounds<Pixels>>),
+    /// A modal or a context menu is open: the view stays shown and live,
+    /// drawn under `dim` (the modal's backdrop; nothing for a context menu),
+    /// and takes no event (`innerword_web::WebPage::set_cover`), with holes
+    /// where the overlay and the toasts are.
+    Covered {
+        dim: Option<(f64, f64, f64, f64)>,
+        holes: Vec<Bounds<Pixels>>,
+    },
+}
+
+impl Overlay {
+    /// The holes the view has.
+    pub fn holes(&self) -> &[Bounds<Pixels>] {
+        match self {
+            Overlay::None => &[],
+            Overlay::Holes(holes) | Overlay::Covered { holes, .. } => holes,
+        }
+    }
+
+    /// What the view is given for `WebPage::set_cover`: the colour over it
+    /// (alpha 0 for none) while it is covered.
+    pub fn cover(&self) -> Option<(f64, f64, f64, f64)> {
+        match self {
+            Overlay::Covered { dim, .. } => Some(dim.unwrap_or((0., 0., 0., 0.))),
+            _ => None,
+        }
+    }
+
+    /// For the `state` step: `none`, `holes:N`, `dimmed:N` (under a modal)
+    /// or `covered:N` (under a context menu), N the holes.
+    pub fn describe(&self) -> String {
+        match self {
+            Overlay::None => "none".to_string(),
+            Overlay::Holes(holes) => format!("holes:{}", holes.len()),
+            Overlay::Covered {
+                dim: Some(_),
+                holes,
+            } => format!("dimmed:{}", holes.len()),
+            Overlay::Covered { dim: None, holes } => format!("covered:{}", holes.len()),
+        }
+    }
+}
+
+/// What GPUI draws over an open page or whiteboard as the last frame drew
+/// it: the open modal (with its backdrop), the open context menu and its
+/// submenu, the toasts. `known` is false while one of them was not drawn
+/// yet (it opened since): another frame is wanted then.
+fn over_the_page(
+    modal_layer: &Entity<ModalLayer>,
+    toast_layer: &Entity<ToastLayer>,
+    window: &Window,
+    cx: &App,
+) -> (Overlay, bool) {
+    let toasts = toast_layer.read(cx);
+    let mut holes = toasts.toast_bounds();
+    let mut known = holes.len() == toasts.toasts().count();
+    let modal = modal_layer.read(cx);
+    let modal_open = modal.has_modal();
+    if modal_open {
+        match modal.modal_bounds() {
+            Some(bounds) => holes.push(bounds),
+            None => known = false,
+        }
+    }
+    let menu = ContextMenu::current(window, cx);
+    if let Some(menu) = &menu {
+        let menu = menu.read(cx);
+        match menu.bounds() {
+            Some(bounds) => holes.push(bounds),
+            None => known = false,
+        }
+        if menu.open_submenu().is_some() {
+            match menu.submenu_bounds() {
+                Some(bounds) => holes.push(bounds),
+                None => known = false,
+            }
+        }
+    }
+    let overlay = if modal_open || menu.is_some() {
+        let dim = modal_open.then(|| {
+            let backdrop = gpui::Rgba::from(cx.theme().colors.overlay_backdrop);
+            (
+                f64::from(backdrop.r),
+                f64::from(backdrop.g),
+                f64::from(backdrop.b),
+                f64::from(backdrop.a),
+            )
+        });
+        Overlay::Covered { dim, holes }
+    } else if holes.is_empty() {
+        Overlay::None
+    } else {
+        Overlay::Holes(holes)
+    };
+    (overlay, known)
 }
 
 /// The view of the open page: WebKit's, or the fake engine's.
@@ -203,13 +298,10 @@ impl PageViewHandle {
         }
     }
 
-    fn snapshot(&self, inbox: &SharedInbox) {
+    fn set_cover(&self, colour: Option<(f64, f64, f64, f64)>) {
         match self {
-            PageViewHandle::WebKit(view) => {
-                let inbox = inbox.clone();
-                view.snapshot(move |bitmap| pages::post(&inbox, PageEvent::Snapshot(bitmap)));
-            }
-            PageViewHandle::Fake(view) => view.snapshot(),
+            PageViewHandle::WebKit(view) => view.set_cover(colour),
+            PageViewHandle::Fake(view) => view.set_cover(colour),
         }
     }
 
@@ -365,8 +457,6 @@ pub(crate) struct PageSession {
     pub inbox: SharedInbox,
     /// What the view asks while AppKit waits.
     pub keys: Rc<RefCell<PageKeys>>,
-    /// Snapshots to hand to `Window::drop_image` in the next prepaint.
-    to_drop: Rc<RefCell<Vec<Arc<RenderImage>>>>,
     /// The appearance the view was given last.
     appearance: Option<(Appearance, (f64, f64, f64))>,
     /// Who waits for the page to have loaded (`page:wait`).
@@ -377,8 +467,9 @@ pub(crate) struct PageSession {
     fake: Option<Rc<pages::FakePages>>,
     /// The version of the keymap `keys` was taken from.
     keymap_version: Option<gpui::KeymapVersion>,
-    /// Frames asked for in a row while the holes did not match the toasts.
-    unsettled_frames: u8,
+    /// Frames asked for in a row while the holes were not where the
+    /// overlays are (counted by the element's paint).
+    unsettled_frames: Rc<std::cell::Cell<u8>>,
     _events: Task<()>,
 }
 
@@ -415,26 +506,17 @@ impl PageSession {
         matches!(self.item, WebItem::Board(_))
     }
 
-    /// Hands every picture of the page that GPUI may hold in its atlas to
-    /// `Window::drop_image`: the snapshot drawn while an overlay is over the
-    /// page and the ones waiting for the next prepaint. Called before the
-    /// session goes; the prepaint that would have dropped them never runs
-    /// for a session that is gone (an item opened from quick open, the
-    /// library search, a row's menu or the version history, over the
-    /// snapshot), and each left behind is a texture the size of the page
-    /// for the life of the window.
-    pub(crate) fn release_pictures(&mut self, window: &mut Window) {
-        let mut pictures: Vec<Arc<RenderImage>> = self.to_drop.borrow_mut().drain(..).collect();
-        if let Overlay::Snapshot(image) = std::mem::take(&mut self.overlay) {
-            pictures.push(image);
-        }
-        for image in pictures {
-            if image.frame_count() > 0 {
-                window.drop_image(image).ok();
-            }
-            if let Some(fake) = &self.fake {
-                fake.note_dropped();
-            }
+    /// The view is itself again: no cover, no holes. Called when the session
+    /// ends (an item opened from quick open, the library search, a row's
+    /// menu or the version history goes from under the overlay), before a
+    /// whiteboard's view is parked to be asked for what it holds.
+    pub(crate) fn uncover(&mut self) {
+        self.overlay = Overlay::None;
+        if let Ok(view) = self.view.try_borrow()
+            && let Some(view) = view.as_ref()
+        {
+            view.set_cover(None);
+            view.set_holes(&[]);
         }
     }
 }
@@ -450,9 +532,9 @@ fn rect_of(bounds: Bounds<Pixels>) -> innerword_web::Rect {
     }
 }
 
-/// The holes of `toasts` (window coordinates) in a view on `frame`, in the
-/// view's own points from its top left; toasts outside the view are left
-/// out.
+/// The holes of `overlays` (window coordinates) in a view on `frame`, in the
+/// view's own points from its top left; what lies outside the view is left
+/// out, and what lies partly outside is cut at its edges.
 pub fn holes_in(frame: Bounds<Pixels>, toasts: &[Bounds<Pixels>]) -> Vec<innerword_web::Rect> {
     toasts
         .iter()
@@ -469,16 +551,6 @@ pub fn holes_in(frame: Bounds<Pixels>, toasts: &[Bounds<Pixels>]) -> Vec<innerwo
 }
 
 /// A snapshot of the view as GPUI paints it.
-fn render_image_of(bitmap: innerword_web::Bitmap) -> Option<Arc<RenderImage>> {
-    if bitmap.width == 0 || bitmap.height == 0 {
-        return None;
-    }
-    let pixels = image::RgbaImage::from_raw(bitmap.width, bitmap.height, bitmap.bgra)?;
-    let frames: smallvec::SmallVec<[image::Frame; 1]> =
-        smallvec::smallvec![image::Frame::new(pixels)];
-    Some(Arc::new(RenderImage::new(frames)))
-}
-
 /// The appearance and the colour under the page for the app's theme.
 fn appearance_for(mode: ThemeMode, cx: &App) -> (Appearance, (f64, f64, f64)) {
     let appearance = match mode {
@@ -777,13 +849,12 @@ impl Workspace {
             focus,
             inbox,
             keys,
-            to_drop: Rc::default(),
             appearance: Some(theme),
             loaded_waiters: Vec::new(),
             bounds: Rc::default(),
             fake,
             keymap_version: None,
-            unsettled_frames: 0,
+            unsettled_frames: Rc::default(),
             _events: task,
         });
         self.refresh_page_keys(cx);
@@ -805,9 +876,9 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Ends the session of the open web item, its pictures handed back to
-    /// the window first ([`PageSession::release_pictures`]). Every way such a
-    /// session ends goes through here. A whiteboard's end saves what the app
+    /// Ends the session of the open web item, its view uncovered first
+    /// ([`PageSession::uncover`]). Every way such a session ends goes
+    /// through here. A whiteboard's end saves what the app
     /// holds of it, and asks its page first when it holds more
     /// (`board.rs`, `end_board_session`).
     pub(crate) fn discard_page(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -818,7 +889,7 @@ impl Workspace {
             crate::menus::set_open_item(crate::menus::OpenItemKind::Other, cx);
             self.end_board_session(page, window, cx);
         } else {
-            page.release_pictures(window);
+            page.uncover();
         }
     }
 
@@ -1032,7 +1103,6 @@ impl Workspace {
                     window.dispatch_action(action, cx);
                 }
             }
-            PageEvent::Snapshot(bitmap) => self.page_snapshot_arrived(bitmap),
             PageEvent::Found { query, found } => {
                 if let Some(find) = self.page.as_mut().and_then(|page| page.find.as_mut())
                     && find.field.read(cx).text() == query
@@ -1060,38 +1130,6 @@ impl Workspace {
             } else {
                 // The first time the page loads again by itself.
                 view.reload();
-            }
-        }
-    }
-
-    fn page_snapshot_arrived(&mut self, bitmap: Option<innerword_web::Bitmap>) {
-        let Some(page) = self.page.as_mut() else {
-            return;
-        };
-        if !matches!(page.overlay, Overlay::Waiting) {
-            // The overlay closed before the picture came: nothing to show.
-            return;
-        }
-        let image = bitmap.and_then(render_image_of);
-        let view = page.view.borrow();
-        match image {
-            Some(image) => {
-                page.overlay = Overlay::Snapshot(image);
-                if let Some(view) = view.as_ref() {
-                    view.set_hidden(true);
-                }
-            }
-            None => {
-                // A failed snapshot: the view is hidden and the element
-                // draws the canvas colour with the page's title.
-                if let Some(view) = view.as_ref() {
-                    view.set_hidden(true);
-                }
-                drop(view);
-                page.overlay = Overlay::Snapshot(Arc::new(RenderImage::new(smallvec::SmallVec::<
-                    [image::Frame; 1],
-                >::new(
-                ))));
             }
         }
     }
@@ -1302,13 +1340,8 @@ impl Workspace {
     /// (called from `render`, after the focus is known to be on screen): the
     /// first responder, the overlays, the theme.
     pub(crate) fn sync_page_view(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let blocking = self.modal_layer.read(cx).has_modal() || ContextMenu::is_open(window, cx);
-        let (toasts, toasts_shown) = if blocking {
-            (Vec::new(), 0)
-        } else {
-            let layer = self.toast_layer.read(cx);
-            (layer.toast_bounds(), layer.toasts().count())
-        };
+        let (overlay, known) = over_the_page(&self.modal_layer, &self.toast_layer, window, cx);
+        let blocking = matches!(overlay, Overlay::Covered { .. });
         let theme = appearance_for(self.settings.theme, cx);
         // The keys a page hands on follow every install of the keymap.
         let version = cx.key_bindings().borrow().version();
@@ -1337,44 +1370,19 @@ impl Workspace {
         } else if !wanted && view.is_focused() {
             view.unfocus();
         }
-        match (&page.overlay, blocking) {
-            (Overlay::None | Overlay::Holes(_), true) => {
-                view.set_holes(&[]);
-                view.snapshot(&page.inbox);
-                page.overlay = Overlay::Waiting;
-            }
-            (Overlay::Waiting | Overlay::Snapshot(_), true) => {}
-            (Overlay::Snapshot(image), false) => {
-                page.to_drop.borrow_mut().push(image.clone());
-                if !matches!(page.state, PageState::Crashed { again: true, .. }) {
-                    view.set_hidden(false);
-                }
-                page.overlay = Overlay::None;
-            }
-            (Overlay::Waiting, false) => page.overlay = Overlay::None,
-            (Overlay::None | Overlay::Holes(_), false) => {}
+        // The view is never hidden and nothing waits for a picture of it: a
+        // modal is up in this frame (the view covered at once: dimmed, no
+        // event), and its hole, cut where the last frame drew it, comes a
+        // frame later, once GPUI has drawn the modal under the view. A hole
+        // cut in the frame that first draws the modal could show the frame
+        // before it for a moment, where nothing is drawn yet.
+        view.set_cover(overlay.cover());
+        if !known && page.unsettled_frames.get() < MAX_UNSETTLED_FRAMES {
+            // Not drawn yet: the frame after this one knows where it is.
+            page.unsettled_frames.set(page.unsettled_frames.get() + 1);
+            window.request_animation_frame();
         }
-        if !blocking {
-            // A toast's bounds are known once it was drawn, and change while
-            // it comes in: another frame until the holes are where the
-            // toasts are.
-            let settled = toasts.len() == toasts_shown
-                && match &page.overlay {
-                    Overlay::Holes(holes) => *holes == toasts,
-                    _ => toasts.is_empty(),
-                };
-            if settled {
-                page.unsettled_frames = 0;
-            } else if page.unsettled_frames < MAX_UNSETTLED_FRAMES {
-                page.unsettled_frames += 1;
-                window.request_animation_frame();
-            }
-            page.overlay = if toasts.is_empty() {
-                Overlay::None
-            } else {
-                Overlay::Holes(toasts)
-            };
-        }
+        page.overlay = overlay;
         if page.appearance != Some(theme) {
             view.set_appearance(theme.0, theme.1);
             page.appearance = Some(theme);
@@ -1389,7 +1397,6 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let colors = cx.theme().colors;
-        let document_font = cx.theme().fonts.document.clone();
         let Some(page) = self.page.as_ref() else {
             return div().into_any_element();
         };
@@ -1399,20 +1406,14 @@ impl Workspace {
             .map(|find| self.render_find_strip(find, cx));
         let view = page.view.clone();
         let seed = page.seed.clone();
-        let to_drop = page.to_drop.clone();
-        let fake = page.fake.clone();
         let bounds_cell = page.bounds.clone();
         let zoom = page.zoom;
-        let holes = match &page.overlay {
-            Overlay::Holes(toasts) => toasts.clone(),
-            _ => Vec::new(),
-        };
-        let snapshot = match &page.overlay {
-            Overlay::Snapshot(image) if image.frame_count() > 0 => Some(image.clone()),
-            _ => None,
-        };
-        let failed_snapshot =
-            matches!(&page.overlay, Overlay::Snapshot(image) if image.frame_count() == 0);
+        let holes = page.overlay.holes().to_vec();
+        // What the paint compares with where the overlays were drawn.
+        let applied = page.overlay.clone();
+        let unsettled = page.unsettled_frames.clone();
+        let modal_layer = self.modal_layer.clone();
+        let toast_layer = self.toast_layer.clone();
         // The native view behind the window, only for WebKit (a test's
         // window has none).
         let native = matches!(*seed.borrow(), Some(ViewSeed::WebKit(..)))
@@ -1421,14 +1422,6 @@ impl Workspace {
         let draw_when_covered = pages::draws_when_covered(cx);
         let place = canvas(
             move |bounds, window, _cx| {
-                for image in to_drop.borrow_mut().drain(..) {
-                    if image.frame_count() > 0 {
-                        window.drop_image(image).ok();
-                    }
-                    if let Some(fake) = &fake {
-                        fake.note_dropped();
-                    }
-                }
                 bounds_cell.set(Some(bounds));
                 // A frame drawn while the view is lent out (AppKit can draw
                 // the window while WebKit prints): it stays as it is.
@@ -1474,11 +1467,16 @@ impl Workspace {
                     view.set_holes(&holes_in(bounds, &holes));
                 }
             },
-            move |bounds, _, window, _cx| {
-                if let Some(image) = snapshot {
-                    window
-                        .paint_image(bounds, Corners::default(), image, 0, false)
-                        .ok();
+            move |_, _, window, cx| {
+                // Every overlay has been laid out and placed by now: when one
+                // moved, opened or changed its size in this frame, the next
+                // frame puts the holes where it is.
+                let (now, known) = over_the_page(&modal_layer, &toast_layer, window, cx);
+                if known && now == applied {
+                    unsettled.set(0);
+                } else if unsettled.get() < MAX_UNSETTLED_FRAMES {
+                    unsettled.set(unsettled.get() + 1);
+                    window.request_animation_frame();
                 }
             },
         )
@@ -1487,7 +1485,6 @@ impl Workspace {
         .left_0()
         .size_full();
 
-        let title = super::session_title(&page.title);
         let is_board = page.is_board();
         let page_text = page
             .page_item()
@@ -1554,17 +1551,6 @@ impl Workspace {
                 Some(self.render_page_text_column(Some(message.clone()), &page_text, cx))
             }
             (_, true) => Some(self.render_page_text_column(None, &page_text, cx)),
-            _ if failed_snapshot => Some(
-                div()
-                    .size_full()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .font_family(document_font)
-                    .text_color(colors.muted)
-                    .child(title)
-                    .into_any_element(),
-            ),
             _ => None,
         };
         area = area
@@ -2325,12 +2311,7 @@ impl Workspace {
             PageState::Crashed { again: false, .. } => "crashed".to_string(),
             PageState::Crashed { again: true, .. } => "stopped".to_string(),
         };
-        let overlay = match &page.overlay {
-            Overlay::None => "none".to_string(),
-            Overlay::Waiting => "waiting".to_string(),
-            Overlay::Snapshot(_) => "snapshot".to_string(),
-            Overlay::Holes(holes) => format!("holes:{}", holes.len()),
-        };
+        let overlay = page.overlay.describe();
         let focus = if page.focus.is_focused(window) {
             "page"
         } else if page.focus.contains_focused(window, cx) {

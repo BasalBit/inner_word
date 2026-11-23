@@ -2424,7 +2424,7 @@ impl Workspace {
         };
         let has_view = session.view.borrow().is_some()
             && !matches!(session.state, PageState::Crashed { again: true, .. });
-        session.release_pictures(window);
+        session.uncover();
         if holds_more && has_view {
             if let Some(view) = session.view.borrow().as_ref() {
                 view.park();
@@ -2479,7 +2479,6 @@ impl Workspace {
         // recovery file before the view goes.
         self.recover_if_unsaved(id, CLOSED_BEFORE_SAVED, cx);
         let mut closing = self.closing_boards.remove(index);
-        closing.session.release_pictures(window);
         let then_open = closing.then_open.take();
         drop(closing);
         if let Some((open, focus)) = then_open {
@@ -2917,12 +2916,7 @@ impl Workspace {
             _ if board.ready => "loaded".to_string(),
             _ => "loading".to_string(),
         };
-        let overlay = match &page.overlay {
-            super::page::Overlay::None => "none".to_string(),
-            super::page::Overlay::Waiting => "waiting".to_string(),
-            super::page::Overlay::Snapshot(_) => "snapshot".to_string(),
-            super::page::Overlay::Holes(holes) => format!("holes:{}", holes.len()),
-        };
+        let overlay = page.overlay.describe();
         let focus = if page.focus.is_focused(window) {
             "board"
         } else if page.focus.contains_focused(window, cx) {

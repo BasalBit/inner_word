@@ -166,8 +166,9 @@ the zoom of the view (`zoom=[page 177% fit-width life=177%]`), printing (`print=
 `image=[block=2 width=50% natural=1600x1067@144 align=center ready alt="..."]`: the block
 from 0, the width as a share of the text column, pixels and pixels per inch, and `ready`,
 `loading`, `missing` or `broken` for its picture), the open page (`web=[id=12 state=loaded
-zoom=100% overlay=none|waiting|snapshot|holes:N focus=page|find|elsewhere responder=web|gpui
-find="q":found missing=0]` or `web=[none]`), the open whiteboard (`board=[id=12 state=loaded
+zoom=100% overlay=none|holes:N|dimmed:N|covered:N focus=page|find|elsewhere responder=web|gpui
+find="q":found missing=0]` or `web=[none]`; `dimmed` under a modal, `covered` under a context
+menu, N the holes), the open whiteboard (`board=[id=12 state=loaded
 elements=14 rev=31 posted=31 saved=31 dirty=no base=3f2a9c1b adopting=no … closing=no]` or
 `board=[none]`, see "Whiteboards"), the pages being added (`adding=[2/3 "Orbitarium"
 fetching]`, `checking`, `storing`, or `adding=[idle]`),
@@ -333,7 +334,7 @@ version, Vim mode on an image (the image's menu is in `context_menus.rs`, its de
 with the pointer in `mouse.rs`, agents in `live.rs` and `launch.rs`, the assistant in
 `assistant.rs`); `tests/suite/pages.rs` holds pages in the assembled app on the fake page
 engine (no test makes a `WKWebView`): opening one, the commands that do not apply, focus
-and the first responder, the snapshot under an overlay and the holes of toasts, find, zoom,
+and the first responder, the cover under a modal or a context menu and the holes, find, zoom,
 theme, a crash, print, export, its versions, and adding pages (Import Page…, drops on the
 sidebar, a page and the text, a refusal and Show Why, Cancel while a fetch is held, the
 note, files that were lost, no engine); agents' pages are in `live.rs`, the side chat over a
@@ -2199,13 +2200,21 @@ page), `workspace/page_import.rs` and `page_report.rs` (adding pages in the app)
   everything else goes to the page, except a key the keymap binds where a page has the
   keyboard (`ctrl-enter`, `shift-f10`: the page's own menu as a GPUI context menu), which
   the view hands to GPUI's view. `PageView` is a place where text is typed (a page has
-  fields), so no page command can be given a bare letter. A modal or a context menu over the
-  page is drawn over a snapshot of it (the view hidden; the picture handed to
-  `Window::drop_image` when the overlay closes, and when the page closes under it, as an
-  item opened from quick open, the library search, a row's menu or the version history
-  closes it: `Workspace::discard_page`, the one way a page session ends; one left behind
-  is a texture the size of the page in GPUI's atlas for the life of the window); a toast gets a hole in the view (drawn and
-  hit-tested: a click on its button reaches GPUI). The title and the status bar have the
+  fields), so no page command can be given a bare letter. GPUI draws under the view, so
+  what it draws over the page is seen through **holes** in the view (drawn and hit-tested:
+  a click on a toast's button reaches GPUI), where the last frame drew it: toasts, and a
+  modal or a context menu. A modal or a context menu also **covers** the view
+  (`WebPage::set_cover`): it stays shown and live, under the modal's backdrop drawn
+  natively (none for a menu), and takes no event (`hitTest:` nil, no pointer move, no key
+  equivalent, `_setIgnoresAllEvents:`), so a press outside the overlay reaches GPUI and
+  closes it. **The view is never hidden for an overlay and nothing waits for a picture of
+  it**: the overlay is up in the frame it opens, its hole a frame later, once GPUI has
+  drawn it (`Workspace::sync_page_view`, `over_the_page`). Until 0.11.0 a snapshot stood in
+  for the hidden view: on a whiteboard the overlay came 300 ms late (WebKit took 170 ms
+  for the snapshot of Excalidraw's canvas, converting its pixels 90 ms more in the debug
+  build), the sidebar dimmed long before the canvas, and the hidden page was told
+  `visibilitychange` and stopped drawing; `Workspace::discard_page`, the one way a page
+  session ends, uncovers the view. The title and the status bar have the
   page's items (its words, its zoom 50 to 300 %, the sparkle); find is a strip in the
   find bar's key context, with Aa, previous, next and close for the pointer (none takes
   the keyboard; the press that gives the page the keyboard is on the page's area, not on
@@ -2234,8 +2243,8 @@ page), `workspace/page_import.rs` and `page_report.rs` (adding pages in the app)
   `WebKit` in every run of the real binary unless `INNER_WORD_PAGES=off` or
   `available()` fails; `Fake` in tests (`pages::use_fake`: a GPUI element draws the page's
   text, the check answers with `static_check` or what `FakePages::set_check` left, and the
-  fake records what the view was asked: opened, finds, zoom, snapshots made and dropped,
-  the first responder, edits, reloads, holes; `hold_checks` / `release_checks` hold an
+  fake records what the view was asked: opened, finds, zoom, the cover and how often the
+  view was covered and hidden, the first responder, edits, reloads, holes; `hold_checks` / `release_checks` hold an
   import in "checking"); none: a page shows its text and nothing can be added. A scripted
   run switches WebKit's occlusion detection off for its view (`pages::draw_when_covered`),
   or a covered background window draws the page blank.
@@ -2326,6 +2335,9 @@ the shape library, closing and quitting), `workspace/board_pdf.rs` (its PDF),
   pictures the whiteboard names). The theme follows the app's; the zoom commands zoom
   Excalidraw's canvas (Fit Width and Fit Page show the whole drawing), the status bar shows
   it; Find opens Excalidraw's search; a link opens only by the reader's act, as on a page.
+  A modal or a context menu over a whiteboard covers its live canvas as on a page (dimmed
+  natively, no event, the overlay in a hole): the view is never hidden, so Excalidraw is
+  not told `visibilitychange`, posts nothing because of it and keeps drawing.
   Opening saves nothing. Excalidraw's own file actions, export, theme switch, collaboration,
   embeds, AI and library browsing are switched off (design section 4.13).
 - **Never lose a stroke** (design 4.6). The page posts the scene at the end of every gesture

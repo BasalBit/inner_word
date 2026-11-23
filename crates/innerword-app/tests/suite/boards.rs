@@ -673,6 +673,130 @@ fn help_from_the_page_opens_the_list_at_on_a_whiteboard(cx: &mut TestAppContext)
     );
 }
 
+// ----- overlays ---------------------------------------------------------------------------
+
+/// Draws the next frame: in a test window the frame a paint asks for
+/// (`request_animation_frame`) comes only when something draws.
+fn next_frame(vcx: &mut VisualTestContext) {
+    vcx.update(|window, _| window.refresh());
+    vcx.run_until_parked();
+}
+
+/// The holes of `overlays` (window coordinates) in the whiteboard's view.
+fn holes_of(
+    overlays: &[gpui::Bounds<gpui::Pixels>],
+    vcx: &mut VisualTestContext,
+) -> Vec<innerword_web::Rect> {
+    let area = vcx
+        .debug_bounds("page-area")
+        .expect("the whiteboard's area");
+    innerword_app::workspace::page_holes_in(area, overlays)
+}
+
+/// A modal over a whiteboard (quick open, the palette, the settings, the
+/// list of shortcuts) is up in the frame it opens, over the live canvas:
+/// the view is covered (dimmed with the backdrop, no event) and never
+/// hidden, so its page is not told it is hidden and posts nothing because
+/// of the overlay (a stroke it holds stays unposted, the app asks it for
+/// nothing and saves nothing). The modal is seen through a hole once GPUI
+/// has drawn it; closing it gives the canvas the keyboard back.
+#[gpui::test]
+fn a_modal_over_a_whiteboard_is_up_at_once_and_its_page_is_told_nothing(cx: &mut TestAppContext) {
+    let (fake, library, workspace, board, _, vcx) = open_board(cx);
+    fake.draw(&scene(&[rect("a", 0.0, 1)]));
+    settle(vcx);
+    // A stroke the page has not posted yet.
+    fake.draw_unposted(&scene(&[rect("a", 30.0, 2)]));
+    vcx.run_until_parked();
+    let status = fake.board_status();
+    assert!(status.rev > status.posted, "{status:?}");
+    let collects = fake.collects_asked();
+    let focused = fake.first_responder_is_page();
+    for key in ["cmd-p", "cmd-shift-p", "cmd-,", "cmd-/"] {
+        vcx.simulate_keystrokes(key);
+        vcx.run_until_parked();
+        assert!(
+            workspace.read_with(vcx, |w, cx| w.modal_layer().read(cx).has_modal()),
+            "{key} opens a modal"
+        );
+        let cover = fake
+            .cover()
+            .unwrap_or_else(|| panic!("{key}: the view is covered"));
+        assert!(cover.3 > 0., "{key}: under the backdrop ({cover:?})");
+        assert!(!fake.hidden(), "{key}: the canvas stays shown");
+        assert!(
+            !fake.first_responder_is_page(),
+            "{key}: the modal has the keys"
+        );
+        let line = state_line(&workspace, vcx);
+        assert!(line.contains("overlay=dimmed:"), "{key}: {line}");
+        next_frame(vcx);
+        let modal = vcx.debug_bounds("modal").expect("the modal is drawn");
+        assert_eq!(fake.holes(), holes_of(&[modal], vcx), "{key}");
+        vcx.simulate_keystrokes("escape");
+        vcx.run_until_parked();
+        assert!(
+            !workspace.read_with(vcx, |w, cx| w.modal_layer().read(cx).has_modal()),
+            "{key}: escape closes it"
+        );
+        assert_eq!(fake.cover(), None, "{key}");
+        assert!(fake.holes().is_empty(), "{key}");
+        assert_eq!(fake.first_responder_is_page(), focused, "{key}");
+    }
+    assert_eq!(fake.times_hidden(), 0, "no overlay hid the canvas");
+    assert_eq!(fake.board_status(), status, "the page posted nothing");
+    assert_eq!(fake.collects_asked(), collects, "nothing was asked of it");
+    assert_eq!(
+        stored(&library, board, vcx).element("a").unwrap().x(),
+        0.0,
+        "nothing was saved"
+    );
+}
+
+/// The whiteboard's menu (`ctrl-enter`): the canvas is covered without a
+/// dim (a context menu has no backdrop) and takes no event, so a press
+/// outside the menu reaches GPUI and closes it; the menu is seen through a
+/// hole once drawn. A toast that comes meanwhile is seen too.
+#[gpui::test]
+fn a_context_menu_over_a_whiteboard_covers_it_without_a_dim(cx: &mut TestAppContext) {
+    let (fake, _library, workspace, _board, _, vcx) = open_board(cx);
+    workspace.update_in(vcx, |w, window, _| {
+        if let Some(focus) = w.page_focus_handle() {
+            window.focus(&focus);
+        }
+    });
+    vcx.run_until_parked();
+    vcx.simulate_keystrokes("ctrl-enter");
+    vcx.run_until_parked();
+    assert!(vcx.update(|window, cx| innerword_ui::ContextMenu::is_open(window, cx)));
+    assert_eq!(fake.cover(), Some((0., 0., 0., 0.)));
+    assert!(!fake.hidden());
+    assert!(state_line(&workspace, vcx).contains("overlay=covered:"));
+    next_frame(vcx);
+    let menu = vcx
+        .update(|window, cx| {
+            innerword_ui::ContextMenu::current(window, cx).and_then(|menu| menu.read(cx).bounds())
+        })
+        .expect("the menu was drawn");
+    assert_eq!(fake.holes(), holes_of(&[menu], vcx));
+    // A toast while the menu is open: a hole of its own.
+    workspace.update(vcx, |w, cx| {
+        w.show_toast(innerword_ui::Toast::new("Claude changed “Plan”"), cx)
+    });
+    vcx.run_until_parked();
+    next_frame(vcx);
+    next_frame(vcx);
+    let toast = workspace.read_with(vcx, |w, cx| w.toast_layer().read(cx).toast_bounds());
+    assert_eq!(toast.len(), 1);
+    assert_eq!(fake.holes(), holes_of(&[toast[0], menu], vcx));
+    assert!(state_line(&workspace, vcx).contains("overlay=covered:2"));
+    vcx.update(innerword_ui::ContextMenu::dismiss);
+    vcx.run_until_parked();
+    assert_eq!(fake.cover(), None);
+    assert!(state_line(&workspace, vcx).contains("overlay=holes:1"));
+    assert_eq!(fake.times_hidden(), 0);
+}
+
 // ----- PDF, print, export -----------------------------------------------------------------
 
 #[gpui::test]

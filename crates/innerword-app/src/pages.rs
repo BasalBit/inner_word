@@ -25,7 +25,7 @@
 //!   installed and whenever a page opens.
 
 use std::{
-    cell::{Cell, RefCell},
+    cell::RefCell,
     collections::{HashMap, VecDeque},
     future::Future,
     path::{Path, PathBuf},
@@ -41,7 +41,7 @@ use innerword_library::{
     store::{FileId, ImageFile},
 };
 use innerword_page::Manifest;
-use innerword_web::{Bitmap, KeyPress, MenuEntry, PageSource, ServedFile};
+use innerword_web::{KeyPress, MenuEntry, PageSource, ServedFile};
 
 /// The environment variable that keeps a run of the real binary from
 /// showing pages with WebKit (`INNER_WORD_PAGES=off`).
@@ -232,8 +232,6 @@ pub enum PageEvent {
     OpenExternally(String),
     Alert(String),
     MenuChosen(u32),
-    /// A snapshot that was asked for (`None`: it could not be made).
-    Snapshot(Option<Bitmap>),
     /// A find that was asked for: the query and whether it was found.
     Found {
         query: String,
@@ -1082,8 +1080,6 @@ pub(crate) fn check_bundle(
 #[derive(Default)]
 pub struct FakePages {
     pub(crate) state: RefCell<FakeState>,
-    /// Snapshots handed to `Window::drop_image` by the workspace.
-    dropped: Cell<usize>,
     /// The whiteboard a view shows (`boards.rs`).
     pub(crate) board: RefCell<crate::boards::FakeBoard>,
 }
@@ -1099,7 +1095,12 @@ pub(crate) struct FakeState {
     pub(crate) inbox: Option<SharedInbox>,
     zoom: Option<u16>,
     finds: Vec<(String, bool)>,
-    snapshots_made: usize,
+    /// The cover the view has (`WebPage::set_cover`).
+    cover: Option<(f64, f64, f64, f64)>,
+    /// How often the view was covered.
+    covers: usize,
+    /// How often the view was hidden.
+    times_hidden: usize,
     first_responder_is_page: bool,
     edits: Vec<&'static str>,
     check: Option<innerword_page::CheckReport>,
@@ -1202,12 +1203,21 @@ impl FakePages {
         self.state.borrow().finds.clone()
     }
 
-    pub fn snapshots_made(&self) -> usize {
-        self.state.borrow().snapshots_made
+    /// The cover the view has while a modal or a context menu is over it:
+    /// the colour drawn over it (alpha 0 for none).
+    pub fn cover(&self) -> Option<(f64, f64, f64, f64)> {
+        self.state.borrow().cover
     }
 
-    pub fn snapshots_dropped(&self) -> usize {
-        self.dropped.get()
+    /// How often a view was covered.
+    pub fn times_covered(&self) -> usize {
+        self.state.borrow().covers
+    }
+
+    /// How often a view was hidden (a hidden WebKit view tells its page
+    /// `visibilitychange`, and a whiteboard's page then posts what it holds).
+    pub fn times_hidden(&self) -> usize {
+        self.state.borrow().times_hidden
     }
 
     /// Whether the view is the window's first responder.
@@ -1295,8 +1305,7 @@ impl FakePages {
         self.state.borrow().reloads
     }
 
-    /// Whether the view is hidden (a snapshot stands in, or the page stopped
-    /// working).
+    /// Whether the view is hidden (the page stopped working).
     pub fn hidden(&self) -> bool {
         self.state.borrow().hidden
     }
@@ -1313,10 +1322,6 @@ impl FakePages {
     /// The scripts evaluated in the view.
     pub fn evaluated(&self) -> Vec<String> {
         self.state.borrow().evaluated.clone()
-    }
-
-    pub(crate) fn note_dropped(&self) {
-        self.dropped.set(self.dropped.get() + 1);
     }
 }
 
@@ -1351,6 +1356,7 @@ impl FakeView {
             state.zoom = Some(100);
             state.hidden = false;
             state.holes.clear();
+            state.cover = None;
             state.first_responder_is_page = false;
             state.text = text.to_string();
             state.serial
@@ -1371,7 +1377,19 @@ impl FakeView {
     }
 
     pub fn set_hidden(&self, hidden: bool) {
-        self.pages.state.borrow_mut().hidden = hidden;
+        let mut state = self.pages.state.borrow_mut();
+        if hidden && !state.hidden {
+            state.times_hidden += 1;
+        }
+        state.hidden = hidden;
+    }
+
+    pub fn set_cover(&self, colour: Option<(f64, f64, f64, f64)>) {
+        let mut state = self.pages.state.borrow_mut();
+        if colour.is_some() && state.cover.is_none() {
+            state.covers += 1;
+        }
+        state.cover = colour;
     }
 
     pub fn set_holes(&self, holes: &[innerword_web::Rect]) {
@@ -1388,15 +1406,6 @@ impl FakeView {
 
     pub fn is_focused(&self) -> bool {
         self.pages.state.borrow().first_responder_is_page
-    }
-
-    pub fn snapshot(&self) {
-        self.pages.state.borrow_mut().snapshots_made += 1;
-        self.post(PageEvent::Snapshot(Some(Bitmap {
-            width: 2,
-            height: 2,
-            bgra: vec![255; 16],
-        })));
     }
 
     pub fn find(&self, query: &str, backwards: bool, case_sensitive: bool) {

@@ -806,7 +806,7 @@ do when a new version changes a count.
 | The native view on the bounds of a `canvas` element, made at the first prepaint, `try_borrow_mut` while lent | yes | the same |
 | One focus, first responder kept in step every frame (`sync_page_view`) | yes | the same |
 | Every AppKit callback only posts to the inbox; a task acts (`pages::post`, `next_events`, `answer()`) | yes | the same, with the bridge's messages among the events |
-| Snapshot under a modal or a context menu, `drop_image`, `discard_page`; holes for toasts | yes | the same |
+| Holes for toasts; a modal or a context menu covers the live view (built: a snapshot under the hidden view at first, replaced after 0.11.0, 4.14) | yes | the same |
 | Theme through `NSAppearance` | yes | the same; the glue turns Excalidraw's own theme with it |
 | Crash: reload once, then "stopped working" | yes | the same, after saving what the app holds |
 | Origin | `page-<id>-<created_at>` | `board-<id>-<created_at>` (`pages::board_host`): never a page's origin |
@@ -1737,8 +1737,19 @@ bundle has 100 chunks, 2.66 MB, without the locales):
   offered and say why ("This whiteboard could not be shown, so nothing can be added to
   it."), the status bar shows the listing's count and no zoom, and the menu bar keeps every
   key (final review).
-- A modal, the palette or a context menu over a whiteboard: the snapshot, as for a page (the
+- A modal, the palette or a context menu over a whiteboard: the cover, as for a page (the
   writer cannot draw meanwhile, which is right). Toasts get holes, as for a page.
+  **Built, and replaced after 0.11.0:** at first the view was hidden under a snapshot, as a
+  page's was. On Excalidraw's canvas the snapshot took WebKit 170 ms (14 ms on a page) and
+  its pixels 90 ms more in the debug build, so quick open came 300 ms after `cmd-p`, the
+  sidebar dimmed long before the canvas (the "slow, with flickering" a person reported),
+  and the hidden view told Excalidraw `visibilitychange`, on which the glue posts what it
+  holds, and stopped its frames. Now the view is never hidden for an overlay: it is covered
+  (`WebPage::set_cover`: the modal's backdrop drawn natively over it, no event reaches it)
+  and the overlay is seen through a hole, a frame after it opens (`docs/gpui-notes.md`, "A
+  native view in the window"). Measured in scripted runs of the debug build with the
+  window recorded: the modal 54 ms after `cmd-p` (a text: 43 ms), the canvas dimmed with
+  the sidebar, closing in one frame; the page posts nothing.
 
 ### 4.15 The shape library
 

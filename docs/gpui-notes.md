@@ -1047,7 +1047,7 @@ key window (keys, the first responder, the cursor) was not checked by a person y
   `makeFirstResponder:` calls the subclass's `becomeFirstResponder` synchronously; a
   callback that updated GPUI there would borrow the app a second time and panic. So every
   notifying callback (loaded, failed, crashed, wants focus, a link, an alert, a menu item,
-  and the answers of snapshot, find, evaluate and print) only pushes into an
+  and the answers of find, evaluate and print) only pushes into an
   `Rc<RefCell<Inbox>>` and wakes the task that drains it (`pages::post`,
   `pages::next_events`); the task acts in an update of its own. A key the view hands to
   GPUI is dispatched by that task with `cx.update(|window, cx| window.dispatch_keystroke(..))`,
@@ -1071,26 +1071,38 @@ key window (keys, the first responder, the cursor) was not checked by a person y
   `charactersIgnoringModifiers` for the rest (`pages::keystroke_of`).
 - **GPUI draws under it.** GPUI draws the whole window in one layer and the native view
   lies above it, so whatever GPUI draws over the view's bounds (a modal, a context menu, a
-  toast, a tooltip) is hidden. A modal or a context menu: the view makes a snapshot
-  (`takeSnapshotWithConfiguration:`, 55 to 90 ms), which comes back as BGRA pixels and
-  becomes a `RenderImage` (`RenderImage::new(smallvec![image::Frame::new(pixels)])`) that the
-  element paints itself (`window.paint_image(bounds, Corners::default(), image, 0, false)`);
-  the view is hidden once it is there, shown again when the overlay closes, and the picture
-  is handed to `window.drop_image` in the next prepaint. **That prepaint never comes for an
-  element that is gone**: when the page closes under the overlay (an item chosen in quick
-  open), the session hands its pictures to `window.drop_image` as it ends
-  (`Workspace::discard_page`); one left behind is a texture the size of the page in the
-  atlas for the life of the window (24 switches: 55 MB to 335 MB of IOAccelerator memory,
-  measured with `footprint`). **Never through `img(Arc<Image>)`**:
-  the asset cache keeps every decoded image for the life of the app (the spike went from
-  388 MB to 1162 MB over twenty palettes). A test counts snapshots made against dropped.
-- **Holes for toasts.** A toast over a live page gets a hole in the view: a `CAShapeLayer`
-  mask with the even-odd rule (what is drawn) **and** `hitTest:` of the subclass answering
-  nil inside it (what is hit; a layer mask changes no hit-testing), so AppKit hit-tests the
+  toast, a tooltip) is hidden, except where the view has a **hole**: a `CAShapeLayer` mask
+  with the even-odd rule (what is drawn) **and** `hitTest:` of the subclass answering nil
+  inside it (what is hit; a layer mask changes no hit-testing), so AppKit hit-tests the
   next sibling, GPUI's view: a click on a toast's button, the wheel and the cursor over a
-  toast reach GPUI. A toast's bounds are known only after it was drawn and move while it
-  comes in (`ToastLayer::toast_bounds` gives the last frame's), so the workspace asks for
-  more frames (up to 30) until the holes are where the toasts are.
+  toast reach GPUI. Toasts, the open modal (`ModalLayer::modal_bounds`) and the open
+  context menu and its submenu (`ContextMenu::bounds`, `submenu_bounds`) each get one, at
+  the bounds the last frame drew them (`over_the_page` in `workspace/page.rs`).
+- **A modal or a context menu covers the view; it never hides it.** While one is open the
+  view stays shown and live (`WebPage::set_cover`): a subview of the web view, under its
+  mask, draws the modal's backdrop colour over it (none for a menu), and the view takes no
+  event at all (`hitTest:` nil everywhere, `mouseMoved:` and `performKeyEquivalent:`
+  dropped, WebKit's private `_setIgnoresAllEvents:` where it answers), so a press outside
+  the overlay reaches GPUI's backdrop and closes it. The cover is set in the frame the
+  overlay opens (the native change and GPUI's frame land within a composite of each other:
+  measured, the canvas and the sidebar dim in the same frame or 17 ms apart). **The hole
+  comes one frame later on purpose**: AppKit's change is committed at the end of the turn
+  of the run loop, before GPUI's Metal drawable is presented, so a hole cut in the frame
+  that first draws the modal would show, for a composite, GPUI's frame before it (the
+  canvas colour where the modal will be). The element's paint compares where the overlays
+  are now with the holes it applied (every overlay, deferred ones too, has been placed by
+  then) and asks for another frame when they differ (up to 30 in a row), so a modal that
+  grows or moves is followed a frame later. **What it replaced**: a snapshot
+  (`takeSnapshotWithConfiguration:`) drawn as a `RenderImage` while the view was hidden.
+  On a whiteboard WebKit took 170 ms for the snapshot of Excalidraw's canvas (14 ms on a
+  page) and converting its pixels 90 ms more in the debug build, on a window 2458 x 3204
+  device pixels: quick open came 300 ms after `cmd-p` with the sidebar dimmed long before
+  the canvas, and the hidden view told its page `visibilitychange` (the glue posted what it
+  held) and stopped its animation frames (0 in 600 ms, `innerword-web`'s test program,
+  `board_cover`). `WebPage::snapshot` remains for tests; a picture drawn by GPUI would go
+  through `window.paint_image` and `window.drop_image`, **never `img(Arc<Image>)`**: the
+  asset cache keeps every decoded image for the life of the app (the spike went from 388 MB
+  to 1162 MB over twenty palettes).
 - **A covered background window draws nothing.** WebKit marks a view whose window is
   covered as hidden after a second or two (`document.visibilityState` "hidden") and stops
   drawing it: a scripted run, which stays in the background, took blank screenshots.

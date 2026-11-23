@@ -68,10 +68,10 @@ reads and the assistant. The writer adds pages with File > Import Page… and by
    writes the row; with the owner's switch off the listener refuses an `add_page` at once
    and stores nothing.
 8. In the window the view is a native subview above GPUI's view, kept on the bounds of a
-   GPUI element. GPUI overlays (palette, modals, context menus) are shown over a
-   **snapshot** of the page while they are open; toasts are let through **holes** cut in
-   the view's layer and in its hit-testing. Snapshots are `RenderImage`s released with
-   `Window::drop_image`.
+   GPUI element. GPUI overlays (palette, modals, context menus) **cover** the live page
+   while they are open (built: a snapshot of the hidden page at first, replaced after
+   0.11.0; "Overlays" below); they and toasts are let through **holes** cut in the view's
+   layer and in its hit-testing.
 9. Keys: GPUI's focus on the page element and AppKit's first responder on the view are
    kept in step. Command keys reach GPUI first; the rest goes to the page, except the
    few keys the keymap binds in the page's own key context (`ctrl-enter`, `shift-f10`).
@@ -1082,6 +1082,17 @@ pub(crate) struct PageSession {
 GPUI draws everything in one layer; the web view lies above it, so whatever GPUI draws
 over the page's bounds is hidden (spike finding c). One approach for each case:
 
+**Replaced after 0.11.0.** The snapshot below was slow on a whiteboard (WebKit took 170 ms
+for Excalidraw's canvas, the overlay came 300 ms late and the window dimmed in two steps)
+and hiding the view told the page `visibilitychange`. A modal or a context menu now covers
+the live view instead (`WebPage::set_cover`: the backdrop's colour drawn natively over it,
+no event reaches it) and is seen through a hole like a toast, a frame after it opens, at
+the bounds the last frame drew it (`ModalLayer::modal_bounds`, `ContextMenu::bounds`). The
+view is never hidden for an overlay and nothing waits for a picture; `discard_page`
+uncovers the view as the session ends. `docs/gpui-notes.md`, "A native view in the
+window", has the details and the measurements. The bullets below are the design as first
+built.
+
 - **A modal or a context menu over the page** (`modal_layer.has_modal()`,
   `innerword_ui::ContextMenu::is_open(window, cx)` (over `ContextMenu::current`), a picker):
   the view takes a snapshot
@@ -1233,7 +1244,7 @@ strip's rows are the existing rows "In the find bar" and no row or entry is adde
   Select All first, and "Open Link in Browser" first of all when the page's focused
   element is a link to another site (asked with `evaluate` of
   `document.activeElement.closest('a[href]')?.href` before the menu opens; `tab` reaches
-  links, section 5). It is a GPUI overlay: the snapshot applies.
+  links, section 5). It is a GPUI overlay: the cover applies (the snapshot at first).
 - The library row of a page has the panel's own items (Open, Rename, Move…, Duplicate,
   Move to Trash) and the app's (Export…, Version History…, and for a page with a source
   Copy Page Address, Open Page Address in Browser).
@@ -1275,8 +1286,9 @@ impl FakePages {
     pub fn crash(&self);                                  // the open view reports a crash
     pub fn zoom(&self) -> Option<u16>;
     pub fn finds(&self) -> Vec<(String, bool)>;           // (query, backwards)
-    pub fn snapshots_made(&self) -> usize;
-    pub fn snapshots_dropped(&self) -> usize;
+    pub fn cover(&self) -> Option<(f64, f64, f64, f64)>; // built after 0.11.0, for the
+    pub fn times_covered(&self) -> usize;                // snapshots_made / _dropped of
+    pub fn times_hidden(&self) -> usize;                 // the first build
     pub fn first_responder_is_page(&self) -> bool;
     pub fn edits(&self) -> Vec<&'static str>;             // "copy", "select_all", ...
     pub fn set_check(&self, report: innerword_page::CheckReport); // the next check's answer
@@ -1301,7 +1313,7 @@ Steps (grammar in `automation.rs`):
 | `page:js:<script>` | evaluates a script in the open page and logs the answer (scripted runs only) |
 | `page:menu` | opens the page's context menu as `ctrl-enter` does |
 
-`state` gets `page=[id=12 state=loaded zoom=100% overlay=none|waiting|snapshot|holes:2 focus=page|elsewhere responder=web|gpui find="harbour":found missing=0]`
+`state` gets `page=[id=12 state=loaded zoom=100% overlay=none|holes:2|dimmed:1|covered:1 focus=page|elsewhere responder=web|gpui find="harbour":found missing=0]` (built as `web=[...]`; `waiting|snapshot` until the cover)
 while a page is open, and `page=[none]` otherwise; and while pages are being added in the
 app (WP9) `adding=[2/3 "Orbitarium" fetching]`, `adding=[idle]` otherwise. `page:import:`
 waits until its gesture is done and logs one line per page (and the summary).

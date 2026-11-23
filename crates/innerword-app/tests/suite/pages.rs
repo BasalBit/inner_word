@@ -1,7 +1,7 @@
 //! Pages in the assembled app, on the fake engine (`pages::use_fake`): no
 //! test makes a `WKWebView`. Opening a page (the sidebar, quick open, a
 //! launch), the session meanwhile, the commands that do not apply, focus and
-//! the first responder, the snapshot of an overlay and the holes of toasts,
+//! the first responder, the cover under an overlay and the holes of toasts,
 //! find, zoom, theme, a crashed WebContent process, the keys a page hands
 //! on, and a run without an engine.
 
@@ -524,31 +524,71 @@ fn the_keyboard_and_the_first_responder_go_together(cx: &mut TestAppContext) {
     assert_eq!(fake.edits(), vec!["copy", "select_all"]);
 }
 
+/// Draws the next frame: in a test window the frame a paint asks for
+/// (`request_animation_frame`) comes only when something draws.
+fn next_frame(vcx: &mut VisualTestContext) {
+    vcx.update(|window, _| window.refresh());
+    vcx.run_until_parked();
+}
+
+/// The hole a modal over the open page cuts in its view, where the modal was
+/// drawn (in the view's own points).
+fn modal_hole(vcx: &mut VisualTestContext) -> Vec<innerword_web::Rect> {
+    let area = vcx.debug_bounds("page-area").expect("the page's area");
+    let modal = vcx.debug_bounds("modal").expect("a modal is drawn");
+    innerword_app::workspace::page_holes_in(area, &[modal])
+}
+
+/// A modal over a page: up in the frame it opens, over the live view (never
+/// hidden, nothing waits for a picture of it), which is dimmed with the
+/// backdrop and takes no event; the modal seen through a hole once drawn;
+/// the view itself again when it closes. Twenty times.
 #[gpui::test]
-fn a_modal_over_the_page_has_one_snapshot_that_is_dropped(cx: &mut TestAppContext) {
+fn a_modal_over_the_page_covers_the_live_view(cx: &mut TestAppContext) {
     let (fake, workspace, _text, _page, vcx) = open_page(cx);
+    let backdrop = vcx.update(|_, cx| {
+        gpui::Rgba::from(
+            innerword_ui::theme::ActiveTheme::theme(cx)
+                .colors
+                .overlay_backdrop,
+        )
+    });
     for round in 1..=20 {
         vcx.simulate_keystrokes("cmd-shift-p");
         vcx.run_until_parked();
-        assert!(fake.hidden(), "the snapshot stands in for the view");
+        // The frame that drew the palette covered the view.
+        assert!(!fake.hidden(), "the view stays shown under a modal");
+        let (r, g, b, a) = fake.cover().expect("the view is covered");
+        assert_eq!(
+            (r as f32, g as f32, b as f32, a as f32),
+            (backdrop.r, backdrop.g, backdrop.b, backdrop.a),
+            "under the modal's own backdrop"
+        );
         assert!(!fake.first_responder_is_page(), "the palette has the keys");
-        assert!(state_line(&workspace, vcx).contains("overlay=snapshot"));
+        assert!(
+            state_line(&workspace, vcx).contains("overlay=dimmed:"),
+            "{}",
+            state_line(&workspace, vcx)
+        );
+        // Once GPUI has drawn the palette, the hole is where it is.
+        next_frame(vcx);
+        assert_eq!(fake.holes(), modal_hole(vcx));
+        assert!(state_line(&workspace, vcx).contains("overlay=dimmed:1"));
         vcx.simulate_keystrokes("escape");
         vcx.run_until_parked();
-        assert!(!fake.hidden());
+        assert_eq!(fake.cover(), None);
+        assert!(fake.holes().is_empty());
         assert!(fake.first_responder_is_page());
-        assert_eq!(fake.snapshots_made(), round);
-        assert_eq!(fake.snapshots_dropped(), round, "every snapshot is dropped");
+        assert!(state_line(&workspace, vcx).contains("overlay=none"));
+        assert_eq!(fake.times_covered(), round);
     }
+    assert_eq!(fake.times_hidden(), 0, "no modal hid the view");
 }
 
-/// An item opened while a modal is over the page (quick open here; the
-/// library search, a row's menu and the version history go the same way):
-/// the snapshot that stood in for the page is handed back to the window
-/// with the page, or it would stay in GPUI's atlas for the life of the
-/// window.
+/// An item opened from quick open over a page: the view of the page that
+/// goes is uncovered first, and the one that comes is not covered.
 #[gpui::test]
-fn the_snapshot_goes_with_a_page_left_from_a_modal(cx: &mut TestAppContext) {
+fn an_item_opened_from_a_modal_over_a_page_is_not_covered(cx: &mut TestAppContext) {
     let (fake, workspace, _text, _page, vcx) = open_page(cx);
     let library = workspace.read_with(vcx, |w, _| w.library().clone());
     let lighthouse = add_page(
@@ -558,10 +598,9 @@ fn the_snapshot_goes_with_a_page_left_from_a_modal(cx: &mut TestAppContext) {
         None,
         vcx,
     );
-    // From the page to another page.
     vcx.simulate_keystrokes("cmd-p");
     vcx.run_until_parked();
-    assert!(state_line(&workspace, vcx).contains("overlay=snapshot"));
+    assert!(fake.cover().is_some());
     vcx.simulate_input("Lighthouse");
     vcx.simulate_keystrokes("enter");
     vcx.run_until_parked();
@@ -569,25 +608,10 @@ fn the_snapshot_goes_with_a_page_left_from_a_modal(cx: &mut TestAppContext) {
         workspace.read_with(vcx, |w, _| w.open_page_id()),
         Some(lighthouse)
     );
-    assert_eq!(fake.snapshots_made(), 1);
-    assert_eq!(
-        fake.snapshots_dropped(),
-        1,
-        "the snapshot went with the page"
-    );
-    // From a page to the text.
-    vcx.simulate_keystrokes("cmd-p");
-    vcx.run_until_parked();
-    vcx.simulate_input("Notes");
-    vcx.simulate_keystrokes("enter");
-    vcx.run_until_parked();
-    assert!(workspace.read_with(vcx, |w, _| w.open_page_id()).is_none());
-    assert_eq!(fake.snapshots_made(), 2);
-    assert_eq!(
-        fake.snapshots_dropped(),
-        2,
-        "the snapshot went with the page"
-    );
+    assert_eq!(fake.cover(), None);
+    assert!(fake.holes().is_empty());
+    assert!(state_line(&workspace, vcx).contains("overlay=none"));
+    assert_eq!(fake.times_hidden(), 0);
 }
 
 /// Every page has an origin of its own, also a page that gets the id of
@@ -1248,7 +1272,7 @@ fn a_bare_letter_is_refused_as_a_key_of_a_page_command(cx: &mut TestAppContext) 
 
 #[gpui::test]
 fn the_title_and_the_status_items_of_a_page_have_their_menus(cx: &mut TestAppContext) {
-    let (_fake, workspace, _text, _page, vcx) = open_page(cx);
+    let (fake, workspace, _text, _page, vcx) = open_page(cx);
     let labels = |vcx: &mut VisualTestContext| {
         vcx.update(|window, cx| {
             innerword_ui::ContextMenu::current(window, cx)
@@ -1278,7 +1302,21 @@ fn the_title_and_the_status_items_of_a_page_have_their_menus(cx: &mut TestAppCon
         !title.iter().any(|label| label == "Document Settings…"),
         "{title:?}"
     );
-    assert!(state_line(&workspace, vcx).contains("overlay=snapshot"));
+    // A context menu covers the view without a dim, and is seen through a
+    // hole once drawn.
+    assert_eq!(fake.cover(), Some((0., 0., 0., 0.)));
+    assert!(state_line(&workspace, vcx).contains("overlay=covered:"));
+    next_frame(vcx);
+    let menu = vcx
+        .update(|window, cx| {
+            innerword_ui::ContextMenu::current(window, cx).and_then(|menu| menu.read(cx).bounds())
+        })
+        .expect("the menu was drawn");
+    let area = vcx.debug_bounds("page-area").expect("the page's area");
+    assert_eq!(
+        fake.holes(),
+        innerword_app::workspace::page_holes_in(area, &[menu])
+    );
     vcx.update(innerword_ui::ContextMenu::dismiss);
     vcx.run_until_parked();
     // The zoom in the status bar.

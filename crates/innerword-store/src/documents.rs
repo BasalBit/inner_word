@@ -841,8 +841,9 @@ impl Store {
     /// `updated_at`, the search index follows. **Never the title**, the folder or the
     /// position. Works on a trashed whiteboard, as [`Store::save_document`] does.
     ///
-    /// Refused, with nothing written:
-    /// - a text or a page: [`StoreError::WrongKind`] (`saving: Board`);
+    /// Refused, with nothing written to `library.db`:
+    /// - a text or a page: [`StoreError::WrongKind`] (`saving: Board`), which touches no
+    ///   file;
     /// - with `expect` given, a row whose content has another stamp (it changed since the
     ///   content the caller's scene descends from): [`StoreError::Stale`] with the stamp it
     ///   has, read in the same transaction as the write. `None` writes whatever is there
@@ -851,6 +852,15 @@ impl Store {
     ///   content nor any version of it names: [`StoreError::FilesMissing`]. A missing id the
     ///   whiteboard named already is kept (its picture shows as missing and the whiteboard
     ///   goes on saving). Each id that is there counts as used from now.
+    ///
+    /// **What a refusal still does in `images.db`**: the files are looked up before the
+    /// stamp is compared, and the look is [`Store::touch_file`], so every id of
+    /// `board.files` that `images.db` has loses its collector's stamp ("not named since")
+    /// also when the save is then refused, as `Stale` or as `FilesMissing`, and one that
+    /// only the copy among the backups has is written back into `images.db` from there.
+    /// Nothing else is written. That is harmless: the caller holds a scene that names
+    /// those files, so they are in use, and a file brought back is one the library had. When files are missing as well, `Stale` is told
+    /// first (the stamp read outside the transaction), since the caller merges anyway.
     pub fn save_board(
         &mut self,
         id: DocumentId,

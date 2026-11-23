@@ -11,14 +11,14 @@
     "package.json": "d89a66ef12de9510b53d7e2b12e90affdf2b6a20ebfd8ae8a2e226ee3581881b",
     "package-lock.json": "11c77910a76b54445aa09cf195e3c3abc82fffd073640692b7ea893376f14434",
     ".npmrc": "e84e5bb7dcc17ceb0002a1d9b818d17c8f9dfed9c481ed86ab462b40184235ba",
-    "build.mjs": "b664fdc8627b0880718c1136ade9473bc3d1396c9dc7c714a2ac2890a5c48632",
+    "build.mjs": "a2e073777ba749508c6ddf23532ea6ec5eb9ea91c7e7de0b87420c5e5c703cd6",
     "bundled-inside.json": "d4f7659945761b6d4ed48b962b3a49ec3f92ccb50630e1daf5abcf5a668aafe9",
     "src/board.css": "16e95e8ecfb21ac0bd882c47e2e2f6e1f3fa8c4aed530a50425fa7741a5ea352",
     "src/export.html": "b0d93c45bc690f2d393c1440bbb15359f4e85927e27faf59755c7b6c4927ef9f",
     "src/glue/asset-path.js": "7966371accddf5c2816a01f67793442e8bae15dc3c85c0ba699195273f128967",
     "src/glue/autosave.js": "26785e563981bec33c2d260861753bbdf0e5765e78ffd628d16296264fdff27f",
     "src/glue/board.jsx": "c6af77350568948cd2677b3e68eb814dac8000f490568a659ad9b34c6b746000",
-    "src/glue/bridge.js": "da712e048611e43a793b085944796c33cad4e0dbcb8a4fb6fed0352161368dde",
+    "src/glue/bridge.js": "c5785c9ee95ee15339ca07d76d587e590ab10211aadf4f6d7861729b9349c790",
     "src/glue/calls.js": "78b916dfb152f3419d9089913705efdc5a2b1e44f1713112804d4148ad966d38",
     "src/glue/edit.js": "22de07c3c04836c5cf028e39863fc3102368ab5c1055ec61a21aa800a8092376",
     "src/glue/export.js": "1ebcace32b4ac76583e855715c3ab693e67f487eec2dcb2f720237ea662ef326",
@@ -55,6 +55,18 @@
     {
       "name": "locales other than English left out",
       "applied": 53
+    },
+    {
+      "name": "no eval in the font subsetter: named functions",
+      "applied": 1
+    },
+    {
+      "name": "no eval in the font subsetter: dynamic callers",
+      "applied": 1
+    },
+    {
+      "name": "no eval in the font subsetter: invokers",
+      "applied": 1
     }
   ],
   "mermaidChunks": [

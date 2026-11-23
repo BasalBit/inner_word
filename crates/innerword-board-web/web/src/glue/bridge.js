@@ -92,13 +92,16 @@ export function cutIntoParts(json) {
       // Never between the two halves of a character pair.
       if (end < json.length && isHighSurrogate(json.charCodeAt(end - 1))) end--;
       const slice = json.slice(at, end);
-      const bytes = utf8Bytes(slice);
-      const message = bytes <= PART_BYTES ? utf8Bytes(JSON.stringify(slice)) + 128 : Infinity;
-      if (bytes <= PART_BYTES && message <= MAX_MESSAGE_BYTES) {
-        parts.push(slice);
-        break;
+      let over = utf8Bytes(slice) / PART_BYTES;
+      if (over <= 1) {
+        // The slice escaped as a JSON string, in its message.
+        const message = utf8Bytes(JSON.stringify(slice)) + 128;
+        if (message <= MAX_MESSAGE_BYTES) {
+          parts.push(slice);
+          break;
+        }
+        over = message / MAX_MESSAGE_BYTES;
       }
-      const over = Math.max(bytes / PART_BYTES, message / MAX_MESSAGE_BYTES);
       end = at + Math.max(1, Math.floor((end - at) / over) - 16);
     }
     at += parts[parts.length - 1].length;
@@ -129,6 +132,7 @@ export function installErrorReports() {
     reportError(`a promise was rejected: ${reason?.message ?? reason}`);
   });
   document.addEventListener("securitypolicyviolation", (event) => {
-    reportError(`the policy refused ${event.blockedURI || "an inline resource"} (${event.effectiveDirective})`);
+    const where = event.sourceFile ? ` in ${event.sourceFile.split("/").pop()}:${event.lineNumber}:${event.columnNumber}` : "";
+    reportError(`the policy refused ${event.blockedURI || "an inline resource"} (${event.effectiveDirective})${where}`);
   });
 }

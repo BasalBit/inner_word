@@ -103,7 +103,39 @@ const patches = {
   fontCdn: 0,
   xiaolai: 0,
   locales: 0,
+  namedFunction: 0,
+  dynCaller: 0,
+  invoker: 0,
 };
+
+function esc(name) {
+  return name.replace(/\$/g, "\\$");
+}
+
+/**
+ * embind's craftInvokerFunction (emscripten) as a closure: what the source text it builds
+ * does, without Function. `name`: the bound function's name; `types`: its argument types
+ * (return value, `this`, then the arguments); `call`, `target`: the invoker and the function
+ * it calls; `raise`, `runDestructors`: embind's own helpers of those names.
+ */
+function invokerWithoutEval({ fn, name, types, classType, call, target, raise, runDestructors }) {
+  return (
+    `function ${fn}(${name},${types},${classType},${call},${target}){` +
+    `let iwCount=${types}.length;iwCount<2&&${raise}("argTypes array size mismatch! Must at least get return value and 'this' types!");` +
+    `let iwClass=${types}[1]!==null&&${classType}!==null,iwStack=!1;` +
+    `for(let iwG=1;iwG<${types}.length;++iwG)if(${types}[iwG]!==null&&${types}[iwG].destructorFunction===void 0){iwStack=!0;break}` +
+    `let iwReturns=${types}[0].name!=="void";` +
+    `return function(...iwArgs){` +
+    `iwArgs.length!==iwCount-2&&${raise}(\`function \${${name}} called with \${iwArgs.length} arguments, expected \${iwCount-2} args!\`);` +
+    `let iwDestructors=iwStack?[]:null,iwWired=[];` +
+    `if(iwClass)iwWired.push(${types}[1].toWireType(iwDestructors,this));` +
+    `for(let iwG=0;iwG<iwCount-2;++iwG)iwWired.push(${types}[iwG+2].toWireType(iwDestructors,iwArgs[iwG]));` +
+    `let iwValue=${call}(${target},...iwWired);` +
+    `if(iwStack)${runDestructors}(iwDestructors);` +
+    `else for(let iwG=iwClass?1:2;iwG<${types}.length;++iwG){let iwW=iwG===1?iwWired[0]:iwWired[(iwClass?1:0)+iwG-2];${types}[iwG].destructorFunction!==null&&${types}[iwG].destructorFunction(iwW)}` +
+    `if(iwReturns)return ${types}[0].fromWireType(iwValue)}}`
+  );
+}
 
 function excalidrawPlugin() {
   const localeFiles = fs
@@ -162,6 +194,31 @@ function excalidrawPlugin() {
           text = text.replace(/var ([\w$]+)="\.\/fonts\/Xiaolai\/[^"]+\.woff2";/g, (_, name) => `var ${name}="";`);
         }
 
+        // Patch 4: no eval in the font subsetter. Its WebAssembly glue (emscripten's embind)
+        // names two kinds of function with `new Function`, which the export page's policy
+        // (script-src 'self' 'wasm-unsafe-eval') refuses: the subsetter then fails and every
+        // font goes into the PDF whole. Plain closures do the same without eval.
+        const named = /function ([\w$]+)\(([\w$]+),([\w$]+)\)\{return \2=([\w$]+)\(\2\),new Function\("body",`return function \$\{\2\}\(\) \{\n    "use strict";    return body\.apply\(this, arguments\);\n\};\n`\)\(\3\)\}/g;
+        text = text.replace(named, (_, fn, name, body, legal) => {
+          patches.namedFunction++;
+          return `function ${fn}(${name},${body}){return ${name}=${legal}(${name}),function(){return ${body}.apply(this,arguments)}}`;
+        });
+        const caller = /new Function\("dynCall","rawFunction",[\w$]+\)\(([\w$]+),([\w$]+)\)/g;
+        text = text.replace(caller, (_, dynCall, rawFunction) => {
+          patches.dynCaller++;
+          return `(function(...a){return ${dynCall}(${rawFunction},...a)})`;
+        });
+
+        // The third: embind's invoker of a bound function is generated as source text and
+        // made with Function; this is the same invoker as a closure.
+        const invoker = /function ([\w$]+)\(([\w$]+),([\w$]+),([\w$]+),([\w$]+),([\w$]+)\)\{let ([\w$]+)=\3\.length;\7<2&&([\w$]+)\("argTypes array size mismatch![\s\S]*?\b[\w$]+\(Function,[\w$]+\)\.apply\(null,[\w$]+\)\}/g;
+        text = text.replace(invoker, (whole, fn, name, types, classType, call, target, _count, raise) => {
+          const destructors = whole.match(new RegExp(`=\\[${esc(raise)},${esc(call)},${esc(target)},([\\w$]+),${esc(types)}\\[0\\],${esc(types)}\\[1\\]\\]`));
+          if (!destructors) fail("embind's invoker no longer lists its runDestructors where the patch looks for it");
+          patches.invoker++;
+          return invokerWithoutEval({ fn, name, types, classType, call, target, raise, runDestructors: destructors[1] });
+        });
+
         if (text.includes(FAMILY_TABLE)) familyTableSeen++;
         return { contents: text, loader: "js" };
       });
@@ -171,6 +228,9 @@ function excalidrawPlugin() {
         if (patches.fontCdn !== 1) fail(`the font CDN patch applied ${patches.fontCdn} times, expected 1`);
         if (patches.xiaolai !== 1) fail(`the Xiaolai patch applied ${patches.xiaolai} times, expected 1`);
         if (patches.locales !== localesLeftOut) fail(`the locales patch applied ${patches.locales} times, expected ${localesLeftOut}`);
+        if (patches.namedFunction !== 1) fail(`the patch of embind's named functions applied ${patches.namedFunction} times, expected 1`);
+        if (patches.invoker !== 1) fail(`the patch of embind's invokers applied ${patches.invoker} times, expected 1`);
+        if (patches.dynCaller !== 1) fail(`the patch of embind's dynamic callers applied ${patches.dynCaller} times, expected 1`);
         if (familyTableSeen !== 1) fail(`Excalidraw's table of font families changed (expected ${FAMILY_TABLE} once): read the font numbers again`);
       });
     },
@@ -513,6 +573,9 @@ async function build(out) {
       { name: "no font CDN", applied: patches.fontCdn },
       { name: "no Xiaolai", applied: patches.xiaolai },
       { name: "locales other than English left out", applied: patches.locales },
+      { name: "no eval in the font subsetter: named functions", applied: patches.namedFunction },
+      { name: "no eval in the font subsetter: dynamic callers", applied: patches.dynCaller },
+      { name: "no eval in the font subsetter: invokers", applied: patches.invoker },
     ],
     mermaidChunks,
     packages: notice.packages,

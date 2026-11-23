@@ -17,7 +17,8 @@
 //! | Holder | Why it is safe |
 //! |---|---|
 //! | a live or trashed document, a version | the scan finds it |
-//! | a page's manifest, live, trashed or in a version | the scan finds it (`"file"`); nothing else holds the id of a file: no undo history, no clipboard, no register names one |
+//! | a page's manifest, live, trashed or in a version | the scan finds it (`"file"`); nothing else holds the id of a file of a page: no undo history, no clipboard, no register names one |
+//! | a whiteboard's scene, live, trashed or in a version | the scan finds it (`"file"`). The open whiteboard in the app's view holds file ids in Excalidraw's undo history and its own map of pictures, as an editor's undo history holds image ids: only the run at launch deletes, and at launch no view exists |
 //! | the undo history of an open editor, a Vim register, a cut waiting to be pasted | only the run at launch deletes ([`collect_unused_images`]); the look that is repeated while the app stays open ([`mark_unused_images`]) deletes nothing, and at a launch histories and registers are empty |
 //! | the system clipboard, an old answer of the assistant | every way in from there goes through [`crate::Store::touch_image`], which clears the stamp; an image that is gone shows as missing |
 //! | a daily backup of the library database | an image goes only when it was already unnamed when the oldest kept backup was written |

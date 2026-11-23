@@ -18,6 +18,13 @@
 //!   remembers the address it came from ([`Store::page_by_source_url`]). The store refuses
 //!   a text saved over a page and a page saved over a text ([`StoreError::WrongKind`]),
 //!   and a page that names a file it does not have ([`StoreError::FilesMissing`]).
+//! - **Whiteboards** ([`DocumentKind::Board`], [`BoardContent`]): a drawing, an item of the
+//!   library as a page is. Its content is the stored scene of `innerword_board`, which
+//!   names the bytes of each picture as a manifest names a page's files (`"file"`), so the
+//!   copy, the damaged-file handling and the collector keep them; the caller says which
+//!   ids it names ([`BoardContent::files`]) and the store checks those. Its saves are a
+//!   compare-and-swap against the content the caller's scene descends from
+//!   ([`ContentStamp`], [`StoreError::Stale`]); they never write the title.
 //! - **The library tree** ([`LibraryTree`]) for the sidebar, in one call.
 //! - **Trash** ([`TrashEntry`]): deletes are soft; a folder takes its subtree with it.
 //! - **Version snapshots** ([`SnapshotMeta`], [`Snapshot`]) with a pruning policy
@@ -56,11 +63,13 @@
 //! comes from the other file. Bytes whose hash is not their id are not believed in
 //! either file, and are written over with the right ones where those are found.
 //!
-//! The schema version of the database ([`SCHEMA_VERSION`]) is 4 since library items may be
-//! pages (version 3: documents may hold images). Each step makes a version of the app or
-//! of the tool that does not know what it brought refuse the library
+//! The schema version of the database ([`SCHEMA_VERSION`]) is 5 since library items may be
+//! whiteboards (4: pages; 3: documents may hold images). Each step makes a version of the
+//! app or of the tool that does not know what it brought refuse the library
 //! ([`StoreError::SchemaTooNew`]) instead of reading an image as an empty paragraph, or a
-//! page's manifest as text, and saving that. `images.db` is at its own version 2 since it
+//! page's manifest as text, and saving that. An open migrates to [`OPEN_SCHEMA_VERSION`]
+//! (4) only: the step to 5 is taken by the first whiteboard ([`Store::create_board`]), so
+//! a library that holds none stays readable by a version that knows 4. `images.db` is at its own version 2 since it
 //! holds the files of pages; a file of version 1 is brought up by the first connection
 //! that writes to it, and read as it is (no files) by one that reads.
 //!
@@ -123,7 +132,10 @@ use rusqlite::{Connection, OpenFlags};
 
 pub use crate::backup::{DEFAULT_KEEP_BACKUPS, list_backups};
 pub use crate::clock::Clock;
-pub use crate::documents::{Document, DocumentContent, DocumentKind, DocumentMeta, PageContent};
+pub use crate::documents::{
+    BoardContent, BoardSaved, ContentStamp, Document, DocumentContent, DocumentKind, DocumentMeta,
+    PageContent,
+};
 pub use crate::error::{ItemKind, Result, StoreError};
 pub use crate::folders::Folder;
 pub use crate::ids::{DocumentId, FolderId, SnapshotId};
@@ -136,7 +148,7 @@ pub use crate::paths::{
     BACKUPS_DIR_NAME, DATA_DIR_ENV, DATA_DIR_NAME, DATABASE_FILE_NAME, IMAGES_FILE_NAME,
     OLD_DATA_DIR_NAME, backups_dir, data_dir, database_path, images_backup_path, images_path,
 };
-pub use crate::schema::SCHEMA_VERSION;
+pub use crate::schema::{OPEN_SCHEMA_VERSION, SCHEMA_VERSION};
 pub use crate::search::{MATCH_END, MATCH_START, SearchHit, SnippetPart};
 pub use crate::snapshots::{SNAPSHOT_LABEL_PREFIX, Snapshot, SnapshotMeta, SnapshotPolicy};
 pub use crate::trash::{EmptiedTrash, TrashEntry};
@@ -192,7 +204,8 @@ pub enum ReadOnlyLibrary {
     NeedsUpgrade {
         /// The schema version found in the file.
         found: i64,
-        /// The schema version this build reads ([`SCHEMA_VERSION`]).
+        /// The schema version an open of this build brings it to
+        /// ([`OPEN_SCHEMA_VERSION`]).
         supported: i64,
     },
 }
@@ -285,10 +298,10 @@ impl Store {
         )?;
         schema::configure(&conn)?;
         let header = schema::inspect(&conn)?;
-        if header.user_version < SCHEMA_VERSION {
+        if header.user_version < OPEN_SCHEMA_VERSION {
             return Ok(ReadOnlyLibrary::NeedsUpgrade {
                 found: header.user_version,
-                supported: SCHEMA_VERSION,
+                supported: OPEN_SCHEMA_VERSION,
             });
         }
         Ok(ReadOnlyLibrary::Open(Box::new(Self {

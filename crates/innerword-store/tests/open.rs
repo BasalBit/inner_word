@@ -4,7 +4,8 @@ use std::collections::BTreeMap;
 
 use common::*;
 use innerword_store::{
-    Clock, OpenOptions, SCHEMA_VERSION, Store, StoreError, backups_dir, list_backups,
+    Clock, OPEN_SCHEMA_VERSION, OpenOptions, SCHEMA_VERSION, Store, StoreError, backups_dir,
+    list_backups,
 };
 use serde::{Deserialize, Serialize};
 
@@ -21,7 +22,7 @@ fn open_creates_parent_dirs_and_migrates() {
     let path = dir.path().join("nested/deeper/library.db");
     let store = Store::open(&path).unwrap();
     assert!(path.exists());
-    assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
+    assert_eq!(store.schema_version().unwrap(), OPEN_SCHEMA_VERSION);
     assert_eq!(store.path(), Some(path.as_path()));
     // No backup for a brand-new library.
     assert!(store.backup_on_open().is_none());
@@ -61,7 +62,7 @@ fn migrates_an_empty_database_file() {
     let zero = dir.path().join("zero.db");
     std::fs::write(&zero, b"").unwrap();
     let mut store = Store::open(&zero).unwrap();
-    assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
+    assert_eq!(store.schema_version().unwrap(), OPEN_SCHEMA_VERSION);
     doc(&mut store, None, "works", "yes");
 
     let blank = dir.path().join("blank.db");
@@ -70,7 +71,7 @@ fn migrates_an_empty_database_file() {
         .unwrap();
     drop(conn);
     let store = Store::open(&blank).unwrap();
-    assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
+    assert_eq!(store.schema_version().unwrap(), OPEN_SCHEMA_VERSION);
 }
 
 #[test]
@@ -86,7 +87,7 @@ fn reopen_current_database_keeps_data() {
         d.id
     };
     let store = Store::open_with(&path, opts(&clock)).unwrap();
-    assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
+    assert_eq!(store.schema_version().unwrap(), OPEN_SCHEMA_VERSION);
     assert_eq!(store.document(id).unwrap().meta.title, "Doc");
     assert_eq!(store.search("persisted", 5).unwrap().len(), 1);
 }
@@ -328,8 +329,8 @@ fn a_version_1_library_file_is_upgraded_on_open() {
     // the upgrade, and everything is where it was.
     clock.advance_ms(DAY);
     let mut store = Store::open_with(&path, opts(&clock)).unwrap();
-    assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-    const { assert!(SCHEMA_VERSION >= 2) };
+    assert_eq!(store.schema_version().unwrap(), OPEN_SCHEMA_VERSION);
+    const { assert!(OPEN_SCHEMA_VERSION >= 2) };
     assert!(matches!(store.backup_on_open(), Some(Ok(_))));
     let backups = list_backups(&backups_dir(&path)).unwrap();
     assert_eq!(backups.len(), 1);
@@ -378,7 +379,7 @@ fn a_version_1_library_file_is_upgraded_on_open() {
     store.close().unwrap();
     // And opens again without another upgrade.
     let store = Store::open_with(&path, opts(&clock)).unwrap();
-    assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
+    assert_eq!(store.schema_version().unwrap(), OPEN_SCHEMA_VERSION);
 }
 
 /// The length of the content JSON that `doc` stores for the big document above.
@@ -419,7 +420,7 @@ fn read_only_open_reads_beside_a_writer_and_changes_nothing() {
     assert!(reader.is_read_only());
     assert!(!app.is_read_only());
     assert_eq!(reader.path(), Some(path.as_path()));
-    assert_eq!(reader.schema_version().unwrap(), SCHEMA_VERSION);
+    assert_eq!(reader.schema_version().unwrap(), OPEN_SCHEMA_VERSION);
     assert_eq!(reader.document(first.id).unwrap().meta.title, "First");
     assert_eq!(reader.library_tree().unwrap().folders.len(), 1);
     assert_eq!(reader.search("alpha", 10).unwrap().len(), 1);
@@ -491,13 +492,13 @@ fn read_only_open_reports_a_library_that_needs_an_upgrade() {
     doc(&mut store, None, "Kept", "words");
     store.close().unwrap();
     let conn = rusqlite::Connection::open(&path).unwrap();
-    conn.pragma_update(None, "user_version", SCHEMA_VERSION - 1)
+    conn.pragma_update(None, "user_version", OPEN_SCHEMA_VERSION - 1)
         .unwrap();
     drop(conn);
     match Store::open_read_only(&path).unwrap() {
         ReadOnlyLibrary::NeedsUpgrade { found, supported } => {
-            assert_eq!(found, SCHEMA_VERSION - 1);
-            assert_eq!(supported, SCHEMA_VERSION);
+            assert_eq!(found, OPEN_SCHEMA_VERSION - 1);
+            assert_eq!(supported, OPEN_SCHEMA_VERSION);
         }
         ReadOnlyLibrary::Open(_) => panic!("an older library was opened as it is"),
     }

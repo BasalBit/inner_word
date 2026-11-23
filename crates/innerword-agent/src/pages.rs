@@ -454,7 +454,7 @@ fn store_refused(name: &str, error: StoreError) -> Error {
             ids.len(),
             if ids.len() == 1 { "is" } else { "are" }
         )),
-        StoreError::WrongKind { id, kind } => Error::WrongKind {
+        StoreError::WrongKind { id, kind, .. } => Error::WrongKind {
             id,
             name: name.to_string(),
             is_page: kind == DocumentKind::Page,

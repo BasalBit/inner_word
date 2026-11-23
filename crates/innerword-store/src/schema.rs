@@ -16,10 +16,17 @@ use crate::error::{Result, StoreError};
 /// open unrelated SQLite files.
 pub(crate) const APPLICATION_ID: i32 = 0x5752_4954;
 
-/// The newest schema version this build creates and understands.
+/// The newest schema version this build understands. A library is taken to it lazily:
+/// opening one brings it to [`OPEN_SCHEMA_VERSION`] only, and the step to 5 is taken by
+/// the first whiteboard made in it ([`crate::Store::create_board`]), so that a library in
+/// which nobody made a whiteboard stays readable by a version that knows schema 4.
 pub const SCHEMA_VERSION: i64 = MIGRATIONS.len() as i64;
 
-const MIGRATIONS: &[&str] = &[V1, V2, V3, V4];
+/// The schema version an open migrates a library to (and creates a new one at). The steps
+/// above it are taken by the operation that first needs them, inside its own transaction.
+pub const OPEN_SCHEMA_VERSION: i64 = 4;
+
+const MIGRATIONS: &[&str] = &[V1, V2, V3, V4, V5];
 
 const V1: &str = r#"
 CREATE TABLE folders (
@@ -144,6 +151,20 @@ CREATE INDEX documents_by_source_url ON documents(source_url)
     WHERE source_url IS NOT NULL;
 "#;
 
+/// Version 5: library items may be whiteboards (kind 'board'; their pictures are in
+/// images.db `files`, named by "file" in the scene as a page's files are in its manifest).
+///
+/// The step changes nothing in this file: `kind` has no CHECK (version 4). It exists so
+/// that a version of the app or of the `innerword` tool that does not know whiteboards
+/// refuses the library ([`StoreError::SchemaTooNew`]) instead of failing on a row of an
+/// unknown kind, or treating a whiteboard as a text and saving over it.
+///
+/// It is taken lazily, by [`take_steps_above_open`] in the transaction of the first
+/// whiteboard ([`crate::Store::create_board`]), never by an open.
+const V5: &str = r#"
+SELECT 1;
+"#;
+
 /// Applies the per-connection pragmas that do not modify the file: busy timeout, foreign
 /// keys, in-memory temp storage.
 pub(crate) fn configure(conn: &Connection) -> Result<()> {
@@ -206,9 +227,29 @@ fn inspect_as(conn: &Connection, supported: i64) -> Result<Header> {
     Ok(Header { user_version })
 }
 
-/// Runs every migration step the database has not seen yet.
+/// Runs every migration step up to [`OPEN_SCHEMA_VERSION`] the database has not seen yet.
+/// A library already above it (one that holds a whiteboard) is left as it is.
 pub(crate) fn migrate(conn: &mut Connection) -> Result<()> {
-    migrate_to(conn, SCHEMA_VERSION)
+    migrate_to(conn, OPEN_SCHEMA_VERSION)
+}
+
+/// Inside the caller's transaction: takes the database from the version it is at (at
+/// least [`OPEN_SCHEMA_VERSION`], what an open left) to [`SCHEMA_VERSION`], running the
+/// steps it has not seen yet. Nothing is committed here: when the caller's transaction
+/// is rolled back, the steps and the version go with it. Called by the operation that
+/// first writes what a later step announces (a whiteboard: [`crate::Store::create_board`]).
+pub(crate) fn take_steps_above_open(tx: &rusqlite::Transaction<'_>) -> Result<()> {
+    let current: i64 = tx.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+    if current >= SCHEMA_VERSION {
+        return Ok(());
+    }
+    let from = usize::try_from(current).unwrap_or(0);
+    for (index, step) in MIGRATIONS.iter().enumerate().skip(from) {
+        tx.execute_batch(step)?;
+        tx.pragma_update(None, "user_version", index as i64 + 1)?;
+    }
+    tx.pragma_update(None, "application_id", APPLICATION_ID)?;
+    Ok(())
 }
 
 /// Runs the migration steps the database has not seen yet, up to version `target`.
@@ -274,8 +315,9 @@ mod tests {
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 4);
+        assert_eq!(version, OPEN_SCHEMA_VERSION);
+        assert_eq!(OPEN_SCHEMA_VERSION, 4);
+        assert_eq!(SCHEMA_VERSION, 5);
         let (title, words): (String, i64) = conn
             .query_row("SELECT title, word_count FROM documents", [], |r| {
                 Ok((r.get(0)?, r.get(1)?))
@@ -439,6 +481,79 @@ mod tests {
             ),
         }
         assert_eq!(inspect(&conn).unwrap().user_version, 4);
+    }
+
+    /// A database as version 4 of the app (0.10.1) leaves it, with one document: what an
+    /// open of this build leaves too.
+    fn version_4() -> Connection {
+        let mut conn = version_3();
+        migrate(&mut conn).unwrap();
+        conn
+    }
+
+    /// An open never takes the step to 5: a library at 4 stays at 4, one at 5 stays at 5.
+    #[test]
+    fn an_open_migrates_to_4_and_leaves_5_alone() {
+        let mut conn = version_4();
+        migrate(&mut conn).unwrap();
+        assert_eq!(inspect(&conn).unwrap().user_version, OPEN_SCHEMA_VERSION);
+        let tx = conn.transaction().unwrap();
+        take_steps_above_open(&tx).unwrap();
+        tx.commit().unwrap();
+        assert_eq!(inspect(&conn).unwrap().user_version, 5);
+        migrate(&mut conn).unwrap();
+        assert_eq!(inspect(&conn).unwrap().user_version, 5);
+    }
+
+    /// Step 5 changes nothing a version-4 library holds, and is undone with the
+    /// transaction it was taken in.
+    #[test]
+    fn step_5_changes_nothing_and_goes_with_its_transaction() {
+        fn everything(conn: &Connection) -> Vec<String> {
+            let mut rows = rows_of(
+                conn,
+                "SELECT id, folder_id, title, content, plain_text, word_count, char_count,
+                    position, created_at, updated_at, view_state, trashed_at, kind, source_url
+                 FROM documents ORDER BY id",
+            );
+            rows.extend(rows_of(
+                conn,
+                "SELECT type, name, tbl_name, sql FROM sqlite_schema ORDER BY name",
+            ));
+            rows
+        }
+        let mut conn = version_4();
+        let before = everything(&conn);
+        let tx = conn.transaction().unwrap();
+        take_steps_above_open(&tx).unwrap();
+        drop(tx);
+        assert_eq!(inspect(&conn).unwrap().user_version, 4);
+        let tx = conn.transaction().unwrap();
+        take_steps_above_open(&tx).unwrap();
+        tx.commit().unwrap();
+        assert_eq!(inspect(&conn).unwrap().user_version, 5);
+        assert_eq!(everything(&conn), before);
+    }
+
+    /// What step 5 is for: a build whose newest schema is 4 (0.10.1, the app and the
+    /// `innerword` tool) refuses a library that holds a whiteboard, and this one opens it.
+    #[test]
+    fn a_build_that_knows_schema_4_refuses_a_library_of_schema_5() {
+        let mut conn = version_4();
+        assert!(inspect_as(&conn, 4).is_ok());
+        let tx = conn.transaction().unwrap();
+        take_steps_above_open(&tx).unwrap();
+        tx.commit().unwrap();
+        match inspect_as(&conn, 4) {
+            Err(StoreError::SchemaTooNew { found, supported }) => {
+                assert_eq!((found, supported), (5, 4));
+            }
+            other => panic!(
+                "expected SchemaTooNew, got {:?}",
+                other.map(|h| h.user_version)
+            ),
+        }
+        assert_eq!(inspect(&conn).unwrap().user_version, 5);
     }
 
     /// The listings must be answered from the index alone: a plan that visits the table

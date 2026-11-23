@@ -325,15 +325,21 @@ fn a_text_is_never_saved_over_a_page_nor_a_page_over_a_text() {
     let text_before = store.document(text.id).unwrap();
 
     match store.save_document(page.id, &content("A page", "Its words", r#"{"blocks":[]}"#)) {
-        Err(StoreError::WrongKind { id, kind }) => {
-            assert_eq!((id, kind), (page.id.0, DocumentKind::Page));
+        Err(StoreError::WrongKind { id, kind, saving }) => {
+            assert_eq!(
+                (id, kind, saving),
+                (page.id.0, DocumentKind::Page, DocumentKind::Text)
+            );
         }
         other => panic!("expected WrongKind, got {other:?}"),
     }
     let json = manifest(&[], "x");
     match store.save_page(text.id, &page_of(&json, "A text", "x")) {
-        Err(StoreError::WrongKind { id, kind }) => {
-            assert_eq!((id, kind), (text.id.0, DocumentKind::Text));
+        Err(StoreError::WrongKind { id, kind, saving }) => {
+            assert_eq!(
+                (id, kind, saving),
+                (text.id.0, DocumentKind::Text, DocumentKind::Page)
+            );
         }
         other => panic!("expected WrongKind, got {other:?}"),
     }
@@ -344,6 +350,7 @@ fn a_text_is_never_saved_over_a_page_nor_a_page_over_a_text() {
     let message = StoreError::WrongKind {
         id: page.id.0,
         kind: DocumentKind::Page,
+        saving: DocumentKind::Text,
     }
     .to_string();
     assert!(message.contains("is a page"), "{message}");
@@ -362,7 +369,7 @@ fn a_text_is_never_saved_over_a_page_nor_a_page_over_a_text() {
 #[test]
 fn a_kind_is_written_and_read_by_its_name() {
     assert_eq!(DocumentKind::default(), DocumentKind::Text);
-    for kind in [DocumentKind::Text, DocumentKind::Page] {
+    for kind in [DocumentKind::Text, DocumentKind::Page, DocumentKind::Board] {
         assert_eq!(DocumentKind::parse(kind.as_str()), Some(kind));
         assert_eq!(
             serde_json::to_string(&kind).unwrap(),

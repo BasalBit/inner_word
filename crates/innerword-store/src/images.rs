@@ -169,7 +169,7 @@ pub(crate) fn hash16(bytes: &[u8]) -> [u8; 16] {
 }
 
 /// 16 bytes as 32 lowercase hex digits.
-fn hex16(id: &[u8; 16]) -> String {
+pub(crate) fn hex16(id: &[u8; 16]) -> String {
     const DIGITS: &[u8; 16] = b"0123456789abcdef";
     let mut hex = String::with_capacity(32);
     for byte in id {
@@ -429,6 +429,57 @@ impl Store {
             }
         }
         Ok(missing)
+    }
+
+    /// The files a whiteboard's save names (`files`, as the caller read them from its
+    /// scene: the store does not scan a scene for what it checks) that the library does
+    /// not have and that are new to the whiteboard, in order, each once. An id the library
+    /// has counts as used from now ([`Store::touch_file`]). A missing id that the row of
+    /// `board` (`None` for one not made yet) or a version of it names already is not new:
+    /// it is kept, so that a whiteboard whose pictures were lost (a `library.db` brought
+    /// back without the copy of its pictures) goes on saving.
+    pub(crate) fn board_files_missing(
+        &mut self,
+        board: Option<crate::DocumentId>,
+        files: &[FileId],
+    ) -> Result<Vec<FileId>> {
+        let mut seen = HashSet::new();
+        let mut missing = Vec::new();
+        for id in files {
+            if seen.insert(*id) && self.images.touch_file(id)?.is_none() {
+                missing.push(*id);
+            }
+        }
+        let Some(board) = board else {
+            return Ok(missing);
+        };
+        let mut new = Vec::new();
+        for id in missing {
+            if !self.named_by_item_or_its_versions(board, &id)? {
+                new.push(id);
+            }
+        }
+        Ok(new)
+    }
+
+    /// Whether the content of the row `item`, or of one of its versions, names the file
+    /// `id` (read as the collector reads it, `scan.rs`). Only the contents that hold its
+    /// digits are read whole.
+    fn named_by_item_or_its_versions(&self, item: crate::DocumentId, id: &FileId) -> Result<bool> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT content FROM documents WHERE id = ?1 AND instr(lower(content), ?2) > 0
+             UNION ALL
+             SELECT content FROM snapshots WHERE document_id = ?1
+                 AND instr(lower(content), ?2) > 0",
+        )?;
+        let mut rows = stmt.query(rusqlite::params![item, id.to_hex()])?;
+        while let Some(row) = rows.next()? {
+            let content: String = row.get(0)?;
+            if scan::files_in(&content).contains(id) {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 }
 

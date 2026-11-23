@@ -1,16 +1,21 @@
 //! Library items: opaque JSON content plus derived metadata.
 //!
-//! An item is a row of `documents` of one of two kinds ([`DocumentKind`]): a **text** (a
-//! document of `innerword-core`, what the library held until schema 4) or a **page** (an
+//! An item is a row of `documents` of one of three kinds ([`DocumentKind`]): a **text** (a
+//! document of `innerword-core`, what the library held until schema 4), a **page** (an
 //! HTML page kept whole: its content is the page's manifest, the JSON that names its files
-//! in `images.db`, and its plain text is what the page showed). The tree, folders, order,
-//! trash, versions and search treat the two alike. What keeps one from being read as the
-//! other: whoever parses content asks [`DocumentMeta::kind`] first, and the store refuses
-//! to save a text over a page and a page over a text ([`StoreError::WrongKind`]).
+//! in `images.db`, and its plain text is what the page showed) or a **whiteboard** (since
+//! schema 5: its content is the stored scene of `innerword_board`, which names its
+//! pictures in `images.db` `files` as a manifest names a page's files, and its plain text
+//! is the text of its elements). The tree, folders, order, trash, versions and search
+//! treat them alike. What keeps one from being read as another: whoever parses content
+//! asks [`DocumentMeta::kind`] first, and each save refuses every kind but its own
+//! ([`StoreError::WrongKind`]).
 
 use rusqlite::types::{FromSql, FromSqlError, FromSqlResult, ToSqlOutput, ValueRef};
 use rusqlite::{Connection, OptionalExtension, Row, ToSql, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
+
+use crate::images::{FileId, hash16, hex16, parse16};
 
 use crate::Store;
 use crate::error::{ItemKind, Result, StoreError, not_found};
@@ -28,14 +33,18 @@ pub enum DocumentKind {
     /// A page: an HTML page kept whole. Its content is the page's manifest (the JSON of
     /// `innerword_page::Manifest`), never a document of `innerword-core`.
     Page,
+    /// A whiteboard (schema 5): its content is the stored scene
+    /// (`innerword_board::Scene::to_stored`), never a document or a manifest.
+    Board,
 }
 
 impl DocumentKind {
-    /// The value of the column: `"text"` or `"page"`.
+    /// The value of the column: `"text"`, `"page"` or `"board"`.
     pub fn as_str(self) -> &'static str {
         match self {
             DocumentKind::Text => "text",
             DocumentKind::Page => "page",
+            DocumentKind::Board => "board",
         }
     }
 
@@ -44,7 +53,28 @@ impl DocumentKind {
         match text {
             "text" => Some(DocumentKind::Text),
             "page" => Some(DocumentKind::Page),
+            "board" => Some(DocumentKind::Board),
             _ => None,
+        }
+    }
+
+    /// What an item of this kind is called in a reference to it: `"doc"` (`doc:12`),
+    /// `"page"` or `"board"`. The three are read alike; this is the one that is written.
+    pub fn reference_prefix(self) -> &'static str {
+        match self {
+            DocumentKind::Text => "doc",
+            DocumentKind::Page => "page",
+            DocumentKind::Board => "board",
+        }
+    }
+
+    /// What an item of this kind is called in a sentence: `"document"`, `"page"` or
+    /// `"whiteboard"`.
+    pub fn noun(self) -> &'static str {
+        match self {
+            DocumentKind::Text => "document",
+            DocumentKind::Page => "page",
+            DocumentKind::Board => "whiteboard",
         }
     }
 }
@@ -143,6 +173,66 @@ pub struct PageContent<'a> {
     pub source_url: Option<&'a str>,
 }
 
+/// The content of a whiteboard: its stored scene (`innerword_board::Scene::to_stored`) and
+/// what the caller derived from it. The store trusts these values and does not parse the
+/// scene. **No title**: an autosave never writes the title, so it cannot put back a title
+/// that a rename changed while the save was in flight; only [`Store::create_board`] and
+/// [`Store::rename_document`] set it.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct BoardContent<'a> {
+    /// The stored scene as JSON, stored in `content`.
+    pub scene: &'a str,
+    /// The files the scene names (`Scene::stored_files`): what the store checks. It does
+    /// not scan the scene for them, so a `"file"` that only looks like the key (in an
+    /// element's `customData`) can never refuse a save.
+    pub files: &'a [FileId],
+    /// The text of its elements. Indexed for search.
+    pub plain_text: &'a str,
+    /// Word count of that text.
+    pub word_count: u64,
+    /// Character count of that text.
+    pub char_count: u64,
+}
+
+/// The first 16 bytes of the SHA-256 of a row's `content`, written as 32 lowercase hex
+/// digits: what a compare-and-swap compares ([`Store::save_board`]). Two writes of the
+/// same millisecond have different stamps where `updated_at` would be equal.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct ContentStamp([u8; 16]);
+
+impl ContentStamp {
+    /// The stamp of this content.
+    pub fn of(content: &str) -> ContentStamp {
+        ContentStamp(hash16(content.as_bytes()))
+    }
+
+    /// The stamp as 32 lowercase hex digits. [`std::fmt::Display`] writes the same.
+    pub fn to_hex(&self) -> String {
+        hex16(&self.0)
+    }
+
+    /// Reads exactly 32 hex digits, in either case. Anything else is `None`.
+    pub fn parse(hex: &str) -> Option<ContentStamp> {
+        parse16(hex.as_bytes()).map(ContentStamp)
+    }
+}
+
+impl std::fmt::Display for ContentStamp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.to_hex())
+    }
+}
+
+/// What a write of a whiteboard's content answers: the row as it is now and the stamp of
+/// the content it holds.
+#[derive(Clone, Debug, PartialEq)]
+pub struct BoardSaved {
+    /// The metadata after the write.
+    pub meta: DocumentMeta,
+    /// The stamp of the content written.
+    pub stamp: ContentStamp,
+}
+
 /// The columns of a [`DocumentMeta`], in the order [`meta_from_row`] reads them. Every
 /// one is in the covering index `documents_meta`, so listings never read the text.
 pub(crate) const DOC_META_COLS: &str = "id, folder_id, title, word_count, char_count, position, \
@@ -175,6 +265,87 @@ pub(crate) fn load_meta(conn: &Connection, id: DocumentId) -> Result<DocumentMet
         meta_from_row,
     )
     .map_err(not_found(ItemKind::Document, id.0))
+}
+
+/// What the row `id` is; `NotFound` when there is none.
+fn kind_of(conn: &Connection, id: DocumentId) -> Result<DocumentKind> {
+    conn.query_row("SELECT kind FROM documents WHERE id = ?1", [id], |r| {
+        r.get(0)
+    })
+    .optional()?
+    .ok_or(StoreError::NotFound {
+        kind: ItemKind::Document,
+        id: id.0,
+    })
+}
+
+/// `Ok` when the row `id` is of the kind `saving`; [`StoreError::WrongKind`] when it is of
+/// another, `NotFound` when there is none.
+fn require_kind(conn: &Connection, id: DocumentId, saving: DocumentKind) -> Result<()> {
+    let kind = kind_of(conn, id)?;
+    if kind != saving {
+        return Err(StoreError::WrongKind {
+            id: id.0,
+            kind,
+            saving,
+        });
+    }
+    Ok(())
+}
+
+/// The stamp of the content the row `id` has now; `NotFound` when there is none.
+fn stamp_of(conn: &Connection, id: DocumentId) -> Result<ContentStamp> {
+    conn.query_row("SELECT content FROM documents WHERE id = ?1", [id], |r| {
+        r.get_ref(0)?
+            .as_str()
+            .map(ContentStamp::of)
+            .map_err(rusqlite::Error::from)
+    })
+    .map_err(not_found(ItemKind::Document, id.0))
+}
+
+/// What a new item of the library is made of, whatever its kind.
+struct NewItem<'a> {
+    kind: DocumentKind,
+    title: &'a str,
+    content: &'a str,
+    plain_text: &'a str,
+    word_count: u64,
+    char_count: u64,
+    source_url: Option<&'a str>,
+}
+
+/// Inserts an item at the end of the documents of `folder` (checked: live), inside the
+/// caller's transaction.
+fn insert_item(
+    tx: &Connection,
+    folder: Option<FolderId>,
+    item: &NewItem<'_>,
+    now: i64,
+) -> Result<DocumentMeta> {
+    if let Some(folder) = folder {
+        require_live_folder(tx, folder)?;
+    }
+    let position = next_position(tx, Siblings::Documents, folder)?;
+    tx.execute(
+        "INSERT INTO documents
+             (folder_id, title, content, plain_text, word_count, char_count, position,
+              created_at, updated_at, kind, source_url)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8, ?9, ?10)",
+        params![
+            folder,
+            item.title,
+            item.content,
+            item.plain_text,
+            count_to_sql(item.word_count),
+            count_to_sql(item.char_count),
+            position,
+            now,
+            item.kind,
+            item.source_url,
+        ],
+    )?;
+    load_meta(tx, DocumentId(tx.last_insert_rowid()))
 }
 
 pub(crate) fn require_live_document(conn: &Connection, id: DocumentId) -> Result<DocumentMeta> {
@@ -256,9 +427,10 @@ impl Store {
     /// Deliberately also works on a trashed document, so an autosave racing a delete never
     /// loses text.
     ///
-    /// Refuses a page with [`StoreError::WrongKind`] and writes nothing: the content of a
-    /// page is its manifest, and a text saved over it (the plain-text recovery of a
-    /// manifest that was read as a document) would lose the page.
+    /// Refuses a page and a whiteboard with [`StoreError::WrongKind`] and writes nothing:
+    /// the content of a page is its manifest, that of a whiteboard its scene, and a text
+    /// saved over either (the plain-text recovery of content that was read as a document)
+    /// would lose it.
     pub fn save_document(
         &mut self,
         id: DocumentId,
@@ -286,13 +458,14 @@ impl Store {
                     id: id.0,
                 });
             }
-            Some((_, DocumentKind::Page)) => {
+            Some((same, DocumentKind::Text)) => same,
+            Some((_, kind)) => {
                 return Err(StoreError::WrongKind {
                     id: id.0,
-                    kind: DocumentKind::Page,
+                    kind,
+                    saving: DocumentKind::Text,
                 });
             }
-            Some((same, DocumentKind::Text)) => same,
         };
         if same_text {
             tx.execute(
@@ -467,29 +640,20 @@ impl Store {
         let tx = self
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        if let Some(folder) = folder {
-            require_live_folder(&tx, folder)?;
-        }
-        let position = next_position(&tx, Siblings::Documents, folder)?;
-        tx.execute(
-            "INSERT INTO documents
-                 (folder_id, title, content, plain_text, word_count, char_count, position,
-                  created_at, updated_at, kind, source_url)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8, ?9, ?10)",
-            params![
-                folder,
-                page.title,
-                page.manifest,
-                page.plain_text,
-                count_to_sql(page.word_count),
-                count_to_sql(page.char_count),
-                position,
-                now,
-                DocumentKind::Page,
-                page.source_url,
-            ],
+        let meta = insert_item(
+            &tx,
+            folder,
+            &NewItem {
+                kind: DocumentKind::Page,
+                title: page.title,
+                content: page.manifest,
+                plain_text: page.plain_text,
+                word_count: page.word_count,
+                char_count: page.char_count,
+                source_url: page.source_url,
+            },
+            now,
         )?;
-        let meta = load_meta(&tx, DocumentId(tx.last_insert_rowid()))?;
         tx.commit()?;
         Ok(meta)
     }
@@ -498,32 +662,12 @@ impl Store {
     /// transaction; bumps `updated_at`, the search index follows. Folder and position stay.
     /// Returns the new metadata.
     ///
-    /// Refuses a text with [`StoreError::WrongKind`] (`kind: Text`) and a manifest that
-    /// names a file the library does not have with [`StoreError::FilesMissing`], as
-    /// [`Store::create_page`]; neither writes anything. Works on a trashed page, as
-    /// [`Store::save_document`] does.
+    /// Refuses a text and a whiteboard with [`StoreError::WrongKind`] (`saving: Page`) and
+    /// a manifest that names a file the library does not have with
+    /// [`StoreError::FilesMissing`], as [`Store::create_page`]; neither writes anything.
+    /// Works on a trashed page, as [`Store::save_document`] does.
     pub fn save_page(&mut self, id: DocumentId, page: &PageContent<'_>) -> Result<DocumentMeta> {
-        let kind: Option<DocumentKind> = self
-            .conn
-            .query_row("SELECT kind FROM documents WHERE id = ?1", [id], |r| {
-                r.get(0)
-            })
-            .optional()?;
-        match kind {
-            None => {
-                return Err(StoreError::NotFound {
-                    kind: ItemKind::Document,
-                    id: id.0,
-                });
-            }
-            Some(DocumentKind::Text) => {
-                return Err(StoreError::WrongKind {
-                    id: id.0,
-                    kind: DocumentKind::Text,
-                });
-            }
-            Some(DocumentKind::Page) => {}
-        }
+        require_kind(&self.conn, id, DocumentKind::Page)?;
         let missing = self.files_missing(page.manifest)?;
         if !missing.is_empty() {
             return Err(StoreError::FilesMissing { ids: missing });
@@ -542,20 +686,21 @@ impl Store {
             )
             .optional()?;
         let same_text = match same_text {
-            // Deleted or made a text since the look above (another connection).
+            // Deleted or made another kind since the look above (another connection).
             None => {
                 return Err(StoreError::NotFound {
                     kind: ItemKind::Document,
                     id: id.0,
                 });
             }
-            Some((_, DocumentKind::Text)) => {
+            Some((same, DocumentKind::Page)) => same,
+            Some((_, kind)) => {
                 return Err(StoreError::WrongKind {
                     id: id.0,
-                    kind: DocumentKind::Text,
+                    kind,
+                    saving: DocumentKind::Page,
                 });
             }
-            Some((same, DocumentKind::Page)) => same,
         };
         if same_text {
             tx.execute(
@@ -629,6 +774,155 @@ impl Store {
             &format!(
                 "SELECT {DOC_META_COLS} FROM documents INDEXED BY documents_meta
                  WHERE kind = 'page' ORDER BY updated_at DESC, id DESC"
+            ),
+            [],
+        )
+    }
+
+    /// Creates a whiteboard in `folder` (or at the root), after its sibling documents, as
+    /// [`Store::create_page`] creates a page, titled `title`. `NotFound` for a missing or
+    /// trashed folder.
+    ///
+    /// **The library goes to schema 5 here**, lazily: when the file is at 4 (what every
+    /// open leaves), the step is taken inside this transaction, before the row is
+    /// inserted, so a failure leaves both undone. A library in which nobody made a
+    /// whiteboard stays readable by a version that knows schema 4.
+    ///
+    /// **The store names no file it does not have**: every id of `board.files` is looked
+    /// up in `images.db` (a row read, no bytes), and when one is not there the whiteboard
+    /// is refused with [`StoreError::FilesMissing`] and nothing is written. Each one that
+    /// is there counts as used from now ([`Store::touch_file`]).
+    pub fn create_board(
+        &mut self,
+        folder: Option<FolderId>,
+        title: &str,
+        board: &BoardContent<'_>,
+    ) -> Result<BoardSaved> {
+        let missing = self.board_files_missing(None, board.files)?;
+        if !missing.is_empty() {
+            return Err(StoreError::FilesMissing { ids: missing });
+        }
+        let now = self.now();
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        crate::schema::take_steps_above_open(&tx)?;
+        let meta = insert_item(
+            &tx,
+            folder,
+            &NewItem {
+                kind: DocumentKind::Board,
+                title,
+                content: board.scene,
+                plain_text: board.plain_text,
+                word_count: board.word_count,
+                char_count: board.char_count,
+                source_url: None,
+            },
+            now,
+        )?;
+        tx.commit()?;
+        Ok(BoardSaved {
+            meta,
+            stamp: ContentStamp::of(board.scene),
+        })
+    }
+
+    /// New content of a whiteboard (scene, text, counts) in one transaction; bumps
+    /// `updated_at`, the search index follows. **Never the title**, the folder or the
+    /// position. Works on a trashed whiteboard, as [`Store::save_document`] does.
+    ///
+    /// Refused, with nothing written:
+    /// - a text or a page: [`StoreError::WrongKind`] (`saving: Board`);
+    /// - with `expect` given, a row whose content has another stamp (it changed since the
+    ///   content the caller's scene descends from): [`StoreError::Stale`] with the stamp it
+    ///   has, read in the same transaction as the write. `None` writes whatever is there
+    ///   (agents, which read and write under one lock or one turn of the main thread);
+    /// - an id of `board.files` that the library does not have and that neither the row's
+    ///   content nor any version of it names: [`StoreError::FilesMissing`]. A missing id the
+    ///   whiteboard named already is kept (its picture shows as missing and the whiteboard
+    ///   goes on saving). Each id that is there counts as used from now.
+    pub fn save_board(
+        &mut self,
+        id: DocumentId,
+        board: &BoardContent<'_>,
+        expect: Option<ContentStamp>,
+    ) -> Result<BoardSaved> {
+        // A look first, so that a save that would be refused anyway touches no file and a
+        // stale save is told so before anything about its files.
+        require_kind(&self.conn, id, DocumentKind::Board)?;
+        if let Some(expect) = expect {
+            let stored = stamp_of(&self.conn, id)?;
+            if stored != expect {
+                return Err(StoreError::Stale { id: id.0, stored });
+            }
+        }
+        let missing = self.board_files_missing(Some(id), board.files)?;
+        if !missing.is_empty() {
+            return Err(StoreError::FilesMissing { ids: missing });
+        }
+        let now = self.now();
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        // Again under the write lock: another connection may have written meanwhile.
+        require_kind(&tx, id, DocumentKind::Board)?;
+        if let Some(expect) = expect {
+            let stored = stamp_of(&tx, id)?;
+            if stored != expect {
+                return Err(StoreError::Stale { id: id.0, stored });
+            }
+        }
+        // As for a text: a save that does not change the text leaves it out, so it is not
+        // indexed again.
+        let same_text: bool = tx.query_row(
+            "SELECT plain_text = ?2 FROM documents WHERE id = ?1",
+            params![id, board.plain_text],
+            |r| r.get(0),
+        )?;
+        if same_text {
+            tx.execute(
+                "UPDATE documents SET content = ?2, word_count = ?3, char_count = ?4,
+                     updated_at = ?5
+                 WHERE id = ?1",
+                params![
+                    id,
+                    board.scene,
+                    count_to_sql(board.word_count),
+                    count_to_sql(board.char_count),
+                    now
+                ],
+            )?;
+        } else {
+            tx.execute(
+                "UPDATE documents SET content = ?2, plain_text = ?3, word_count = ?4,
+                     char_count = ?5, updated_at = ?6
+                 WHERE id = ?1",
+                params![
+                    id,
+                    board.scene,
+                    board.plain_text,
+                    count_to_sql(board.word_count),
+                    count_to_sql(board.char_count),
+                    now
+                ],
+            )?;
+        }
+        let meta = load_meta(&tx, id)?;
+        tx.commit()?;
+        Ok(BoardSaved {
+            meta,
+            stamp: ContentStamp::of(board.scene),
+        })
+    }
+
+    /// Every whiteboard, live and trashed, most recently updated first (`trashed_at` says
+    /// which is which). Answered from the covering index: no scene is read.
+    pub fn boards(&self) -> Result<Vec<DocumentMeta>> {
+        self.query_metas(
+            &format!(
+                "SELECT {DOC_META_COLS} FROM documents INDEXED BY documents_meta
+                 WHERE kind = 'board' ORDER BY updated_at DESC, id DESC"
             ),
             [],
         )

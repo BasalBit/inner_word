@@ -2,7 +2,7 @@
 
 use std::fmt;
 
-use crate::documents::DocumentKind;
+use crate::documents::{ContentStamp, DocumentKind};
 use crate::images::FileId;
 
 /// The kind of library item an error refers to.
@@ -85,44 +85,56 @@ pub enum StoreError {
     /// Neither `INNER_WORD_DATA_DIR` nor `HOME` is set, so no data directory can be chosen.
     #[error("cannot find the data directory: neither INNER_WORD_DATA_DIR nor HOME is set")]
     NoDataDirectory,
-    /// Content of one kind was to be saved over an item of the other: a text over a page
-    /// ([`crate::Store::save_document`]) or a page over a text
-    /// ([`crate::Store::save_page`]). Nothing was written.
-    #[error("{}", wrong_kind_message(*.id, *.kind))]
+    /// Content of one kind was to be saved over an item of another: a text over a page or
+    /// a whiteboard ([`crate::Store::save_document`]), a page over a text or a whiteboard
+    /// ([`crate::Store::save_page`]), a whiteboard over a text or a page
+    /// ([`crate::Store::save_board`]). Nothing was written.
+    #[error("{}", wrong_kind_message(*.id, *.kind, *.saving))]
     WrongKind {
         /// The raw id of the item.
         id: i64,
         /// What the item is.
         kind: DocumentKind,
+        /// What the caller tried to save over it.
+        saving: DocumentKind,
     },
-    /// The manifest of a page names files whose bytes the library does not have
-    /// (`images.db`, nor the copy among the backups). Nothing was written.
+    /// The content of a page or a whiteboard names files whose bytes the library does not
+    /// have (`images.db`, nor the copy among the backups). Nothing was written.
     #[error("{}", files_missing_message(.ids))]
     FilesMissing {
         /// The files that are not there, in order.
         ids: Vec<FileId>,
     },
+    /// A compare-and-swap save ([`crate::Store::save_board`] with an expected stamp) found
+    /// the row's content changed: it is not the content the caller's scene descends from.
+    /// Nothing was written.
+    #[error("item {id} was changed since its content was read, so it was not saved over")]
+    Stale {
+        /// The raw id of the item.
+        id: i64,
+        /// The stamp of the content the row has now.
+        stored: ContentStamp,
+    },
 }
 
-fn wrong_kind_message(id: i64, kind: DocumentKind) -> String {
-    match kind {
-        DocumentKind::Page => {
-            format!(
-                "item {id} of the library is a page, and the text of a document cannot be saved over it"
-            )
-        }
-        DocumentKind::Text => {
-            format!("item {id} of the library is a document, and a page cannot be saved over it")
-        }
-    }
+fn wrong_kind_message(id: i64, kind: DocumentKind, saving: DocumentKind) -> String {
+    let what = match saving {
+        DocumentKind::Text => "the text of a document",
+        DocumentKind::Page => "a page",
+        DocumentKind::Board => "a whiteboard",
+    };
+    format!(
+        "item {id} of the library is a {}: {what} cannot be saved over it",
+        kind.noun()
+    )
 }
 
 fn files_missing_message(ids: &[FileId]) -> String {
     let shown: Vec<String> = ids.iter().take(3).map(FileId::to_hex).collect();
     let more = ids.len().saturating_sub(shown.len());
     let mut message = match ids.len() {
-        1 => "the page names a file that the library does not have: ".to_owned(),
-        n => format!("the page names {n} files that the library does not have: "),
+        1 => "the item names a file that the library does not have: ".to_owned(),
+        n => format!("the item names {n} files that the library does not have: "),
     };
     message.push_str(&shown.join(", "));
     if more > 0 {

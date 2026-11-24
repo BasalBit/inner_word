@@ -440,11 +440,10 @@ fn a_folder_trashed_with_a_page_names_the_page(cx: &mut TestAppContext) {
         .library
         .update(cx, |l, cx| l.create_folder(None, "Mixed", cx).unwrap().id);
     create_page(&f.library, Some(mixed), "Orbitarium", cx);
-    f.library
-        .update(cx, |l, cx| {
-            l.create_document(Some(mixed), &content("Notes", "x"), cx)
-                .unwrap()
-        });
+    f.library.update(cx, |l, cx| {
+        l.create_document(Some(mixed), &content("Notes", "x"), cx)
+            .unwrap()
+    });
     cx.run_until_parked();
     f.toasts(cx);
     f.panel.update(cx, |p, cx| p.trash_item(Folder(mixed), cx));

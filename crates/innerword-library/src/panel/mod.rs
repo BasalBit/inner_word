@@ -41,8 +41,8 @@ pub use menu::LibraryMenuTarget;
 use menu::MenuExtension;
 use move_picker::MoveDelegate;
 use rows::{
-    Filter, Row, ancestors, build_rows, count_folders, item_name, items_in,
-    place_of, plural, short, short_path, stored_name,
+    Filter, Row, ancestors, build_rows, count_folders, item_name, items_in, place_of, plural,
+    short, short_path, stored_name,
 };
 use trash::{ROOT_LABEL, TrashRow, build_trash_rows};
 use undo::UndoEntry;

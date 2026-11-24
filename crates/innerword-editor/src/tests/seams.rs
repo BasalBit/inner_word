@@ -1044,7 +1044,9 @@ fn a_compact_editor_narrows_with_its_container(cx: &mut TestAppContext) {
             cx.run_until_parked();
             cx.update(|window, _| window.refresh());
             cx.run_until_parked();
-            let item = cx.debug_bounds("compact-item").expect("the item is painted");
+            let item = cx
+                .debug_bounds("compact-item")
+                .expect("the item is painted");
             assert_eq!(
                 item.size.width,
                 px(width),

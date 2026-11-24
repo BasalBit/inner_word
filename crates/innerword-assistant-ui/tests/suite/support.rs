@@ -399,24 +399,65 @@ pub struct Workspace {
     pub panel_width: Pixels,
 }
 
+/// The tree of the app's workspace around the slot at the right
+/// (`innerword-app/src/workspace/render.rs` and `right_panel.rs`): a
+/// sidebar, then a column of the title bar, a row of the text and the
+/// slot, and the status bar. The composer's text was wrapped at 240 px in
+/// this tree and not in a plain row of the text and the slot
+/// (`the_composer_wraps_at_its_width_and_grows_with_its_rows`).
 impl Render for Workspace {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        let slot = self.panel_open.then(|| {
+            div()
+                .debug_selector(|| "panel-slot".into())
+                .w(self.panel_width)
+                .h_full()
+                .flex_none()
+                .overflow_hidden()
+                .border_l_1()
+                .flex()
+                .flex_col()
+                .child(
+                    div()
+                        .flex_1()
+                        .min_h_0()
+                        .overflow_hidden()
+                        .child(self.panel.clone()),
+                )
+        });
         div()
             .key_context("Workspace")
             .relative()
             .flex()
             .size_full()
-            .child(div().flex_1().min_w_0().h_full().child(self.editor.clone()))
-            .when(self.panel_open, |root| {
-                root.child(
-                    div()
-                        .debug_selector(|| "panel-slot".into())
-                        .w(self.panel_width)
-                        .h_full()
-                        .flex_none()
-                        .child(self.panel.clone()),
-                )
-            })
+            .child(div().w(px(240.)).h_full().flex_none())
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .h_full()
+                    .flex()
+                    .flex_col()
+                    .child(div().h(px(44.)).flex_none())
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_h_0()
+                            .flex()
+                            .child(
+                                div().flex_1().min_w_0().h_full().flex().flex_col().child(
+                                    div()
+                                        .flex_1()
+                                        .min_h_0()
+                                        .w_full()
+                                        .overflow_hidden()
+                                        .child(self.editor.clone()),
+                                ),
+                            )
+                            .children(slot),
+                    )
+                    .child(div().h(px(28.)).flex_none()),
+            )
             // The toast layer draws the toasts and the open context menu.
             .child(self.toasts.clone())
     }

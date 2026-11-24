@@ -1386,7 +1386,8 @@ fn everything_stays_inside_the_panel(cx: &mut TestAppContext) {
         });
         cx.run_until_parked();
         let panel = bounds("assistant-panel", cx);
-        assert_eq!(panel.size.width, width);
+        // The slot's border at the left takes a pixel, as in the app.
+        assert_eq!(panel.size.width, width - px(1.));
         let ids = ws.message_ids(cx);
         let mut inside = vec![
             "assistant-header".to_string(),
@@ -1445,6 +1446,106 @@ fn everything_stays_inside_the_panel(cx: &mut TestAppContext) {
         // The title is not squeezed away by the controls.
         if width == PANEL_WIDTH {
             assert!(bounds("assistant-title", cx).size.width > px(60.));
+        }
+    }
+}
+
+// ----- the composer's text ---------------------------------------------------------
+
+/// What the side chat's composer shows of a text that wraps: the rows of
+/// the text (one rectangle per visual row), the caret, the composer's box.
+fn wrapped_composer(
+    fixture: &super::support::PanelFixture,
+    cx: &mut VisualTestContext,
+) -> (Vec<gpui::Bounds<gpui::Pixels>>, gpui::Bounds<gpui::Pixels>) {
+    let editor = fixture
+        .panel
+        .read_with(cx, |panel, cx| panel.composer().read(cx).editor().clone());
+    editor.read_with(cx, |editor, _| {
+        let document = editor.document();
+        let whole = innerword_core::TextRange::new(document.start(), document.end());
+        (
+            editor
+                .range_bounds(whole)
+                .expect("the composer is laid out"),
+            editor.caret_bounds().expect("the composer has a caret"),
+        )
+    })
+}
+
+/// The text of the composer wraps at the width the field is drawn at, and
+/// the field grows with its rows (the user's screenshot of 0.12.0: the text
+/// wrapped at the 240 px a compact editor falls back to when it is offered
+/// no width, half the field, and its second row was drawn under the box,
+/// which stayed one row tall). Both ways the composer is put together: the
+/// button beside the text, and the host's controls in a row under it.
+#[gpui::test]
+fn the_composer_wraps_at_its_width_and_grows_with_its_rows(cx: &mut TestAppContext) {
+    let (fixture, cx) = open_panel(cx);
+    fixture
+        .panel
+        .update_in(cx, |panel, window, cx| panel.focus(window, cx));
+    cx.run_until_parked();
+    cx.simulate_input(
+        "On scene 3 “What is stored” on step 5 I see that the field does not grow with \
+         the text it holds, and the last words of what was typed run under its border.",
+    );
+    cx.run_until_parked();
+
+    for accessory in [false, true] {
+        if accessory {
+            fixture.panel.update(cx, |panel, cx| {
+                panel.composer().update(cx, |composer, cx| {
+                    composer.set_accessory(
+                        |_, _| {
+                            use gpui::{IntoElement, Styled};
+                            gpui::div().w(px(80.)).h(px(20.)).into_any_element()
+                        },
+                        cx,
+                    )
+                })
+            });
+        }
+        for width in [PANEL_WIDTH, px(520.)] {
+            fixture.workspace.update(cx, |workspace, cx| {
+                workspace.panel_width = width;
+                cx.notify();
+            });
+            cx.run_until_parked();
+            // Two frames: what one frame measured is what the next paints.
+            cx.update(|window, _| window.refresh());
+            cx.run_until_parked();
+
+            let composer = bounds("assistant-composer", cx);
+            let (rows, caret) = wrapped_composer(&fixture, cx);
+            let at = format!("accessory {accessory}, panel {width:?}: {composer:?}, {rows:?}");
+            assert!(rows.len() >= 2, "the text wraps: {at}");
+            // (a) Wrapped at the field's width: a full row reaches well past
+            // the middle of the box.
+            let widest = rows
+                .iter()
+                .map(|row| row.right())
+                .fold(composer.left(), |a, b| if b > a { b } else { a });
+            assert!(
+                widest > composer.left() + composer.size.width * 0.75,
+                "the text is wrapped at the width of the field: {at}"
+            );
+            // (b) The box holds every row and the caret.
+            for row in rows.iter().chain([&caret]) {
+                assert!(
+                    row.top() >= composer.top() && row.bottom() <= composer.bottom(),
+                    "{row:?} lies inside the composer: {at}"
+                );
+                assert!(
+                    row.left() >= composer.left() && row.right() <= composer.right(),
+                    "{row:?} lies inside the composer: {at}"
+                );
+            }
+            let rows_height = rows.last().unwrap().bottom() - rows[0].top();
+            assert!(
+                composer.size.height > rows_height,
+                "the composer grows with its rows: {at}"
+            );
         }
     }
 }

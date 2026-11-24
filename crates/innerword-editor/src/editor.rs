@@ -94,6 +94,11 @@ pub struct Editor {
     /// the word counts. Behind a `RefCell` so geometry queries work through
     /// `&Editor` and can lay out on demand.
     pub(crate) layout: RefCell<DocumentLayout>,
+    /// A compact editor: the last width its container gave it (offered to
+    /// its measure, or the width it was drawn at). It answers the layout's
+    /// question "how wide without a width?" (see the element's
+    /// `request_layout`).
+    pub(crate) compact_width: Option<Pixels>,
     /// A scroll request waiting for the next layout.
     pub(crate) pending_scroll: Option<PendingScroll>,
     /// Column-local x that vertical caret movement tries to keep.
@@ -389,6 +394,7 @@ impl Editor {
             config,
             focus_handle,
             layout: RefCell::new(layout),
+            compact_width: None,
             pending_scroll: None,
             goal_x: None,
             caret_override: None,

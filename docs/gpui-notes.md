@@ -216,6 +216,22 @@ The same one level down: the row inside the composer's box (the text and the Sen
 control) stayed as wide as its content after the box itself filled the panel, so the
 control stood in the middle; the box is a flex column too (`composer.rs`).
 
+**A measure function asked without a width** (`request_measured_layout`, seen in the side
+chat of 0.12.0, tested in `innerword-assistant-ui`): taffy asks it with a width (`known`, or
+`AvailableSpace::Definite`) and without one (`MinContent`, `MaxContent`), several times a
+frame, and the answer to a question without a width can be the size the element is drawn
+at. In the app's tree around the side chat the composer's editor was asked without a width
+last in every frame (each call printed: `MinContent`, then `Definite(1355)` from a pass over
+the whole window, then `Definite(305)`, then `MinContent` again, then prepaint), answered
+with the 240 px a compact editor falls back to, and was drawn 240 px wide inside a field of
+305 px, its text wrapped there and its last rows under the field's border. Answer such a
+question with the last width the element was given (offered, or drawn at), as GPUI's own
+text does (`elements/text.rs`); keep a width of its own for an element never given one
+(`innerword-editor`, `element.rs`, `Editor::compact_width`; the test
+`the_composer_wraps_at_its_width_and_grows_with_its_rows`). It hung on the tree around it:
+a plain row of the text and the slot did not show it, nor did the app's tree once the
+conversation held messages, so a test of such an element puts it in the app's tree (`innerword-assistant-ui`, `tests/suite/support.rs`, `Workspace`).
+
 Three more from the assistant's crates (each read from gpui's source and seen in a test):
 an element's own mouse-down listeners run before the listener gpui adds for focus on
 click, so `on_any_mouse_down` with `prevent_default` on an element with `track_focus`

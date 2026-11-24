@@ -1429,7 +1429,11 @@ A layout fact that bites: text that wraps (or has several lines) inside a `flex_
 container that is itself the growing child (`flex_1`) of a flex row is measured at no
 width, and the row comes out thousands of pixels tall. Make the growing child a plain block
 `div()` and space its children with margins (`crates/innerword-app/src/agents_view.rs`,
-`render_row`; the test `no_row_is_taller_than_its_text`).
+`render_row`; the test `no_row_is_taller_than_its_text`). And an element measured with
+`request_measured_layout` can be drawn at the size it answered to a question without a
+width (`MinContent`, `MaxContent`): answer it with the last width it was given, never a
+width of its own (the side chat's composer was drawn at a compact editor's fallback of
+240 px; `Editor::compact_width`, `docs/gpui-notes.md`).
 
 ## Changing keys
 

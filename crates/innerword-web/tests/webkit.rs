@@ -741,6 +741,10 @@ fn main() -> ExitCode {
     if wanted("board_cover") {
         bundle::a_covered_whiteboard_is_told_nothing(&mut report, &rules);
     }
+    // The width of a whiteboard's view changed: Excalidraw's layout follows.
+    if wanted("board_width") {
+        bundle::the_layout_follows_the_width(&mut report, &rules);
+    }
     // A whiteboard's PDF against what the screen shows.
     if wanted("board_pdf") {
         bundle::the_pdf_is_the_screen(&mut report, &rules);

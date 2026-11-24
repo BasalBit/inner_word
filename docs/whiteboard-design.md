@@ -1006,6 +1006,27 @@ otherwise edit `innerword-app`).
   when the view is `{}` or its `at` is not the stamp it loaded); clears Excalidraw's undo
   history; deletes the kinds of element never kept (4.13); and after two animation frames
   posts `ready` with the stamp it loaded, which becomes the session's base (4.6).
+- **Built after the assistant's drawings: the layout follows the width.** Excalidraw
+  chooses between its full layout and its compact one (below 730 pixels wide, the class
+  `excalidraw--mobile`) in its ResizeObserver (`refreshEditorBreakpoints`, kept in
+  `App.device`), which renders only when the container's rectangle differs from its state.
+  Its listener of the window's `resize` (`onResize`) has stored that rectangle first, and
+  React 19 renders an update made in a `resize` listener at once (a discrete event, in the
+  microtask after the listener), with the layout of the old width; the observer then
+  changed the choice and rendered nothing. So showing the side chat over a whiteboard left
+  the full layout on a canvas 560 pixels wide (the tool bar cut off, the style panel over
+  the drawing), hiding it the compact one on 940, until something else made Excalidraw
+  render: logged in the page, the `resize`, the render with the old choice, the observer
+  with the new one, and no render after it, on every change of width, in a scripted run's
+  window and in the WebKit program's offscreen one alike; nothing in it waits for the
+  window to be active, so a person sees it too, except where a render something else
+  happened to cause (the keyboard leaving the canvas, for one) came after. The
+  glue observes the container too (`followTheWidth`, `layout.js`, from an observer made
+  after Excalidraw's) and calls `refresh`, a default update rendered in a task after every
+  observer: one render more for each change of the container's size. The app's frames
+  were never the cause: each change of width came to the page as one `resize` with the
+  final size. The WebKit case `board_width` changes the view's width six times and holds
+  the layout to it (it failed five of six before).
 - **Built:** `PageEvents::loaded` can arrive before the module scripts ran, so the app waits
   for `ready`, never for `loaded`; a scripted run turns occlusion detection off for a
   whiteboard's view too (`pages::draw_when_covered`, which survives a `park`), since

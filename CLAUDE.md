@@ -2452,6 +2452,11 @@ the shape library, closing and quitting), `workspace/board_pdf.rs` (its PDF),
   A modal or a context menu over a whiteboard covers its live canvas as on a page (dimmed
   natively, no event, the overlay in a hole): the view is never hidden, so Excalidraw is
   not told `visibilitychange`, posts nothing because of it and keeps drawing.
+  When the view's width changes (the side chat or the sidebar shown or hidden, the window
+  resized) Excalidraw draws the layout of the new width, the compact one below 730 pixels:
+  0.18.1 under React 19 rendered its `resize` listener's update before its ResizeObserver
+  chose the layout and the observer rendered nothing, so the glue's own observer asks it to
+  render again (`followTheWidth`, `layout.js`; the WebKit case `board_width`).
   Opening saves nothing. Excalidraw's own file actions, export, theme switch, collaboration,
   embeds, AI and library browsing are switched off (design section 4.13).
 - **Never lose a stroke** (design 4.6). The page posts the scene at the end of every gesture

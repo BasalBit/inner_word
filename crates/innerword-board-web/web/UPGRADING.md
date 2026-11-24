@@ -104,6 +104,13 @@ bundled) and change what moved.
   labels, the contents of selected frames).
 - **Links**: `onLinkOpen` and `redirectToLink` (`window.open` when not prevented), element
   links (`?element=`).
+- **The layout of the width** (`layout.js`, `followTheWidth`): Excalidraw chooses its compact
+  layout in its ResizeObserver (`refreshEditorBreakpoints`, `App.device`) and renders there
+  only when the container's rectangle changed (`updateDOMRect`), which its `resize`
+  listener (`onResize`) stored first; under React 19 that listener's update renders at once
+  with the old choice. The glue calls `refresh` from an observer of its own. A version whose
+  observer renders after choosing makes the call one render more for nothing; the WebKit
+  case `board_width` holds the layout to the width either way.
 
 Then run `innerword-web`'s WebKit program (its cases of the bundle, and the cross-check of the
 converter against `convertToExcalidrawElements`, which fails when Excalidraw's own output

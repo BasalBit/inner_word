@@ -1674,6 +1674,78 @@ pub(super) fn a_covered_whiteboard_is_told_nothing(report: &mut Report, rules: &
     ));
 }
 
+/// The width of a whiteboard's view changes as the app's frames change it when the side
+/// chat or the sidebar is shown or hidden, or the window resized: Excalidraw draws the
+/// layout of the new width each time and keeps it, its compact one below 730 pixels (the
+/// class `excalidraw--mobile` on its container, from the same render) and its full one
+/// above. Excalidraw 0.18.1 under React 19 rendered its `resize` listener's update before
+/// its ResizeObserver had chosen the layout of the new width, and the observer rendered
+/// nothing, so the layout of the old width stayed (the glue's `followTheWidth`). Nothing
+/// else in this view makes Excalidraw render, as nothing did in the app when the side chat
+/// was shown by the palette. A change of width is no edit: no scene is posted.
+pub(super) fn the_layout_follows_the_width(report: &mut Report, rules: &Path) {
+    let case = "the layout follows the width";
+    let assets = match Assets::find() {
+        Ok(assets) => assets,
+        Err(why) => {
+            report.check(false, &format!("the whiteboard's bundle is found ({why})"));
+            return;
+        }
+    };
+    let source = BundleSource::new(&assets);
+    three_rectangles(&source);
+    let host = Host::new();
+    let Some((view, events)) =
+        ready_view(report, &host, case, "board-50-1700000000000", source, rules)
+    else {
+        return;
+    };
+    // 900 points high: Excalidraw's compact layout is for a width under 730 alone.
+    let height = host.content_height();
+    let scenes = posted(&events, "scene").len();
+    const READ: &str = "const c = document.querySelector('.excalidraw-container');
+         return JSON.stringify({ width: window.innerWidth, compact: !!c && c.classList.contains('excalidraw--mobile') });";
+    let mut seen = Vec::new();
+    for width in [560., 940., 560., 940., 1280., 600.] {
+        view.set_frame(Rect {
+            x: 0.,
+            y: 0.,
+            width,
+            height,
+        });
+        let compact = width < 730.;
+        let follows = |reading: &Value| {
+            reading["width"].as_f64() == Some(width) && reading["compact"] == compact
+        };
+        let (reading, took) = read_until(HAPPENS_WITHIN, || page_json(&view, READ), follows);
+        // And keeps it: a render that came late would show here.
+        wait(Duration::from_millis(300));
+        let after = page_json(&view, READ);
+        let layout = if compact { "compact" } else { "full" };
+        report.check(
+            follows(&reading) && follows(&after),
+            &format!(
+                "{case}: at {width} pixels Excalidraw draws its {layout} layout and keeps it \
+                 ({} after {took:?}, then {})",
+                short_json(&reading),
+                short_json(&after)
+            ),
+        );
+        seen.push(format!("{width}: {took:?}"));
+    }
+    report.note(&format!(
+        "{case}: each layout came after {}",
+        seen.join(", ")
+    ));
+    report.check(
+        posted(&events, "scene").len() == scenes,
+        &format!(
+            "{case}: a change of width is no edit ({} scenes posted)",
+            posted(&events, "scene").len() - scenes
+        ),
+    );
+}
+
 /// Three rectangles, r1 to r3, as `board.json` serves them.
 fn three_rectangles(source: &BundleSource) {
     let scene = stored_scene(json!([

@@ -16,6 +16,7 @@ import { post, reportError } from "./bridge.js";
 import { boardCalls, defineCalls } from "./calls.js";
 import { loadFontsFor } from "./fonts.js";
 import { installKeys, setKeysGivenUp, watchTheInterface } from "./keys.js";
+import { followTheWidth } from "./layout.js";
 import { itemsOfStored, libraryChanged, postLibrary, servedLibrary, whenLibraryWaitingChanges } from "./library.js";
 import { onLinkOpen, withKeptLinks } from "./links.js";
 import { loadPictures } from "./pictures.js";
@@ -232,6 +233,7 @@ export async function startBoard() {
   await mounted();
 
   const api = board.api;
+  followTheWidth(api);
   // Opening is not an edit: nothing of the load is undone, and nothing of it is saved.
   api.history.clear();
   if (!view && api.getSceneElements().length) api.scrollToContent(undefined, { fitToContent: true, animate: false });

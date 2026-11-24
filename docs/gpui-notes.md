@@ -225,10 +225,14 @@ last in every frame (each call printed: `MinContent`, then `Definite(1355)` from
 the whole window, then `Definite(305)`, then `MinContent` again, then prepaint), answered
 with the 240 px a compact editor falls back to, and was drawn 240 px wide inside a field of
 305 px, its text wrapped there and its last rows under the field's border. Answer such a
-question with the last width the element was given (offered, or drawn at), as GPUI's own
-text does (`elements/text.rs`); keep a width of its own for an element never given one
-(`innerword-editor`, `element.rs`, `Editor::compact_width`; the test
-`the_composer_wraps_at_its_width_and_grows_with_its_rows`). It hung on the tree around it:
+question with the last width the element was given **in this frame**, as GPUI's own text
+does (`elements/text.rs`, whose layout lives for one frame); keep a width of its own for a
+question asked before any (`innerword-editor`, `element.rs`, `Editor::compact_width`; the test
+`the_composer_wraps_at_its_width_and_grows_with_its_rows`). Never answer with a width of an
+earlier frame: the answer is also the automatic minimum width of a flex item without
+`min_w_0`, and a width kept across frames held such an item at the widest it had ever been
+(500 px in a row narrowed to 300; `a_compact_editor_narrows_with_its_container`, in
+`innerword-editor`'s `tests/seams.rs`). It hung on the tree around it:
 a plain row of the text and the slot did not show it, nor did the app's tree once the
 conversation held messages, so a test of such an element puts it in the app's tree (`innerword-assistant-ui`, `tests/suite/support.rs`, `Workspace`).
 

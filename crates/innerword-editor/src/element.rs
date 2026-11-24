@@ -47,7 +47,7 @@ use crate::{
 /// Narrowest text column of a full editor.
 const MIN_COLUMN_WIDTH: Pixels = px(120.);
 /// Width assumed for a compact editor when the layout offers none and
-/// none was ever given to it.
+/// none was given to it yet in this frame.
 const FALLBACK_COMPACT_WIDTH: Pixels = px(240.);
 /// Width of the scroll bar thumb and its distance from the edge.
 const SCROLLBAR_WIDTH: Pixels = px(6.);
@@ -1179,14 +1179,20 @@ impl Element for EditorElement {
         // drawn at: in the side chat's composer the last question of every
         // frame had no width (each call printed, in the app and in the
         // test), and the editor came out as wide as it answered. So a
-        // width once given (offered here, or drawn at) stands for such a
-        // question, as GPUI's own text answers (`elements/text.rs`), and
-        // the fallback is for an editor that was never given one.
-        // Answering with the fallback (240 px) every time drew the side
-        // chat's text wrapped at 240 px inside a field 305 px wide, its
-        // last rows under the field's border (`docs/gpui-notes.md`, "A
-        // measure function asked without a width").
+        // width given earlier in this frame stands for such a question, as
+        // GPUI's own text answers (`elements/text.rs`, whose layout lives
+        // for one frame), and the fallback is for a question asked before
+        // any width. Answering with the fallback (240 px) every time drew
+        // the side chat's text wrapped at 240 px inside a field 305 px
+        // wide, its last rows under the field's border. The width is
+        // forgotten at every frame: the answer is also the automatic
+        // minimum width of a flex item, and a width kept from an earlier
+        // frame held such an item at the widest it had ever been
+        // (`a_compact_editor_narrows_with_its_container`;
+        // `docs/gpui-notes.md`, "A measure function asked without a
+        // width").
         let editor = self.editor.clone();
+        editor.update(cx, |editor, _| editor.compact_width = None);
         let layout_id =
             window.request_measured_layout(style, move |known, available, window, cx| {
                 let given = known.width.or(match available.width {
@@ -1216,9 +1222,6 @@ impl Element for EditorElement {
     ) -> FramePlan {
         let hitbox = window.insert_hitbox(bounds, HitboxBehavior::Normal);
         self.editor.update(cx, |editor, cx| {
-            if editor.config.mode.is_compact() {
-                editor.compact_width = Some(bounds.size.width);
-            }
             let started = Instant::now();
             let zoom = editor.install_layout_env(Some(bounds), bounds.size.width, window, cx);
             editor.note_zoom_shown(zoom, cx);

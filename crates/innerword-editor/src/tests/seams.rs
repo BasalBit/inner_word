@@ -984,3 +984,72 @@ fn focus_in_the_popup_is_focus_in_the_editor(cx: &mut TestAppContext) {
     cx.run_until_parked();
     assert_eq!(take(&events), [EditorEvent::Focused]);
 }
+
+/// A compact editor in a flex item of a row whose width the test sets.
+/// `min_w_0` off leaves the item its automatic minimum width, which taffy
+/// takes from the editor's answer to a question without a width.
+struct FlexRow {
+    editor: gpui::Entity<crate::Editor>,
+    width: gpui::Pixels,
+    min_w_0: bool,
+}
+
+impl Render for FlexRow {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        let item = div()
+            .flex_1()
+            .debug_selector(|| "compact-item".into())
+            .child(self.editor.clone());
+        let item = if self.min_w_0 { item.min_w_0() } else { item };
+        div()
+            .size_full()
+            .child(div().w(self.width).child(div().flex().child(item)))
+    }
+}
+
+/// A compact editor follows its container when it narrows again. It
+/// answers a question without a width with the width it was given earlier
+/// in the same frame (the side chat's composer, `the_composer_wraps_at_its_
+/// width_and_grows_with_its_rows` in innerword-assistant-ui), never with one
+/// of an earlier frame: that answer is the automatic minimum width of a
+/// flex item, so a width remembered across frames held the item at the
+/// widest it had ever been (500 px in a row of 300).
+#[gpui::test]
+fn a_compact_editor_narrows_with_its_container(cx: &mut TestAppContext) {
+    setup(cx);
+    for min_w_0 in [true, false] {
+        let (row, cx) = cx.add_window_view(move |window, cx| {
+            let document = Document::from_blocks(vec![Block::paragraph(
+                "A line long enough to wrap in every width this test gives it, and then some more words.",
+            )]);
+            let editor = cx.new(|cx| {
+                crate::Editor::new(
+                    document,
+                    EditorConfig::compact(CompactOptions::default()),
+                    window,
+                    cx,
+                )
+            });
+            FlexRow {
+                editor,
+                width: px(500.),
+                min_w_0,
+            }
+        });
+        for width in [500., 300., 600., 260.] {
+            row.update(cx, |row, cx| {
+                row.width = px(width);
+                cx.notify();
+            });
+            cx.run_until_parked();
+            cx.update(|window, _| window.refresh());
+            cx.run_until_parked();
+            let item = cx.debug_bounds("compact-item").expect("the item is painted");
+            assert_eq!(
+                item.size.width,
+                px(width),
+                "min_w_0 {min_w_0}: the item is as wide as its row of {width}"
+            );
+        }
+    }
+}

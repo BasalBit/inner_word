@@ -5,7 +5,7 @@
 //! ([`shown_markdown`], [`drawing_sentence`]), never as its JSON.
 //!
 //! What a drawing can be applied to follows the open item ([`DrawingTarget`]): the open
-//! whiteboard, or a new whiteboard beside the open document.
+//! whiteboard, or a new whiteboard beside the open document or page.
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
@@ -23,13 +23,16 @@ pub const DRAWING_INFO: &str = "whiteboard";
 /// What drawings a side chat offers, by its open item (section 3.1).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum DrawingTarget {
-    /// None: the open item is a page, nothing is open, or whiteboards cannot be shown.
+    /// None: nothing is open, or whiteboards cannot be shown.
     #[default]
     None,
     /// The open item is a whiteboard: a drawing adds to it, changes and removes elements.
     OpenWhiteboard,
     /// The open item is a document: a drawing that only adds makes a new whiteboard.
     NewWhiteboard,
+    /// The open item is a page: a drawing that only adds makes a new whiteboard, as over
+    /// a document; only the words of the system prompt differ (they name a page).
+    NewWhiteboardBesidePage,
 }
 
 impl DrawingTarget {
@@ -42,8 +45,18 @@ impl DrawingTarget {
         match kind {
             Some(OpenKind::Board) => DrawingTarget::OpenWhiteboard,
             Some(OpenKind::Text) => DrawingTarget::NewWhiteboard,
-            Some(OpenKind::Page { .. }) | None => DrawingTarget::None,
+            Some(OpenKind::Page { .. }) => DrawingTarget::NewWhiteboardBesidePage,
+            None => DrawingTarget::None,
         }
+    }
+
+    /// Whether a drawing makes a new whiteboard (beside a document or a page), where
+    /// it only adds.
+    pub fn makes_a_new_whiteboard(self) -> bool {
+        matches!(
+            self,
+            DrawingTarget::NewWhiteboard | DrawingTarget::NewWhiteboardBesidePage
+        )
     }
 }
 
@@ -153,7 +166,7 @@ pub enum DrawingProblem {
         of: usize,
         error: DrawingError,
     },
-    /// Over a document: it changes or removes elements.
+    /// Over a document or a page: it changes or removes elements.
     ChangesAWhiteboard,
     /// No drawing can be applied over the open item.
     NotHere,
@@ -210,7 +223,7 @@ impl DrawingProblem {
                 "it changes elements of a whiteboard: open that whiteboard and ask there".into()
             }
             DrawingProblem::NotHere => {
-                "a drawing can be used only over a whiteboard or a document".into()
+                "a drawing can be used only over a whiteboard, a document or a page".into()
             }
         }
     }
@@ -325,11 +338,11 @@ fn added_again(drawing: &Drawing, added: &mut HashSet<String>) -> Option<Drawing
 }
 
 /// Whether `drawing` can be applied for `target`: `NotHere` for `None`,
-/// `ChangesAWhiteboard` for `NewWhiteboard` and a drawing with changes.
+/// `ChangesAWhiteboard` for a new whiteboard and a drawing with changes.
 pub fn drawing_fits(drawing: &Drawing, target: DrawingTarget) -> Result<(), DrawingProblem> {
     match target {
         DrawingTarget::None => Err(DrawingProblem::NotHere),
-        DrawingTarget::NewWhiteboard if drawing.has_changes() => {
+        _ if target.makes_a_new_whiteboard() && drawing.has_changes() => {
             Err(DrawingProblem::ChangesAWhiteboard)
         }
         _ => Ok(()),
@@ -778,7 +791,8 @@ fn parts(
 
 /// The summary of a drawing (section 2.3), already escaped Markdown, without the italics
 /// around it: "Drawing: adds an ellipse and an arrow; changes the rectangle “API”." The
-/// counts come first; the title only for [`DrawingTarget::NewWhiteboard`].
+/// counts come first; the title only where it makes a new whiteboard
+/// ([`DrawingTarget::makes_a_new_whiteboard`]).
 pub fn drawing_sentence(
     drawing: &Drawing,
     target: DrawingTarget,
@@ -791,7 +805,7 @@ pub fn drawing_sentence(
     } else {
         out.push_str(&parts.join("; "));
     }
-    if target == DrawingTarget::NewWhiteboard
+    if target.makes_a_new_whiteboard()
         && let Some(title) = &drawing.title
     {
         out.push_str(&format!(

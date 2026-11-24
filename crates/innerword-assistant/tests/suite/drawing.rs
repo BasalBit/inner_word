@@ -222,6 +222,19 @@ fn which_drawings_fit_which_target() {
         drawing_fits(&changes, DrawingTarget::OpenWhiteboard),
         Ok(())
     );
+    // Beside a page as beside a document: only a drawing that only adds.
+    assert_eq!(
+        drawing_fits(&adds, DrawingTarget::NewWhiteboardBesidePage),
+        Ok(())
+    );
+    assert_eq!(
+        drawing_fits(&changes, DrawingTarget::NewWhiteboardBesidePage),
+        Err(DrawingProblem::ChangesAWhiteboard)
+    );
+    assert!(DrawingTarget::NewWhiteboard.makes_a_new_whiteboard());
+    assert!(DrawingTarget::NewWhiteboardBesidePage.makes_a_new_whiteboard());
+    assert!(!DrawingTarget::OpenWhiteboard.makes_a_new_whiteboard());
+    assert!(!DrawingTarget::None.makes_a_new_whiteboard());
 
     let board = OpenKind::Board;
     let text = OpenKind::Text;
@@ -234,10 +247,21 @@ fn which_drawings_fit_which_target() {
         DrawingTarget::of(Some(&text), true),
         DrawingTarget::NewWhiteboard
     );
-    assert_eq!(DrawingTarget::of(Some(&page), true), DrawingTarget::None);
+    assert_eq!(
+        DrawingTarget::of(Some(&page), true),
+        DrawingTarget::NewWhiteboardBesidePage
+    );
+    let addressed = OpenKind::Page {
+        source_url: Some("https://example.com/".into()),
+    };
+    assert_eq!(
+        DrawingTarget::of(Some(&addressed), true),
+        DrawingTarget::NewWhiteboardBesidePage
+    );
     assert_eq!(DrawingTarget::of(None, true), DrawingTarget::None);
     assert_eq!(DrawingTarget::of(Some(&board), false), DrawingTarget::None);
     assert_eq!(DrawingTarget::of(Some(&text), false), DrawingTarget::None);
+    assert_eq!(DrawingTarget::of(Some(&page), false), DrawingTarget::None);
     assert_eq!(DrawingTarget::default(), DrawingTarget::None);
 }
 
@@ -368,6 +392,11 @@ fn the_summary_says_what_the_drawing_does() {
     assert_eq!(
         drawing_sentence(&d, DrawingTarget::NewWhiteboard, None),
         "Drawing: adds 4 rectangles, 3 arrows, a drawn line and a frame (new whiteboard “Who \\*serves\\* whom”)."
+    );
+    // Beside a page it reads as beside a document.
+    assert_eq!(
+        drawing_sentence(&d, DrawingTarget::NewWhiteboardBesidePage, None),
+        drawing_sentence(&d, DrawingTarget::NewWhiteboard, None)
     );
 
     let many = drawing(
@@ -616,6 +645,24 @@ fn a_chat_starts_with_the_prompt_of_its_target() {
             .iter()
             .any(|message| message.text.contains("And a cache?")),
         "the new conversation is told what was said"
+    );
+
+    // A page's conversation starts with the page's prompt.
+    let fake = FakeBackend::new();
+    let mut chat = ChatSession::side(Arc::new(fake.clone()), None)
+        .with_drawing_target(DrawingTarget::NewWhiteboardBesidePage);
+    chat.ask_side("Draw the steps.", None);
+    pump(&mut chat);
+    assert_eq!(fake.started().len(), 1);
+    let prompt = fake.last_started().unwrap().system_prompt;
+    assert_eq!(
+        prompt,
+        side_system_prompt(false, DrawingTarget::NewWhiteboardBesidePage)
+    );
+    assert!(prompt.contains("beside the page"));
+    assert_ne!(
+        prompt,
+        side_system_prompt(false, DrawingTarget::NewWhiteboard)
     );
 
     // `prepare` after a change starts the new target's conversation.

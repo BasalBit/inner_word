@@ -655,6 +655,9 @@ impl Workspace {
         if self.open_page_id() != Some(id) && !self.load_page(id, window, cx) {
             return false;
         }
+        // Back at the page an answer made a whiteboard from: its toast's
+        // "Back to" has nothing more to do.
+        self.back_toast_follows(Some(id), &[], cx);
         if focus_page {
             self.dismiss_modal(window, cx);
             if let Some(focus) = self.page_focus_handle() {

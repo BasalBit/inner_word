@@ -40,7 +40,7 @@
 //! An answer can hold a drawing (`innerword_assistant::answer_drawing`). The
 //! host says what a drawing of the open item is for
 //! (`innerword_assistant::DrawingTarget`: on the open whiteboard, as a new
-//! whiteboard beside the open document, or nothing), on the
+//! whiteboard beside the open document or page, or nothing), on the
 //! [`DocumentRef`] of the item, so each item's conversation starts with its
 //! own prompt. The answer shows its drawing as one line
 //! (`innerword_assistant::shown_markdown`), and its first button ("Draw" or
@@ -105,7 +105,7 @@ pub const DRAW_AGAIN_WITHIN: Duration = Duration::from_secs(5);
 
 /// What the key and the command of a drawing say where no drawing can be
 /// applied, when the host gave no reason of its own.
-pub const DRAWING_UNAVAILABLE: &str = "Open a whiteboard or a document to draw the answer.";
+pub const DRAWING_UNAVAILABLE: &str = "Open a whiteboard, a document or a page to draw the answer.";
 /// What the key and the command say for an answer without a drawing.
 pub const NO_DRAWING: &str = "The answer has no drawing.";
 /// What they say while the conversation has no answer.
@@ -266,7 +266,7 @@ pub enum AssistantPanelEvent {
     AvailabilityChanged(Availability),
     /// The drawing of an answer is to be applied: on the open whiteboard
     /// (`DrawingTarget::OpenWhiteboard`), or as a new whiteboard
-    /// (`NewWhiteboard`). The button, its menu item, [`DrawAnswer`]'s key
+    /// (`NewWhiteboard`, `NewWhiteboardBesidePage`). The button, its menu item, [`DrawAnswer`]'s key
     /// or its command ([`AssistantPanel::draw`]).
     Draw {
         /// The answer.
@@ -722,7 +722,7 @@ impl AssistantPanel {
             },
             match self.drawing_target() {
                 DrawingTarget::OpenWhiteboard => "whiteboard",
-                DrawingTarget::NewWhiteboard => "new",
+                DrawingTarget::NewWhiteboard | DrawingTarget::NewWhiteboardBesidePage => "new",
                 DrawingTarget::None => "none",
             },
             if drawn { "yes" } else { "no" },
@@ -1376,9 +1376,10 @@ impl AssistantPanel {
             if !again {
                 self.draw_again = Some((self.chat.key, message, now));
                 show_toast(
-                    Toast::new(match target {
-                        DrawingTarget::NewWhiteboard => MADE_ALREADY,
-                        _ => DRAWN_ALREADY,
+                    Toast::new(if target.makes_a_new_whiteboard() {
+                        MADE_ALREADY
+                    } else {
+                        DRAWN_ALREADY
                     }),
                     cx,
                 );
@@ -1555,7 +1556,7 @@ impl AssistantPanel {
                     menu: "Draw Again on Whiteboard".into(),
                 },
             )),
-            DrawingTarget::NewWhiteboard => Some((
+            DrawingTarget::NewWhiteboard | DrawingTarget::NewWhiteboardBesidePage => Some((
                 "New Whiteboard",
                 "New Whiteboard from Answer",
                 ActionWords {

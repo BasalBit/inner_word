@@ -752,11 +752,11 @@ impl Workspace {
 
     /// What the open item offers for an answer's drawing
     /// (`docs/assistant-draws-design.md`, 3.1 and 4.4), and why nothing when
-    /// nothing: a whiteboard that can be drawn on is drawn on; a document,
-    /// in an app that can show whiteboards, makes a new one; a whiteboard
-    /// that cannot be drawn on now says why (still loading counts as
-    /// drawable: the press says it is loading), and so does a document
-    /// where whiteboards cannot be shown.
+    /// nothing: a whiteboard that can be drawn on is drawn on; a document or
+    /// a page, in an app that can show whiteboards, makes a new one; a
+    /// whiteboard that cannot be drawn on now says why (still loading counts
+    /// as drawable: the press says it is loading), and so does a document
+    /// or a page where whiteboards cannot be shown.
     pub(crate) fn drawing_target_now(&self, cx: &App) -> (DrawingTarget, Option<SharedString>) {
         let boards = crate::pages::engine(cx).is_some();
         if self.open_board_id().is_some() {
@@ -768,9 +768,16 @@ impl Workspace {
                 Some(self.board_not_ready_sentence(cx).into()),
             );
         }
-        if self.session.is_some() {
+        let beside = if self.session.is_some() {
+            Some(DrawingTarget::NewWhiteboard)
+        } else if self.page.is_some() {
+            Some(DrawingTarget::NewWhiteboardBesidePage)
+        } else {
+            None
+        };
+        if let Some(target) = beside {
             if boards {
-                return (DrawingTarget::NewWhiteboard, None);
+                return (target, None);
             }
             return (
                 DrawingTarget::None,
@@ -973,7 +980,7 @@ impl Workspace {
                 DrawingTarget::OpenWhiteboard => {
                     self.draw_answer_on_board(drawing.clone(), *message, window, cx)
                 }
-                DrawingTarget::NewWhiteboard => {
+                DrawingTarget::NewWhiteboard | DrawingTarget::NewWhiteboardBesidePage => {
                     self.new_board_from_answer(drawing.clone(), *message, window, cx);
                 }
                 DrawingTarget::None => {}

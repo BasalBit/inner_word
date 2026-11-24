@@ -65,7 +65,7 @@ pub const ASK_AGAIN: &str = "Ask again: the assistant is sent the whiteboard as 
 pub const CHANGES_A_WHITEBOARD: &str =
     "This drawing changes elements of a whiteboard: open that whiteboard and ask there.";
 /// The press found no document open for a new whiteboard.
-pub const OPEN_A_DOCUMENT: &str = "Open a document to make a whiteboard from the answer.";
+pub const OPEN_A_DOCUMENT: &str = "Open a document or a page to make a whiteboard from the answer.";
 /// The toast's Undo after the writer drew.
 pub const NOT_UNDONE: &str =
     "Not undone: the whiteboard has changed since. Version History has it as it was.";
@@ -725,7 +725,7 @@ impl Workspace {
     // ----- a new whiteboard -----------------------------------------------------------
 
     /// "New Whiteboard from Answer" (section 6): a new whiteboard in the
-    /// folder of the open document (at the root when the document or a
+    /// folder of the open document or page (at the root when it or a
     /// folder above it is in the trash), titled with the drawing's title,
     /// with the drawing on it, opened with the keyboard on its canvas.
     /// Returns its id.
@@ -736,10 +736,18 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<DocumentId> {
+        // The item the answer is about: the open document, or the open page
+        // (never a whiteboard: its drawings go on it).
         let Some((document, document_title)) = self
             .session
             .as_ref()
             .map(|session| (session.id, session.title.clone()))
+            .or_else(|| {
+                self.page
+                    .as_ref()
+                    .filter(|page| !page.is_board())
+                    .map(|page| (page.id, page.title.clone()))
+            })
         else {
             self.drew_nothing(OPEN_A_DOCUMENT, cx);
             return None;
@@ -779,8 +787,8 @@ impl Workspace {
                 return None;
             }
         };
-        // Where: the document's folder, unless the document or a folder above
-        // it is in the trash (a document opened from the trash makes no
+        // Where: the folder of the document or page, unless it or a folder
+        // above it is in the trash (an item opened from the trash makes no
         // whiteboard there), or the folder is gone.
         let (folder, folder_name) = {
             let library = self.library.read(cx);
@@ -799,7 +807,8 @@ impl Workspace {
             .clone()
             .filter(|title| !title.trim().is_empty())
             .unwrap_or_else(|| {
-                // A document shown "Untitled" has no title to name it after.
+                // A document or a page shown "Untitled" has no title to name
+                // it after.
                 let shown = session_title(document_title.trim());
                 if shown == crate::document_io::UNTITLED {
                     "Drawing".to_string()

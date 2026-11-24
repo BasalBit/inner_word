@@ -603,7 +603,7 @@ fn over_a_document_an_answer_makes_a_new_whiteboard(cx: &mut TestAppContext) {
 #[gpui::test]
 fn where_nothing_can_be_drawn_there_is_no_button_and_the_key_says_why(cx: &mut TestAppContext) {
     let (ws, cx) = open_panel(cx);
-    // Chapter 1 as a page would be: no target.
+    // Chapter 1 in an app that cannot show whiteboards: no target.
     ws.fake.reply(answer("Here.", NEW_BOARD));
     ws.send("Draw", cx);
     let id = *ws.message_ids(cx).last().unwrap();
@@ -666,6 +666,80 @@ fn the_drawing_command_is_titled_by_both_meanings() {
     );
     assert!(command.title.to_lowercase().starts_with("draw"));
     assert!(command.title.contains("new whiteboard"));
+}
+
+// ----- over a page ----------------------------------------------------------------------
+
+/// Over a page an answer makes a new whiteboard as over a document: the same
+/// button, menu item and key, its own target in the event and its own prompt.
+#[gpui::test]
+fn over_a_page_an_answer_makes_a_new_whiteboard(cx: &mut TestAppContext) {
+    let (ws, cx) = open_panel(cx);
+    open_item(
+        &ws,
+        DocumentRef::new(12, "Orbitarium")
+            .with_kind(ItemKind::Page)
+            .with_drawing(DrawingTarget::NewWhiteboardBesidePage, None),
+        cx,
+    );
+    assert!(debug_state(&ws, cx).contains("draw=new"));
+    let text = answer("The steps the page describes, drawn.", NEW_BOARD);
+    ws.fake.reply(&text);
+    ws.send("Draw the steps", cx);
+    assert_eq!(
+        ws.fake.last_started().unwrap().system_prompt,
+        side_system_prompt(false, DrawingTarget::NewWhiteboardBesidePage)
+    );
+    let id = *ws.message_ids(cx).last().unwrap();
+    assert!(
+        answer_text(&ws, id, cx).contains("(new whiteboard \u{201c}Who serves whom\u{201d})"),
+        "{}",
+        answer_text(&ws, id, cx)
+    );
+    assert_eq!(
+        words(&ws, id, cx),
+        ("New Whiteboard".into(), "New Whiteboard from Answer".into())
+    );
+    // The drawing is offered.
+    assert_eq!(state(&ws, ACTION_DRAW, id, cx), ActionState::Enabled);
+    ws.take_events(cx);
+    click(format!("assistant-action-draw-{}", id.0), cx);
+    assert_eq!(
+        ws.take_events(cx),
+        [AssistantPanelEvent::Draw {
+            message: id,
+            target: DrawingTarget::NewWhiteboardBesidePage,
+            drawing: answer_drawing(&text).unwrap().unwrap(),
+        }]
+    );
+    let row = bounds(format!("assistant-message-{}", id.0), cx);
+    right_click_at(point(row.right() - px(8.), row.bottom() - px(8.)), cx);
+    assert_eq!(
+        menu_labels(cx).last().map(String::as_str),
+        Some("New Whiteboard from Answer")
+    );
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    ws.panel
+        .update_in(cx, |panel, window, cx| panel.focus(window, cx));
+    cx.run_until_parked();
+    cx.simulate_keystrokes("cmd-shift-d");
+    assert_eq!(
+        draws(&ws.take_events(cx)),
+        [(id, DrawingTarget::NewWhiteboardBesidePage)]
+    );
+
+    // A drawing that changes elements cannot make a new whiteboard here either.
+    ws.fake.reply(answer("Changed.", ON_THE_BOARD));
+    ws.send("Change it", cx);
+    let changes = *ws.message_ids(cx).last().unwrap();
+    let ActionState::Disabled(reason) = state(&ws, ACTION_DRAW, changes, cx) else {
+        panic!("not dimmed");
+    };
+    assert!(
+        reason.contains("changes elements of a whiteboard"),
+        "{reason}"
+    );
 }
 
 // ----- the conversation of each item ---------------------------------------------------

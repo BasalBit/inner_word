@@ -459,6 +459,7 @@ fn the_side_prompt_is_a_collaborator_who_reads_and_advises() {
         DrawingTarget::None,
         DrawingTarget::OpenWhiteboard,
         DrawingTarget::NewWhiteboard,
+        DrawingTarget::NewWhiteboardBesidePage,
     ] {
         for tools in [true, false] {
             let prompt = side_system_prompt(tools, target);

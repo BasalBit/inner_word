@@ -214,16 +214,50 @@ asked to add the database the API reads from and to make the API blue, answer:
     )
 }
 
-/// "Drawing a new whiteboard" (3.4).
+/// The example of the page's section: a new whiteboard's drawing of what a page
+/// describes.
+pub(crate) const PAGE_EXAMPLE: &str = r##"```whiteboard
+{"title": "Getting started", "add": [
+  {"type": "rectangle", "id": "sign-up", "x": 0, "y": 0, "width": 180, "height": 80, "label": {"text": "Sign up"}},
+  {"type": "rectangle", "id": "verify", "x": 300, "y": 0, "width": 180, "height": 80, "label": {"text": "Verify the email"}},
+  {"type": "rectangle", "id": "start", "x": 600, "y": 0, "width": 180, "height": 80, "label": {"text": "Start a project"}},
+  {"type": "arrow", "id": "then", "x": 180, "y": 40, "start": {"id": "sign-up"}, "end": {"id": "verify"}},
+  {"type": "arrow", "id": "next", "x": 480, "y": 40, "start": {"id": "verify"}, "end": {"id": "start"}}]}
+```"##;
+
+/// "Drawing a new whiteboard" (3.4), beside the open document.
 fn document_section() -> String {
+    new_whiteboard_section(
+        "(how the characters are related, the outline as boxes, a timeline, how the parts of an argument connect), answer with a drawing: a button under your answer makes it into a new whiteboard beside the document.",
+        "Who serves whom",
+        "asked who serves whom in the chapter",
+        DOCUMENT_EXAMPLE,
+    )
+}
+
+/// "Drawing a new whiteboard" (3.4), beside the open page: the same section in a page's
+/// words (the page is never "the document", and it stays as it is).
+fn page_section() -> String {
+    new_whiteboard_section(
+        "that the page shows or describes (its steps, its parts and how they fit together, a timeline, who does what), answer with a drawing: a button under your answer makes it into a new whiteboard beside the page; the page itself stays as it is.",
+        "Getting started",
+        "asked to draw the steps the page describes",
+        PAGE_EXAMPLE,
+    )
+}
+
+/// "Drawing a new whiteboard": `what` says what may be drawn and where the whiteboard
+/// goes, `title` is the example's title, `asked` what the example answers, `example` the
+/// block it answers with.
+fn new_whiteboard_section(what: &str, title: &str, asked: &str, example: &str) -> String {
     format!(
         "\
-Drawing a new whiteboard. When the writer asks you to draw, diagram, map or chart something (how the characters are related, the outline as boxes, a timeline, how the parts of an argument connect), answer with a drawing: a button under your answer makes it into a new whiteboard beside the document. Never say that you made the whiteboard: say what the drawing shows.
+Drawing a new whiteboard. When the writer asks you to draw, diagram, map or chart something {what} Never say that you made the whiteboard: say what the drawing shows.
 
 Write the drawing as one fenced code block whose info string is whiteboard, holding one JSON object with a short \"title\" for the whiteboard and the elements to \"add\":
 
 ```whiteboard
-{{\"title\": \"Who serves whom\", \"add\": [elements]}}
+{{\"title\": \"{title}\", \"add\": [elements]}}
 ```
 
 The writer does not see the JSON: in its place the app shows one line that says what the drawing holds. Write one such block per answer, with a sentence before or after it on what it shows.
@@ -234,19 +268,20 @@ x grows to the right and y downwards, in pixels; start near (0, 0). Draw what wa
 
 {HISTORY_NOTE_PARAGRAPH} To change a drawing you wrote before, write it again whole.
 
-For example, asked who serves whom in the chapter:
+For example, {asked}:
 
-{DOCUMENT_EXAMPLE}"
+{example}"
     )
 }
 
 /// The section of the side prompt for `target` (`docs/assistant-draws-design.md`, 3.3 and
-/// 3.4), `None` for [`DrawingTarget::None`].
+/// 3.4, the latter in a document's words or a page's), `None` for [`DrawingTarget::None`].
 pub fn drawing_prompt(target: DrawingTarget) -> Option<String> {
     match target {
         DrawingTarget::None => None,
         DrawingTarget::OpenWhiteboard => Some(whiteboard_section()),
         DrawingTarget::NewWhiteboard => Some(document_section()),
+        DrawingTarget::NewWhiteboardBesidePage => Some(page_section()),
     }
 }
 
@@ -329,10 +364,11 @@ the pictures on it. It cannot be changed by you: only its owner draws on it, in 
         assert!(!QUICK_SYSTEM_PROMPT.contains("whiteboard"));
     }
 
-    const TARGETS: [DrawingTarget; 3] = [
+    const TARGETS: [DrawingTarget; 4] = [
         DrawingTarget::None,
         DrawingTarget::OpenWhiteboard,
         DrawingTarget::NewWhiteboard,
+        DrawingTarget::NewWhiteboardBesidePage,
     ];
 
     /// Each target's section is in its side prompt and only there; without a target the
@@ -354,10 +390,17 @@ the pictures on it. It cannot be changed by you: only its owner draws on it, in 
             let none = side_system_prompt(tools, DrawingTarget::None);
             let board = side_system_prompt(tools, DrawingTarget::OpenWhiteboard);
             let new = side_system_prompt(tools, DrawingTarget::NewWhiteboard);
+            let page = side_system_prompt(tools, DrawingTarget::NewWhiteboardBesidePage);
             assert!(!none.contains(BOARD) && !none.contains(NEW));
             assert!(board.contains(BOARD) && !board.contains(NEW));
             assert!(new.contains(NEW) && !new.contains(BOARD));
-            for prompt in [&board, &new] {
+            assert!(page.contains(NEW) && !page.contains(BOARD));
+            // The document's words and the page's are each in their own prompt.
+            const BESIDE_DOCUMENT: &str = "a new whiteboard beside the document";
+            const BESIDE_PAGE: &str = "a new whiteboard beside the page";
+            assert!(new.contains(BESIDE_DOCUMENT) && !new.contains(BESIDE_PAGE));
+            assert!(page.contains(BESIDE_PAGE) && !page.contains(BESIDE_DOCUMENT));
+            for prompt in [&board, &new, &page] {
                 // The base prompt first, the section after it, the note without tools last.
                 assert!(prompt.starts_with("You are the writing assistant inside Inner Word"));
                 assert_eq!(prompt.ends_with(SIDE_WITHOUT_TOOLS_NOTE), !tools);
@@ -384,11 +427,13 @@ the pictures on it. It cannot be changed by you: only its owner draws on it, in 
     fn the_sections_keep_to_their_budget() {
         let board = drawing_prompt(DrawingTarget::OpenWhiteboard).unwrap();
         let new = drawing_prompt(DrawingTarget::NewWhiteboard).unwrap();
+        let page = drawing_prompt(DrawingTarget::NewWhiteboardBesidePage).unwrap();
         assert!(board.chars().count() <= 4_600, "{}", board.chars().count());
         assert!(new.chars().count() <= 3_600, "{}", new.chars().count());
-        // The slips a model makes most, said in both (a block read as no JSON, a change
+        assert!(page.chars().count() <= 3_600, "{}", page.chars().count());
+        // The slips a model makes most, said in all (a block read as no JSON, a change
         // refused at the press, a fence not found).
-        for section in [&board, &new] {
+        for section in [&board, &new, &page] {
             assert!(section.contains("plain JSON (no comments, no trailing commas)"));
             assert!(section.contains("never inside a list item or a quote"));
         }
@@ -423,6 +468,36 @@ the pictures on it. It cannot be changed by you: only its owner draws on it, in 
         assert!(section.contains(WHITEBOARD_EXAMPLE));
         let new = drawing_prompt(DrawingTarget::NewWhiteboard).unwrap();
         assert!(new.contains(DOCUMENT_EXAMPLE));
+        let page = drawing_prompt(DrawingTarget::NewWhiteboardBesidePage).unwrap();
+        assert!(page.contains(PAGE_EXAMPLE));
+        assert!(!page.contains(DOCUMENT_EXAMPLE) && !new.contains(PAGE_EXAMPLE));
+    }
+
+    /// The page's section names a page, never "the document": the page is not one, and
+    /// it stays as it is. Its shape line names its own example's title.
+    #[test]
+    fn the_page_section_speaks_of_a_page() {
+        let page = drawing_prompt(DrawingTarget::NewWhiteboardBesidePage).unwrap();
+        assert!(!page.contains("document"), "{page}");
+        assert!(page.contains("a new whiteboard beside the page; the page itself stays as it is."));
+        assert!(page.contains("For example, asked to draw the steps the page describes:"));
+        assert!(page.contains(r#"{"title": "Getting started", "add": [elements]}"#));
+        assert!(!page.contains("Who serves whom") && !page.contains("chapter"));
+        // The document's section reads as before.
+        let new = drawing_prompt(DrawingTarget::NewWhiteboard).unwrap();
+        assert!(new.contains(
+            "Drawing a new whiteboard. When the writer asks you to draw, diagram, map or chart \
+something (how the characters are related, the outline as boxes, a timeline, how the parts of \
+an argument connect), answer with a drawing: a button under your answer makes it into a new \
+whiteboard beside the document. Never say that you made the whiteboard: say what the drawing \
+shows."
+        ));
+        assert!(new.contains(r#"{"title": "Who serves whom", "add": [elements]}"#));
+        assert!(new.contains("For example, asked who serves whom in the chapter:"));
+        // Its side prompt keeps the base prompt's sentence about pages: a page cannot be
+        // changed, and the drawing makes a whiteboard beside it.
+        let prompt = side_system_prompt(true, DrawingTarget::NewWhiteboardBesidePage);
+        assert!(prompt.contains("whose tag says kind=\"page\". It cannot be changed"));
     }
 
     /// The examples of the prompts draw, with the counts their prose claims: a prompt
@@ -466,6 +541,35 @@ the pictures on it. It cannot be changed by you: only its owner draws on it, in 
         assert_eq!(
             crate::drawing_sentence(&drawing, DrawingTarget::NewWhiteboard, None),
             "Drawing: adds 2 ellipses and an arrow (new whiteboard “Who serves whom”)."
+        );
+
+        let drawing = crate::answer_drawing(PAGE_EXAMPLE).unwrap().unwrap();
+        assert_eq!(drawing.title.as_deref(), Some("Getting started"));
+        assert!(
+            !drawing.has_changes(),
+            "a new whiteboard's drawing only adds"
+        );
+        let mut scene = innerword_board::Scene::empty();
+        let drawn = innerword_board::draw(&mut scene, &drawing, None, &mut making).unwrap();
+        let added: Vec<&str> = drawn.added.iter().map(|e| e.id.as_str()).collect();
+        assert_eq!(added, vec!["sign-up", "verify", "start", "then", "next"]);
+        assert!(drawn.warnings.is_empty(), "{:?}", drawn.warnings);
+        assert_eq!(
+            scene.element("then").unwrap().binding("start"),
+            Some("sign-up")
+        );
+        assert_eq!(
+            scene.element("then").unwrap().binding("end"),
+            Some("verify")
+        );
+        assert_eq!(
+            scene.element("next").unwrap().binding("start"),
+            Some("verify")
+        );
+        assert_eq!(scene.element("next").unwrap().binding("end"), Some("start"));
+        assert_eq!(
+            crate::drawing_sentence(&drawing, DrawingTarget::NewWhiteboardBesidePage, None),
+            "Drawing: adds 3 rectangles and 2 arrows (new whiteboard “Getting started”)."
         );
     }
 }

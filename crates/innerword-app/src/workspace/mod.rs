@@ -1141,9 +1141,9 @@ impl Workspace {
             left_out.push(gpui::Action::name(&ImportPage));
             left_out.push(gpui::Action::name(&NewBoard));
         }
-        // An answer's drawing, only where one can be applied: not over a
-        // page, with nothing open, without a page engine, or on a
-        // whiteboard that cannot be drawn on.
+        // An answer's drawing, only where one can be applied: not with
+        // nothing open, without a page engine, or on a whiteboard that
+        // cannot be drawn on.
         if self.drawing_target_now(cx).0 == innerword_assistant::DrawingTarget::None {
             left_out.push(gpui::Action::name(
                 &innerword_assistant_ui::actions::DrawAnswer,
@@ -1155,11 +1155,14 @@ impl Workspace {
                 Self::board_title_of(command);
             } else if page_open {
                 Self::page_title_of(command);
-            } else if command.action_name()
-                == gpui::Action::name(&innerword_assistant_ui::actions::DrawAnswer)
+            }
+            if !board_open
+                && command.action_name()
+                    == gpui::Action::name(&innerword_assistant_ui::actions::DrawAnswer)
             {
-                // Over a document the drawing makes a new whiteboard: the
-                // palette says so, the list's title names both meanings.
+                // Over a document or a page the drawing makes a new
+                // whiteboard: the palette says so, the list's title names
+                // both meanings.
                 let old = std::mem::replace(
                     &mut command.title,
                     innerword_assistant_ui::NEW_BOARD_FROM_ANSWER_TITLE.into(),

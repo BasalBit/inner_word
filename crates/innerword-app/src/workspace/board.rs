@@ -656,6 +656,31 @@ impl Workspace {
         })
     }
 
+    /// Where the open whiteboard's view is, as its status says (scroll and
+    /// zoom) and the page element's bounds of the last frame (the canvas's
+    /// size): what `innerword_board::reveal` takes.
+    pub fn board_viewport(&self) -> Option<innerword_board::Viewport> {
+        let page = self.page.as_ref()?;
+        let board = self.board()?;
+        let zoom = board.status.zoom;
+        if !(zoom.is_finite() && zoom > 0.0) {
+            return None;
+        }
+        let bounds = page.bounds.get()?;
+        let width = f64::from(f32::from(bounds.size.width));
+        let height = f64::from(f32::from(bounds.size.height));
+        if width <= 0.0 || height <= 0.0 {
+            return None;
+        }
+        Some(innerword_board::Viewport {
+            scroll_x: board.status.scroll_x,
+            scroll_y: board.status.scroll_y,
+            zoom,
+            width,
+            height,
+        })
+    }
+
     /// The scene of the open whiteboard as the app holds it: the newest
     /// post, else the stored scene it descends from (the view's form or the
     /// stored form; both read with `Scene::from_view`).

@@ -85,6 +85,14 @@ fn the_arguments() {
         serde_json::json!({ "fit": true })
     );
     assert_eq!(
+        json(calls::zoom_argument(Zoom::View {
+            zoom: 0.9,
+            scroll_x: -40.0,
+            scroll_y: 12.5
+        })),
+        serde_json::json!({ "to": 0.9, "scrollX": -40.0, "scrollY": 12.5 })
+    );
+    assert_eq!(
         json(calls::search_argument(Some("a \"quoted\"\nline"))),
         serde_json::json!({ "query": "a \"quoted\"\nline" })
     );

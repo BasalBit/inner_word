@@ -91,7 +91,7 @@ use gpui::{
 };
 use innerword_assistant::{
     BackendInfo, Drawing, DrawingProblem, DrawingTarget, ElementNames, Message, MessageId,
-    MessageState, Role, answer_drawing, shown_markdown, without_drawings,
+    MessageState, NamesWhenDrawn, Role, answer_drawing, shown_markdown, without_drawings,
 };
 use innerword_core::Document;
 use innerword_editor::{CompactOptions, ContextMenuRequest, Editor, EditorConfig, EditorEvent};
@@ -449,6 +449,10 @@ pub struct MessageList {
     /// Set by the list when the user scrolled it.
     scrolled: Rc<Cell<bool>>,
     selected: Option<MessageId>,
+    /// The marked message is marked for the writer to see also while the
+    /// keyboard is elsewhere: a command run from outside the chat pointed at
+    /// it ([`MessageList::mark_shown`]). Its key acts on it too.
+    shown: Option<MessageId>,
     selected_example: usize,
     focus_handle: FocusHandle,
     actions: Vec<AnswerAction>,
@@ -480,11 +484,12 @@ impl Focusable for MessageList {
     }
 }
 
-fn fingerprint(markdown: &str, streaming: bool, words: u64) -> u64 {
+fn fingerprint(markdown: &str, streaming: bool, words: u64, drawn_at: Option<i64>) -> u64 {
     let mut hasher = DefaultHasher::new();
     markdown.hash(&mut hasher);
     streaming.hash(&mut hasher);
     words.hash(&mut hasher);
+    drawn_at.hash(&mut hasher);
     hasher.finish()
 }
 
@@ -514,6 +519,7 @@ impl MessageList {
             follow: true,
             scrolled,
             selected: None,
+            shown: None,
             selected_example: 0,
             focus_handle: cx.focus_handle(),
             actions: Vec::new(),
@@ -565,6 +571,9 @@ impl MessageList {
             }
             let added = new_ids.len() - kept.len();
             if added > 0 {
+                // A new message: the mark shown from outside pointed at an
+                // older answer.
+                self.shown = None;
                 self.list.splice(kept.len()..kept.len(), added);
                 // The user's own new message is always brought into view.
                 if messages[kept.len()..]
@@ -576,6 +585,7 @@ impl MessageList {
             }
         } else {
             self.list.reset(new_ids.len());
+            self.shown = None;
             self.follow = true;
             self.scrolled.set(false);
         }
@@ -614,7 +624,13 @@ impl MessageList {
     /// The fingerprint of what the view of `message` shows.
     fn shown_of(&self, message: &Message) -> u64 {
         let words = if self.drawings { self.drawing_words } else { 0 };
-        fingerprint(&message.text, message.is_streaming(), words)
+        // A drawing applied again keeps the names of that press.
+        let drawn_at = if self.drawings {
+            message.drawn_at
+        } else {
+            None
+        };
+        fingerprint(&message.text, message.is_streaming(), words, drawn_at)
     }
 
     /// What the view of `message` is made from.
@@ -627,10 +643,20 @@ impl MessageList {
                 has_text: !message.text.trim().is_empty(),
             };
         }
-        let names = self
+        let live = self
             .element_names
             .as_deref()
             .map(|names| names as &dyn ElementNames);
+        // A drawn answer's line names what it changed and removed as it was when
+        // it was drawn: the whiteboard has none of what it removed since.
+        let drawn = message
+            .drawn_names
+            .as_ref()
+            .map(|kept| NamesWhenDrawn { kept, live });
+        let names = match &drawn {
+            Some(drawn) => Some(drawn as &dyn ElementNames),
+            None => live,
+        };
         let shown = shown_markdown(&message.text, streaming, self.drawing_target, names);
         let drawing = answer_drawing(&message.text);
         let has_text = match &drawing {
@@ -718,6 +744,10 @@ impl MessageList {
             });
         if same {
             self.messages = messages.to_vec();
+            // An answer marked drawn reads with the names kept at the press.
+            for index in 0..self.messages.len() {
+                self.refresh_view(index, cx);
+            }
             cx.notify();
         }
         same
@@ -823,6 +853,7 @@ impl MessageList {
         self.views.clear();
         self.list.reset(0);
         self.selected = None;
+        self.shown = None;
         self.selected_example = 0;
         self.follow = true;
         self.scrolled.set(false);
@@ -963,12 +994,38 @@ impl MessageList {
     /// Marks a message (or none) and brings it into view.
     pub fn select(&mut self, message: Option<MessageId>, cx: &mut Context<Self>) {
         self.selected = message.filter(|id| self.index_of(*id).is_some());
+        if self.shown != self.selected {
+            self.shown = None;
+        }
         if let Some(index) = self.selected.and_then(|id| self.index_of(id)) {
             self.list.scroll_to_reveal_item(index);
             // Marking an older message is scrolling away from the end.
             self.follow = index + 1 == self.messages.len() && self.follow;
         }
         cx.notify();
+    }
+
+    /// Marks `message`, brings it into view and shows the mark while the
+    /// keyboard is elsewhere too: a command run from outside the chat (the
+    /// palette's "Draw answer on whiteboard") says which answer it will act
+    /// on, and the chat's key acts on it, until another message is marked or
+    /// a new one comes. The keyboard does not move.
+    pub fn mark_shown(&mut self, message: MessageId, cx: &mut Context<Self>) {
+        self.select(Some(message), cx);
+        self.shown = self.selected;
+    }
+
+    /// The message marked with [`MessageList::mark_shown`], while it is.
+    pub fn shown(&self) -> Option<MessageId> {
+        self.shown
+    }
+
+    /// The mark of [`MessageList::mark_shown`] is no longer shown without the
+    /// keyboard (the answer it pointed at was acted on).
+    pub fn clear_shown(&mut self, cx: &mut Context<Self>) {
+        if self.shown.take().is_some() {
+            cx.notify();
+        }
     }
 
     fn index_of(&self, id: MessageId) -> Option<usize> {
@@ -1077,7 +1134,7 @@ impl MessageList {
         let marked = if self.contains_focus(window, cx) {
             self.selected.and_then(|id| self.message(id))
         } else {
-            None
+            self.shown.and_then(|id| self.message(id))
         };
         let message = match marked {
             Some(message) => message,
@@ -1358,8 +1415,8 @@ impl MessageList {
             .views
             .get(&id)
             .is_some_and(|view| view.editor.read(cx).is_focused(window));
-        let marked =
-            self.selected == Some(id) && (self.focus_handle.is_focused(window) || text_focused);
+        let marked = self.selected == Some(id)
+            && (self.focus_handle.is_focused(window) || text_focused || self.shown == Some(id));
         let group = SharedString::from(format!("assistant-message-{}", id.0));
         let selector = group.to_string();
         let content = match message.role {

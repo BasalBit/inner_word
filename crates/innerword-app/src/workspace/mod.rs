@@ -130,10 +130,10 @@ use crate::{
 pub use assistant::{library_attachments, library_tool_server};
 pub use assistant_draw::{
     ASK_AGAIN, ASSISTANT_DRAWING_LABEL, BOARD_BUSY, CHANGED_MEANWHILE, CHANGES_A_WHITEBOARD,
-    CHANGES_NOTHING, CLOSED_BEFORE_DRAWN, KEPT_AS_A_VERSION, LOADED_AGAIN, NO_VERSION, NOT_OPENED,
-    NOT_SAVED_FIRST, NOT_UNDONE, ONLY_GONE, OPEN_A_DOCUMENT, OPEN_A_WHITEBOARD, PUT_BESIDE,
-    PUT_IN_VIEW, SHOWN_IN_THE_SIDE_CHAT, drew_sentence, gone_sentence, made_sentence,
-    new_board_names_missing, origin_note,
+    CHANGES_NOTHING, CLOSED_BEFORE_DRAWN, EXCALIDRAW_ISLANDS, KEPT_AS_A_VERSION, LOADED_AGAIN,
+    NO_VERSION, NOT_OPENED, NOT_SAVED_FIRST, NOT_UNDONE, ONLY_GONE, OPEN_A_DOCUMENT,
+    OPEN_A_WHITEBOARD, PUT_BESIDE, PUT_IN_VIEW, SHOWN_IN_THE_SIDE_CHAT, drew_sentence,
+    gone_sentence, made_sentence, new_board_names_missing, origin_note,
 };
 pub(crate) use board::post_board_message;
 pub use board::{
@@ -1715,6 +1715,7 @@ impl Workspace {
                 }
             }
             LibraryEvent::DocumentTrashed(id) => {
+                self.back_toast_follows(None, &[*id], cx);
                 if self.open_document_id() == Some(*id) {
                     self.open_document_left(window, cx);
                 }
@@ -1723,6 +1724,7 @@ impl Workspace {
                 }
             }
             LibraryEvent::FolderTrashed { documents, .. } => {
+                self.back_toast_follows(None, documents, cx);
                 if self
                     .open_document_id()
                     .is_some_and(|open| documents.contains(&open))
@@ -1737,6 +1739,7 @@ impl Workspace {
                 }
             }
             LibraryEvent::DocumentPurged(id) => {
+                self.back_toast_follows(None, &[*id], cx);
                 let key = keys::custom_title(*id);
                 self.library
                     .update(cx, |library, cx| library.remove_setting(&key, cx))

@@ -3219,6 +3219,51 @@ mod drawings {
         assert_eq!(desk.stored_ids(), ["api", "api-label"]);
     }
 
+    /// A drawn answer's line reads as it did when it was drawn: what it
+    /// removed is named as it was, and never said to be missing (the
+    /// acceptance run's "removes old; the whiteboard has no old").
+    #[gpui::test]
+    fn a_drawn_answers_line_reads_as_it_did_when_drawn(cx: &mut TestAppContext) {
+        let mut desk = desk(cx);
+        let mut elements = api();
+        elements.extend(shape(
+            "rectangle",
+            "old",
+            (420.0, 300.0, 120.0, 60.0),
+            "a1",
+            Some("Old note"),
+        ));
+        desk.pages.draw(&scene(&elements));
+        settle(desk.cx);
+        let answer = desk.ask(&answer_with(
+            r##"{"update": [{"id": "api", "backgroundColor": "#a5d8ff"}], "remove": ["old"]}"##,
+        ));
+        let before = desk.shown(answer);
+        assert!(
+            before.contains("removes the rectangle “Old note”"),
+            "{before}"
+        );
+        click(&format!("assistant-action-draw-{}", answer.0), desk.cx);
+        settle(desk.cx);
+        assert!(!desk.stored_ids().contains(&"old".to_string()));
+        assert!(desk.drawn(answer));
+        let after = desk.shown(answer);
+        assert!(
+            after.contains("removes the rectangle “Old note”"),
+            "{after}"
+        );
+        assert!(!after.contains("has no"), "{after}");
+        // The names are kept with the stored conversation too.
+        let stored_answer = desk.library.read_with(desk.cx, |library, _| {
+            conversations::load(library, desk.board)
+                .last_answer()
+                .cloned()
+                .unwrap()
+        });
+        let kept = stored_answer.drawn_names.expect("names kept");
+        assert_eq!(kept["old"].text.as_deref(), Some("Old note"));
+    }
+
     #[gpui::test]
     fn the_keyboard_moves_only_when_the_canvas_has_the_drawing(cx: &mut TestAppContext) {
         let mut desk = desk(cx);
@@ -3552,8 +3597,92 @@ mod drawings {
         assert!(said.ends_with(PUT_IN_VIEW), "{said}");
         assert!(
             !desk.pages.board_calls().contains(&"zoom fit".to_string()),
-            "it was seen: no zoom"
+            "no fit of the whole drawing"
         );
+    }
+
+    /// The zoom call that brings a drawing into view: `(zoom, scroll_x,
+    /// scroll_y)`, after the adopt.
+    fn revealed(desk: &mut Desk<'_>) -> Option<(f64, f64, f64)> {
+        let calls = desk.pages.board_calls();
+        let adopt = calls.iter().position(|call| call == "adopt")?;
+        let call = calls[adopt..]
+            .iter()
+            .find(|call| call.starts_with("zoom to ") && call.contains(" at ("))?;
+        let numbers: Vec<f64> = call
+            .trim_start_matches("zoom to ")
+            .replace([' ', '(', ')', ','], " ")
+            .split_whitespace()
+            .filter_map(|word| word.parse().ok())
+            .collect();
+        Some((numbers[0], numbers[1], numbers[2]))
+    }
+
+    /// Whether the elements `ids` of the stored scene are seen whole in the
+    /// view as it is now: inside the canvas less Excalidraw's islands.
+    fn seen_whole(desk: &mut Desk<'_>, ids: &[&str]) -> bool {
+        let scene = stored(&desk.library, desk.board, desk.cx);
+        let ids: Vec<String> = ids.iter().map(|id| id.to_string()).collect();
+        let group = innerword_board::bounds_of_ids(&scene, &ids).expect("drawn");
+        let view = desk
+            .workspace
+            .read_with(desk.cx, |w, _| w.board_viewport())
+            .expect("a view");
+        innerword_board::reveal(group, view, innerword_app::workspace::EXCALIDRAW_ISLANDS).is_none()
+    }
+
+    /// A drawing placed as written (it names what is there) that lands
+    /// partly under the side bar is scrolled into view, at the same zoom,
+    /// and its elements stay where the answer put them.
+    #[gpui::test]
+    fn a_drawing_partly_out_of_view_is_scrolled_into_view(cx: &mut TestAppContext) {
+        let mut desk = desk(cx);
+        // The side chat open first: the canvas is as wide as it will be.
+        desk.cx.simulate_keystrokes("cmd-3");
+        desk.cx.run_until_parked();
+        look_at(&mut desk, 1.0, 0.0, 0.0);
+        let width = desk
+            .workspace
+            .read_with(desk.cx, |w, _| w.board_viewport())
+            .expect("a view")
+            .width;
+        let x = (width - 80.0).round();
+        let drawing = format!(
+            r#"{{"add": [
+  {{"type": "ellipse", "id": "db", "x": {x}, "y": 80, "width": 160, "height": 90, "label": {{"text": "Postgres"}}}},
+  {{"type": "arrow", "id": "reads", "x": 300, "y": 125, "start": {{"id": "api"}}, "end": {{"id": "db"}}}}]}}"#
+        );
+        desk.ask(&answer_with(&drawing));
+        assert!(revealed(&mut desk).is_none());
+        desk.cx.simulate_keystrokes("cmd-shift-d");
+        desk.cx.run_until_parked();
+        let db = stored(&desk.library, desk.board, desk.cx)
+            .element("db")
+            .map(|db| db.x())
+            .expect("drawn");
+        assert_eq!(db, x, "the elements are not moved");
+        let (zoom, scroll_x, scroll_y) =
+            revealed(&mut desk).expect("the view is brought to the drawing");
+        assert_eq!(zoom, 1.0, "the zoom is kept");
+        assert!(scroll_x < 0.0, "scrolled to the right: {scroll_x}");
+        assert_eq!(scroll_y, 0.0);
+        assert!(seen_whole(&mut desk, &["db", "reads"]));
+        // The toast and its Undo are as they were.
+        assert!(desk.toast_starting("Drew on").is_some());
+    }
+
+    /// What is seen whole already moves nothing.
+    #[gpui::test]
+    fn a_drawing_seen_whole_moves_no_view(cx: &mut TestAppContext) {
+        let mut desk = desk(cx);
+        look_at(&mut desk, 1.0, 0.0, 0.0);
+        desk.ask(&answer_with(
+            r#"{"add": [{"type": "rectangle", "id": "cache", "x": 100, "y": 260, "width": 160, "height": 80}], "update": [{"id": "api", "dx": 10}]}"#,
+        ));
+        desk.cx.simulate_keystrokes("cmd-shift-d");
+        desk.cx.run_until_parked();
+        assert!(seen_whole(&mut desk, &["cache", "api"]));
+        assert_eq!(revealed(&mut desk), None, "{:?}", desk.pages.board_calls());
     }
 
     #[gpui::test]
@@ -3571,13 +3700,10 @@ mod drawings {
         assert!(big.x() >= 300.0 + 100.0, "beside the drawing: {}", big.x());
         let said = desk.toast_starting("Drew on").unwrap();
         assert!(said.ends_with(PUT_BESIDE), "{said}");
-        let calls = desk.pages.board_calls();
-        let adopt = calls.iter().position(|call| call == "adopt").unwrap();
-        let fit = calls
-            .iter()
-            .position(|call| call == "zoom fit")
-            .expect("the view zooms to fit");
-        assert!(adopt < fit, "after the adopt: {calls:?}");
+        // The view zooms out (never in) until the drawing is seen whole.
+        let (zoom, _, _) = revealed(&mut desk).expect("the view zooms to fit");
+        assert!(zoom < 30.0, "{zoom}");
+        assert!(seen_whole(&mut desk, &["big"]));
     }
 
     #[gpui::test]
@@ -3820,6 +3946,18 @@ mod drawings {
             .side()
             .read_with(desk.cx, |panel, cx| panel.messages().read(cx).selected());
         assert_eq!(marked, Some(answer));
+        // Marked where the writer sees it, with the keyboard still on the canvas.
+        let mark = desk
+            .cx
+            .debug_bounds("assistant-message-mark")
+            .expect("the answer's mark is drawn");
+        let row = desk
+            .cx
+            .debug_bounds(Box::leak(
+                format!("assistant-message-{}", answer.0).into_boxed_str(),
+            ))
+            .expect("the answer is drawn");
+        assert!(row.contains(&mark.center()), "{mark:?} in {row:?}");
         assert!(
             desk.has_toast(SHOWN_IN_THE_SIDE_CHAT),
             "{:?}",

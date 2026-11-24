@@ -84,6 +84,18 @@ pub const LOADED_AGAIN: &str = "The whiteboard was loaded again to show it.";
 pub const SHOWN_IN_THE_SIDE_CHAT: &str =
     "The drawing is shown in the side chat. Run the command again to draw it.";
 
+/// What of a whiteboard's canvas Excalidraw 0.18.1's own islands cover, in
+/// CSS pixels from each edge, as the app's bundle lays them out (measured in
+/// the acceptance run's window, with a little room): the tool bar at the
+/// top, the side bar of the glue at the right, the zoom, undo and menu at
+/// the bottom. An answer's drawing under them is brought into view.
+pub const EXCALIDRAW_ISLANDS: innerword_board::Insets = innerword_board::Insets {
+    top: 72.0,
+    right: 52.0,
+    bottom: 64.0,
+    left: 12.0,
+};
+
 /// How long the toast of a drawing stays.
 const DRAWN_TOAST: Duration = Duration::from_secs(8);
 
@@ -495,9 +507,15 @@ impl Workspace {
             refuse(self, words, cx);
             return;
         }
-        // From here the library has the drawing, whatever the view does.
+        // From here the library has the drawing, whatever the view does. Its
+        // line keeps the names it gave what it changed and removed, as the
+        // whiteboard had them before it was drawn.
         if let Some(side) = self.assistant.side.clone() {
-            side.update(cx, |side, cx| side.mark_drawn(message, cx));
+            let names = innerword_assistant::names_the_drawing_uses(
+                drawing,
+                &super::assistant::SceneNames(super::assistant::names_of(&before)),
+            );
+            side.update(cx, |side, cx| side.mark_drawn(message, names, cx));
         }
         // An agents' run on this whiteboard offers no Undo from here.
         self.writer_changed_the_board(id, cx);
@@ -524,7 +542,14 @@ impl Workspace {
             sent: Instant::now(),
             keyboard_was_in_chat,
         };
-        let zoom_to_fit = view.is_some() && drawn.placement.is_some_and(|p| !p.in_view);
+        // What the drawing added and changed is brought into view once the
+        // canvas has it, when Excalidraw's toolbars or the edge of the canvas
+        // hide some of it: scrolled at the same zoom, zoomed out only when it
+        // cannot be seen whole at that zoom. The elements stay where they are.
+        let reveal = self.board_viewport().and_then(|viewport| {
+            let group = innerword_board::bounds_of_ids(&after, &drawn.shown_ids())?;
+            innerword_board::reveal(group, viewport, EXCALIDRAW_ISLANDS)
+        });
         let seq = self.adopt_stored_scene(id, &prepared.scene, true, cx);
         report.window = report.sent.elapsed();
         if let Some(board) = self.board_of_mut(id) {
@@ -540,9 +565,13 @@ impl Workspace {
         if let Some(board) = self.board_of_mut(id) {
             board.assistant_drawing = Some(PendingDrawing { seq, done });
         }
-        if zoom_to_fit {
+        if let Some(view) = reveal {
             // The page runs its calls in order: after the adopt.
-            self.zoom_board(calls::Zoom::Fit);
+            self.zoom_board(calls::Zoom::View {
+                zoom: view.zoom,
+                scroll_x: view.scroll_x,
+                scroll_y: view.scroll_y,
+            });
         }
         cx.spawn_in(window, async move |this, cx| {
             let answered = answer.await;
@@ -809,7 +838,9 @@ impl Workspace {
             .ok();
         // The answer is marked before the chat switches to the whiteboard's.
         if let Some(side) = self.assistant.side.clone() {
-            side.update(cx, |side, cx| side.mark_drawn(message, cx));
+            side.update(cx, |side, cx| {
+                side.mark_drawn(message, Default::default(), cx)
+            });
         }
         self.assistant
             .origins
@@ -850,8 +881,35 @@ impl Workspace {
                         })
                         .ok();
                 });
-        self.show_toast(toast, cx);
+        let toast = self
+            .toast_layer
+            .update(cx, |layer, cx| layer.push(toast, cx));
+        self.assistant.back_toast = Some(super::assistant::BackToast {
+            toast,
+            document,
+            board: id,
+        });
         Some(id)
+    }
+
+    /// The toast with "Back to “…”" goes when it has nothing more to do:
+    /// `opened` is the item opened now (its document: the writer went back
+    /// another way), `gone` the items trashed or deleted (its whiteboard).
+    pub(crate) fn back_toast_follows(
+        &mut self,
+        opened: Option<DocumentId>,
+        gone: &[DocumentId],
+        cx: &mut Context<Self>,
+    ) {
+        let Some(back) = self.assistant.back_toast else {
+            return;
+        };
+        if opened != Some(back.document) && !gone.contains(&back.board) {
+            return;
+        }
+        self.assistant.back_toast = None;
+        self.toast_layer
+            .update(cx, |layer, cx| layer.dismiss(back.toast, cx));
     }
 }
 

@@ -229,6 +229,9 @@ impl Workspace {
         if self.open_document_id() != Some(id) && !self.load_into_editor(id, window, cx) {
             return false;
         }
+        // Back at the document an answer made a whiteboard from: its toast's
+        // "Back to" has nothing more to do.
+        self.back_toast_follows(Some(id), &[], cx);
         if focus_editor {
             self.focus_editor(window, cx);
         }

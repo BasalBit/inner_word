@@ -51,8 +51,8 @@ mod unchanged;
 
 pub use delta::{Delta, Merged, merge};
 pub use drawing::{
-    DRAWABLE_TYPES, DrawError, Drawing, DrawingError, Drawn, MAX_TITLE_CHARS, PLACE_GAP,
-    PLACE_MARGIN, Placement, draw, place,
+    DRAWABLE_TYPES, DrawError, Drawing, DrawingError, Drawn, Insets, MAX_TITLE_CHARS, PLACE_GAP,
+    PLACE_MARGIN, Placement, REVEAL_MARGIN, Viewport, bounds_of_ids, draw, place, reveal,
 };
 pub use file_hex::FileHex;
 pub use json::well_formed_json;

@@ -105,15 +105,29 @@ pub enum Zoom {
     To(f64),
     /// The whole drawing in view (as Excalidraw's `shift-1`).
     Fit,
+    /// A zoom and a scroll together: Excalidraw's `zoom`, `scrollX` and `scrollY` (a scene
+    /// point `(x, y)` is drawn at `((x + scroll_x) * zoom, (y + scroll_y) * zoom)`). The app
+    /// brings an answer's drawing into view with it (`innerword_board::reveal`).
+    View {
+        zoom: f64,
+        scroll_x: f64,
+        scroll_y: f64,
+    },
 }
 
-/// `{"in": true}`, `{"out": true}`, `{"to": 1.25}` or `{"fit": true}`.
+/// `{"in": true}`, `{"out": true}`, `{"to": 1.25}`, `{"fit": true}`, or `{"to": 0.9,
+/// "scrollX": -40, "scrollY": 12}`.
 pub fn zoom_argument(zoom: Zoom) -> String {
     match zoom {
         Zoom::In => json!({ "in": true }),
         Zoom::Out => json!({ "out": true }),
         Zoom::To(value) => json!({ "to": value }),
         Zoom::Fit => json!({ "fit": true }),
+        Zoom::View {
+            zoom,
+            scroll_x,
+            scroll_y,
+        } => json!({ "to": zoom, "scrollX": scroll_x, "scrollY": scroll_y }),
     }
     .to_string()
 }

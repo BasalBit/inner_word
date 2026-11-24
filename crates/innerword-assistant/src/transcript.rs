@@ -8,6 +8,8 @@
 //! [`Transcript::begin_answer`] and filled by [`Transcript::apply`] from the events of the
 //! conversation. [`ChatSession`](crate::ChatSession) does all three; a view only reads.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 use crate::backend::{
@@ -15,7 +17,7 @@ use crate::backend::{
     TurnEnd, TurnId, Usage,
 };
 use crate::drawing::{
-    answer_drawing, drawing_blocks, drawing_history_note, read_block, replace_blocks,
+    ElementName, answer_drawing, drawing_blocks, drawing_history_note, read_block, replace_blocks,
 };
 use crate::time::now_millis;
 
@@ -134,6 +136,13 @@ pub struct Message {
     /// since 1970. Kept in the stored conversation, so "Draw Again" outlasts a relaunch.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub drawn_at: Option<i64>,
+    /// An answer whose drawing was applied: the names its line gave the elements on the
+    /// whiteboard it changed and removed, when it was applied
+    /// ([`crate::names_the_drawing_uses`]). The line of a drawn answer reads with them,
+    /// so it says what it did, not what the whiteboard lacks since. Kept in the stored
+    /// conversation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drawn_names: Option<BTreeMap<String, ElementName>>,
     /// An answer in this run of the app: the turn whose events fill it.
     #[serde(skip)]
     pub turn: Option<TurnId>,
@@ -281,6 +290,7 @@ impl Transcript {
             usage: None,
             at: now_millis(),
             drawn_at: None,
+            drawn_names: None,
             turn: None,
             status: None,
         });
@@ -304,6 +314,7 @@ impl Transcript {
             usage: None,
             at: now_millis(),
             drawn_at: None,
+            drawn_names: None,
             turn: Some(turn),
             status: None,
         });
@@ -471,9 +482,15 @@ impl Transcript {
         history
     }
 
-    /// Records that answer `id`'s drawing was applied at `at` (milliseconds since 1970).
+    /// Records that answer `id`'s drawing was applied at `at` (milliseconds since 1970),
+    /// with the names its line gave what it changed and removed then (`names`).
     /// Returns whether there was such an answer.
-    pub fn mark_drawn(&mut self, id: MessageId, at: i64) -> bool {
+    pub fn mark_drawn(
+        &mut self,
+        id: MessageId,
+        at: i64,
+        names: BTreeMap<String, ElementName>,
+    ) -> bool {
         match self
             .messages
             .iter_mut()
@@ -481,6 +498,7 @@ impl Transcript {
         {
             Some(message) => {
                 message.drawn_at = Some(at);
+                message.drawn_names = Some(names);
                 true
             }
             None => false,

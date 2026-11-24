@@ -7,9 +7,9 @@ use std::sync::Arc;
 
 use innerword_assistant::{
     ChatSession, Drawing, DrawingError, DrawingProblem, DrawingTarget, ElementName, ElementNames,
-    FakeBackend, OpenDocument, OpenKind, Role, Transcript, answer_drawing, drawing_blocks,
-    drawing_fits, drawing_history_note, drawing_sentence, escape_markdown, shown_markdown,
-    side_system_prompt, without_drawings,
+    FakeBackend, NamesWhenDrawn, OpenDocument, OpenKind, Role, Transcript, answer_drawing,
+    drawing_blocks, drawing_fits, drawing_history_note, drawing_sentence, escape_markdown,
+    names_the_drawing_uses, shown_markdown, side_system_prompt, without_drawings,
 };
 
 const BLOCK: &str = r##"{"add": [{"type": "ellipse", "id": "db", "x": 420, "y": 80}, {"type": "arrow", "id": "reads", "x": 300, "y": 125, "start": {"id": "api"}, "end": {"id": "db"}}], "update": [{"id": "api", "backgroundColor": "#a5d8ff"}]}"##;
@@ -661,8 +661,16 @@ fn an_answer_drawn_is_recorded_and_kept() {
     let question = chat.ask_side("Draw it.", Some(&whiteboard()));
     pump(&mut chat);
     let answer = chat.transcript().last_answer().unwrap().id;
-    assert!(!chat.mark_drawn(question, 5), "a question is no answer");
-    assert!(chat.mark_drawn(answer, 1_795_000_000_000));
+    assert!(
+        !chat.mark_drawn(question, 5, Default::default()),
+        "a question is no answer"
+    );
+    let kept = names_the_drawing_uses(&drawing(BLOCK), &names());
+    assert!(chat.mark_drawn(answer, 1_795_000_000_000, kept.clone()));
+    assert_eq!(
+        chat.transcript().message(answer).unwrap().drawn_names,
+        Some(kept.clone())
+    );
     assert_eq!(
         chat.transcript().message(answer).unwrap().drawn_at,
         Some(1_795_000_000_000)
@@ -675,8 +683,10 @@ fn an_answer_drawn_is_recorded_and_kept() {
         Some(1_795_000_000_000)
     );
     assert_eq!(back.message(answer).unwrap().role, Role::Assistant);
+    assert_eq!(back.message(answer).unwrap().drawn_names, Some(kept));
     // A message never drawn writes no field, and an old transcript reads.
     assert_eq!(back.message(question).unwrap().drawn_at, None);
+    assert_eq!(back.message(question).unwrap().drawn_names, None);
     let old = r#"{"messages":[{"id":1,"role":"user","text":"Hi","state":"done"}]}"#;
     assert_eq!(
         Transcript::from_json(old).unwrap().messages[0].drawn_at,
@@ -767,5 +777,54 @@ fn a_chat_with_a_target_is_told_how_to_draw() {
             .unwrap()
             .system_prompt
             .contains("Drawing a new whiteboard.")
+    );
+}
+
+/// A drawn answer's line reads as it did when it was drawn: the element it removed is
+/// named as it was, and is never said to be missing (section 14).
+#[test]
+fn a_drawn_answers_line_keeps_the_names_it_had_when_drawn() {
+    let body = r##"{"update": [{"id": "api", "backgroundColor": "#a5d8ff"}], "remove": ["old"]}"##;
+    let mut before = names();
+    before.0.insert(
+        "old",
+        ElementName {
+            kind: "text".into(),
+            text: Some("Old note".into()),
+        },
+    );
+    let text = answer("Done.", body, "");
+    let shown = |names: &dyn ElementNames| {
+        shown_markdown(&text, false, DrawingTarget::OpenWhiteboard, Some(names)).into_owned()
+    };
+    let as_drawn = "*Drawing: changes the rectangle “API”; removes the text “Old note”.*";
+    assert!(shown(&before).contains(as_drawn), "{}", shown(&before));
+    // After the drawing the whiteboard has no "old": named live, the line accuses itself.
+    let after = names();
+    assert!(shown(&after).contains("the whiteboard has no old"));
+    // With the names kept at the press it reads as it did.
+    let kept = names_the_drawing_uses(&drawing(body), &before);
+    assert_eq!(
+        kept.keys().map(String::as_str).collect::<Vec<_>>(),
+        ["api", "old"]
+    );
+    let drawn = NamesWhenDrawn {
+        kept: &kept,
+        live: Some(&after),
+    };
+    let line = shown(&drawn);
+    assert!(line.contains(as_drawn), "{line}");
+    assert!(!line.contains("has no"), "{line}");
+    // An id that was not there when it was drawn is still said to be missing.
+    let body = r#"{"remove": ["old", "zz"]}"#;
+    let kept = names_the_drawing_uses(&drawing(body), &before);
+    let drawn = NamesWhenDrawn {
+        kept: &kept,
+        live: Some(&after),
+    };
+    let line = drawing_sentence(&drawing(body), DrawingTarget::OpenWhiteboard, Some(&drawn));
+    assert_eq!(
+        line,
+        "Drawing: removes the text “Old note” and zz; the whiteboard has no zz."
     );
 }

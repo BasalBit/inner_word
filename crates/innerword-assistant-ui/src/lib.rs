@@ -170,7 +170,7 @@
 //! });
 //! // When that changes while it stays open, and after the host drew an answer:
 //! panel.update(cx, |panel, cx| panel.set_drawing_target(target, why_not, cx));
-//! panel.update(cx, |panel, cx| panel.mark_drawn(message, cx));
+//! panel.update(cx, |panel, cx| panel.mark_drawn(message, names, cx));
 //! // When the title of the open document changes:
 //! panel.update(cx, |panel, cx| panel.set_document_title(title, cx));
 //! // When the selection of the text changes, or the document becomes read-only:
@@ -248,7 +248,7 @@ pub use notice::{Notice, NoticeKind, NoticeRow, notice_row};
 pub use panel::{
     ACTION_COPY, ACTION_DRAW, ACTION_INSERT, ACTION_REPLACE, ApplyKind, AssistantPanel,
     AssistantPanelEvent, AssistantPanelOptions, DRAW_AGAIN_WITHIN, DRAWING_UNAVAILABLE,
-    DRAWN_ALREADY, DocumentRef, HeaderControl, MADE_ALREADY, NO_ANSWER_YET, NO_DRAWING,
+    DRAWN_ALREADY, DocumentRef, HeaderControl, ItemKind, MADE_ALREADY, NO_ANSWER_YET, NO_DRAWING,
     ONLY_A_DRAWING, PanelArea, PanelNotice, STILL_WRITTEN,
     context::{ContextPicker, ContextPickerDelegate},
 };

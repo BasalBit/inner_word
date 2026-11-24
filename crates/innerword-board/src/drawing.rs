@@ -547,6 +547,19 @@ pub struct Drawn {
 }
 
 impl Drawn {
+    /// The elements the drawing put on the whiteboard or changed there (labels and
+    /// followers included), each once: what the writer is to see after it (section 14).
+    pub fn shown_ids(&self) -> Vec<String> {
+        let mut seen: HashSet<&str> = HashSet::new();
+        self.added
+            .iter()
+            .flat_map(|e| std::iter::once(&e.id).chain(e.with.iter()))
+            .chain(self.changed.iter())
+            .filter(|id| seen.insert(id.as_str()))
+            .cloned()
+            .collect()
+    }
+
     /// Whether the scene is as it was: nothing added, every change left out (it set what
     /// its element had) and every removal gone already. Then [`draw`] left the scene
     /// untouched, and the caller keeps no version, saves nothing and adopts nothing.
@@ -1099,4 +1112,111 @@ pub fn place(group: Bounds, occupied: &[Bounds], view: Option<Bounds>) -> Placem
         Some(drawn) => at(drawn[2] + PLACE_GAP, drawn[1]),
         None => at(group.x, group.y),
     }
+}
+
+// ----- bringing a drawing into view -----------------------------------------------------
+
+/// Where the whiteboard's view is: Excalidraw's scroll and zoom, and the size of its canvas
+/// in CSS pixels. A scene point `(x, y)` is drawn at `((x + scroll_x) * zoom, (y +
+/// scroll_y) * zoom)` of the canvas.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Viewport {
+    pub scroll_x: f64,
+    pub scroll_y: f64,
+    pub zoom: f64,
+    pub width: f64,
+    pub height: f64,
+}
+
+/// What of the canvas Excalidraw's own toolbars and islands cover, in CSS pixels from
+/// each edge: what is under them is not seen.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Insets {
+    pub top: f64,
+    pub right: f64,
+    pub bottom: f64,
+    pub left: f64,
+}
+
+/// The room [`reveal`] keeps between what it brings into view and the edges of what is
+/// seen, in CSS pixels.
+pub const REVEAL_MARGIN: f64 = 24.0;
+/// The smallest zoom [`reveal`] goes to (Excalidraw's own).
+const MIN_ZOOM: f64 = 0.1;
+
+/// The bounds of the elements of `scene` named by `ids` (rotation included), together.
+pub fn bounds_of_ids(scene: &Scene, ids: &[String]) -> Option<Bounds> {
+    let wanted: HashSet<&str> = ids.iter().map(String::as_str).collect();
+    union(
+        scene
+            .elements()
+            .iter()
+            .filter(|e| wanted.contains(e.id()))
+            .filter_map(element_bounds),
+    )
+    .map(bounds_of)
+}
+
+/// Where the view goes so that `group` (scene coordinates) is seen whole, in the canvas of
+/// `view` less `insets` (section 14 of `docs/assistant-draws-design.md`); `None` when it is
+/// seen whole already, or the canvas has no room. The zoom is kept, and the view scrolls
+/// as little as brings `group` in, `REVEAL_MARGIN` from the edges; only a group that
+/// cannot be seen whole at the zoom makes it smaller (never larger), to the zoom at which
+/// it fits, centred. The elements never move.
+pub fn reveal(group: Bounds, view: Viewport, insets: Insets) -> Option<Viewport> {
+    let z = view.zoom;
+    if !(z.is_finite() && z > 0.0) {
+        return None;
+    }
+    let (left, top) = (insets.left, insets.top);
+    let (right, bottom) = (view.width - insets.right, view.height - insets.bottom);
+    let (room_w, room_h) = (right - left, bottom - top);
+    if !(room_w > 0.0 && room_h > 0.0) {
+        return None;
+    }
+    let (w, h) = (group.width.max(0.0), group.height.max(0.0));
+    let screen = |x: f64, y: f64| ((x + view.scroll_x) * z, (y + view.scroll_y) * z);
+    let (x0, y0) = screen(group.x, group.y);
+    let (x1, y1) = screen(group.x + w, group.y + h);
+    let seen = |a: f64, b: f64| a >= b - 0.5;
+    if seen(x0, left) && seen(right, x1) && seen(y0, top) && seen(bottom, y1) {
+        return None;
+    }
+    let m = REVEAL_MARGIN.min(room_w / 4.0).min(room_h / 4.0);
+    let (fit_w, fit_h) = (room_w - 2.0 * m, room_h - 2.0 * m);
+    if w * z <= fit_w && h * z <= fit_h {
+        // One axis at a time, as little as brings it in.
+        let shift = |start: f64, end: f64, low: f64, high: f64| {
+            if start < low - 0.5 {
+                low + m - start
+            } else if end > high + 0.5 {
+                high - m - end
+            } else {
+                0.0
+            }
+        };
+        let dx = shift(x0, x1, left, right);
+        let dy = shift(y0, y1, top, bottom);
+        return Some(Viewport {
+            scroll_x: view.scroll_x + dx / z,
+            scroll_y: view.scroll_y + dy / z,
+            ..view
+        });
+    }
+    let fit = |room: f64, size: f64| {
+        if size > 0.0 {
+            room / size
+        } else {
+            f64::INFINITY
+        }
+    };
+    let zoom = fit(fit_w, w).min(fit(fit_h, h)).min(z).max(MIN_ZOOM);
+    // Centred in what is seen.
+    let (cx, cy) = (left + room_w / 2.0, top + room_h / 2.0);
+    Some(Viewport {
+        scroll_x: cx / zoom - (group.x + w / 2.0),
+        scroll_y: cy / zoom - (group.y + h / 2.0),
+        zoom,
+        ..view
+    })
 }

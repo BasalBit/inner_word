@@ -123,10 +123,25 @@ pub const MADE_ALREADY: &str =
 /// drawing and nothing else.
 pub const ONLY_A_DRAWING: &str = "The answer has nothing but a drawing.";
 
+/// What kind of item is open beside the side chat: what its empty state and
+/// its composer's placeholder call it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ItemKind {
+    /// A document of text.
+    #[default]
+    Document,
+    /// A page: a web page kept in the library.
+    Page,
+    /// A whiteboard.
+    Whiteboard,
+}
+
 /// The document that is open beside the side chat: whose conversation is
 /// shown, and what its chip says.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DocumentRef {
+    /// What kind of item it is (a document unless told).
+    pub kind: ItemKind,
     /// Its id in the library. Each id has a conversation of its own; a
     /// document without one (`None`) shares one.
     pub id: Option<i64>,
@@ -147,6 +162,7 @@ impl DocumentRef {
     /// A document of the library.
     pub fn new(id: i64, title: impl Into<String>) -> Self {
         Self {
+            kind: ItemKind::Document,
             id: Some(id),
             title: title.into(),
             drawing_target: DrawingTarget::None,
@@ -160,6 +176,12 @@ impl DocumentRef {
     pub fn with_drawing(mut self, target: DrawingTarget, why_not: Option<SharedString>) -> Self {
         self.drawing_target = target;
         self.drawing_unavailable = why_not;
+        self
+    }
+
+    /// The item is a page or a whiteboard.
+    pub fn with_kind(mut self, kind: ItemKind) -> Self {
+        self.kind = kind;
         self
     }
 
@@ -1399,12 +1421,18 @@ impl AssistantPanel {
     }
 
     /// The answer [`DrawAnswer`]'s key would draw now: the marked answer
-    /// while the keyboard is in the message list, else the latest answer.
+    /// while the keyboard is in the message list (or while the mark is shown
+    /// from outside, [`MessageList::mark_shown`]), else the latest answer.
     pub fn draw_target(&self, window: &Window, cx: &App) -> Option<MessageId> {
         let list = self.messages.read(cx);
-        if list.contains_focus(window, cx)
-            && let Some(marked) = list.selected()
-        {
+        // The marked answer while the keyboard is in the list, or while the
+        // mark is shown from outside (the palette's first run).
+        let marked = if list.contains_focus(window, cx) {
+            list.selected()
+        } else {
+            list.shown()
+        };
+        if let Some(marked) = marked {
             return list
                 .message(marked)
                 .filter(|message| message.role == Role::Assistant)
@@ -1443,27 +1471,43 @@ impl AssistantPanel {
     }
 
     /// Marks answer `message` in the message list (as `up` / `down` would)
-    /// and scrolls it into view, without taking the keyboard.
+    /// and scrolls it into view, without taking the keyboard; the mark is
+    /// drawn while the keyboard is elsewhere too, and the chat's key acts on
+    /// that answer ([`MessageList::mark_shown`]).
     pub fn show_answer(&mut self, message: MessageId, cx: &mut Context<Self>) {
         self.messages
-            .update(cx, |list, cx| list.select(Some(message), cx));
+            .update(cx, |list, cx| list.mark_shown(message, cx));
         cx.notify();
     }
 
     /// Records that answer `message`'s drawing was applied (its button reads
     /// "Draw Again" from now on) and reports the conversation
     /// ([`AssistantPanelEvent::TranscriptChanged`]), so that it is stored.
-    pub fn mark_drawn(&mut self, message: MessageId, cx: &mut Context<Self>) {
+    ///
+    /// `names` are the names the line gave what the drawing changed and
+    /// removed, as the whiteboard had them before it was drawn
+    /// ([`innerword_assistant::names_the_drawing_uses`]): the line of a drawn
+    /// answer keeps them (empty for a new whiteboard, which had nothing).
+    pub fn mark_drawn(
+        &mut self,
+        message: MessageId,
+        names: std::collections::BTreeMap<String, innerword_assistant::ElementName>,
+        cx: &mut Context<Self>,
+    ) {
         if !self
             .chat
             .session
-            .mark_drawn(message, innerword_assistant::time::now_millis())
+            .mark_drawn(message, innerword_assistant::time::now_millis(), names)
         {
             return;
         }
         let messages = self.chat.session.transcript().messages.clone();
         self.messages.update(cx, |list, cx| {
             list.update_in_place(&messages, cx);
+            // The answer the palette pointed at was drawn.
+            if list.shown() == Some(message) {
+                list.clear_shown(cx);
+            }
         });
         self.report_transcript(cx);
         cx.notify();
@@ -1575,14 +1619,21 @@ impl AssistantPanel {
     /// What an empty conversation shows, and the composer's placeholder, for
     /// the open item.
     fn sync_empty_state(&mut self, cx: &mut Context<Self>) {
-        let whiteboard = self.drawing_target() == DrawingTarget::OpenWhiteboard;
+        let kind = match &self.document {
+            // A whiteboard is one also where its host did not say so.
+            Some(_) if self.drawing_target() == DrawingTarget::OpenWhiteboard => {
+                ItemKind::Whiteboard
+            }
+            Some(document) => document.kind,
+            None => ItemKind::Document,
+        };
         let note = self
             .document
             .as_ref()
             .and_then(|document| document.origin_note.clone())
             .unwrap_or_default();
-        let empty = match (&self.document, whiteboard) {
-            (Some(_), true) => EmptyState {
+        let empty = match (&self.document, kind) {
+            (Some(_), ItemKind::Whiteboard) => EmptyState {
                 title: "Ask about this whiteboard".into(),
                 text: "The assistant reads the whiteboard's elements as they are when you send \
                        a message. It can propose a drawing; you decide whether it goes on the \
@@ -1595,7 +1646,19 @@ impl AssistantPanel {
                     "What is missing from this diagram?".into(),
                 ],
             },
-            (Some(_), false) => EmptyState {
+            (Some(_), ItemKind::Page) => EmptyState {
+                title: "Ask about this page".into(),
+                text: "The assistant reads the text the page shows as it is when you send a \
+                       message. The page itself cannot be changed."
+                    .into(),
+                note,
+                examples: vec![
+                    "Summarise this page in three sentences.".into(),
+                    "What are the main points of this page?".into(),
+                    "What does this page leave out?".into(),
+                ],
+            },
+            (Some(_), ItemKind::Document) => EmptyState {
                 title: "Ask about this document".into(),
                 text: "The assistant reads the document as it is when you send a message, \
                      and what you add as context. It suggests; you decide what goes into \
@@ -1615,9 +1678,10 @@ impl AssistantPanel {
                 examples: Vec::new(),
             },
         };
-        let placeholder: SharedString = match (&self.document, whiteboard) {
-            (Some(_), true) => "Ask about this whiteboard".into(),
-            (Some(_), false) => "Ask about this document".into(),
+        let placeholder: SharedString = match (&self.document, kind) {
+            (Some(_), ItemKind::Whiteboard) => "Ask about this whiteboard".into(),
+            (Some(_), ItemKind::Page) => "Ask about this page".into(),
+            (Some(_), ItemKind::Document) => "Ask about this document".into(),
             (None, _) => "Ask the assistant".into(),
         };
         self.messages

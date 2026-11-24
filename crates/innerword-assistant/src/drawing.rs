@@ -8,7 +8,7 @@
 //! whiteboard, or a new whiteboard beside the open document.
 
 use std::borrow::Cow;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::hash::{Hash, Hasher};
 use std::ops::Range;
 use std::sync::Mutex;
@@ -415,11 +415,12 @@ pub fn without_drawings(markdown: &str) -> String {
 }
 
 /// How an element of the open whiteboard is named in the line (section 2.3).
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ElementName {
     /// Its type as the listing says it ("rectangle", "arrow", "image", …).
     pub kind: String,
     /// Its text, or its label's, when it has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
 }
 
@@ -427,6 +428,47 @@ pub struct ElementName {
 /// the scene it holds). `None` for an id it does not have.
 pub trait ElementNames {
     fn name(&self, id: &str) -> Option<ElementName>;
+}
+
+impl ElementNames for BTreeMap<String, ElementName> {
+    fn name(&self, id: &str) -> Option<ElementName> {
+        self.get(id).cloned()
+    }
+}
+
+/// The names the line of `drawing` gives elements that are on the whiteboard (what it
+/// changes, removes, or takes a link from), as `names` has them, by id. The host keeps
+/// them with the answer when it is drawn ([`crate::Message::drawn_names`]): after the
+/// drawing the whiteboard no longer has what it removed, and its line must read as it did
+/// when it was drawn (section 14), not "removes old; the whiteboard has no old".
+pub fn names_the_drawing_uses(
+    drawing: &Drawing,
+    names: &dyn ElementNames,
+) -> BTreeMap<String, ElementName> {
+    let (_, unset) = drawing.links();
+    drawing
+        .changed_ids()
+        .into_iter()
+        .chain(drawing.removed_ids())
+        .chain(unset)
+        .filter_map(|id| names.name(&id).map(|name| (id, name)))
+        .collect()
+}
+
+/// The names the line of an answer that was drawn uses: those kept when it was drawn,
+/// then the open whiteboard's (`live`).
+pub struct NamesWhenDrawn<'a> {
+    pub kept: &'a BTreeMap<String, ElementName>,
+    pub live: Option<&'a dyn ElementNames>,
+}
+
+impl ElementNames for NamesWhenDrawn<'_> {
+    fn name(&self, id: &str) -> Option<ElementName> {
+        self.kept
+            .get(id)
+            .cloned()
+            .or_else(|| self.live.and_then(|live| live.name(id)))
+    }
 }
 
 /// The last line of a text being written, when it has not ended and could still become

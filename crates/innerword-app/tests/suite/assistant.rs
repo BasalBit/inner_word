@@ -3148,6 +3148,46 @@ mod drawings {
         }
     }
 
+    /// The toast's "Back to “Chapter 2”" goes when the writer went back
+    /// another way (quick open), and when the new whiteboard is trashed.
+    #[gpui::test]
+    fn the_back_to_toast_goes_when_it_has_nothing_more_to_do(cx: &mut TestAppContext) {
+        let mut desk = desk(cx, true);
+        let said = made_sentence("Who serves whom", Some("Part one"));
+        desk.ask(&answer_with(WHO_SERVES_WHOM));
+        desk.cx.simulate_keystrokes("cmd-shift-d");
+        desk.cx.run_until_parked();
+        let board = desk.open_board().expect("the new whiteboard is open");
+        assert!(desk.toasts().contains(&said), "{:?}", desk.toasts());
+        // Back at the chapter the way quick open goes.
+        let chapter = desk.chapter;
+        desk.workspace.update_in(desk.cx, |w, window, cx| {
+            assert!(w.open_document(chapter, true, window, cx));
+        });
+        desk.cx.run_until_parked();
+        assert!(!desk.toasts().contains(&said), "{:?}", desk.toasts());
+
+        // Another whiteboard (a second press: it was made once already),
+        // then trashed: its toast goes too.
+        desk.ask(&answer_with(WHO_SERVES_WHOM));
+        desk.cx.simulate_keystrokes("cmd-shift-d");
+        desk.cx.run_until_parked();
+        let second = desk.open_board().expect("another whiteboard is open");
+        assert_ne!(second, board);
+        assert!(desk.toasts().contains(&said), "{:?}", desk.toasts());
+        // Opening something else leaves it up.
+        desk.workspace.update_in(desk.cx, |w, window, cx| {
+            assert!(w.open_document(board, true, window, cx));
+        });
+        desk.cx.run_until_parked();
+        assert!(desk.toasts().contains(&said), "{:?}", desk.toasts());
+        desk.library
+            .update(desk.cx, |l, cx| l.trash_document(second, cx))
+            .unwrap();
+        desk.cx.run_until_parked();
+        assert!(!desk.toasts().contains(&said), "{:?}", desk.toasts());
+    }
+
     #[gpui::test]
     fn an_answer_over_a_document_makes_a_new_whiteboard_in_its_folder(cx: &mut TestAppContext) {
         let mut desk = desk(cx, true);

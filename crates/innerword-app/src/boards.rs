@@ -1732,6 +1732,17 @@ impl crate::pages::FakeView {
                     "out".to_string()
                 } else if argument_value.get("fit").is_some() {
                     "fit".to_string()
+                } else if let (Some(x), Some(y)) = (
+                    argument_value.get("scrollX").and_then(Value::as_f64),
+                    argument_value.get("scrollY").and_then(Value::as_f64),
+                ) {
+                    format!(
+                        "to {} at ({x:.0}, {y:.0})",
+                        argument_value
+                            .get("to")
+                            .and_then(Value::as_f64)
+                            .unwrap_or(1.0)
+                    )
                 } else {
                     format!(
                         "to {}",
@@ -1747,9 +1758,20 @@ impl crate::pages::FakeView {
                     if let Some(to) = argument_value.get("to").and_then(Value::as_f64) {
                         board.status.zoom = to;
                     }
+                    if let Some(x) = argument_value.get("scrollX").and_then(Value::as_f64) {
+                        board.status.scroll_x = x;
+                    }
+                    if let Some(y) = argument_value.get("scrollY").and_then(Value::as_f64) {
+                        board.status.scroll_y = y;
+                    }
                     board.status.zoom
                 };
                 done(Ok(json!({ "zoom": zoom }).to_string()));
+                // A scroll posts the status, as the glue's does.
+                if argument_value.get("scrollX").is_some() {
+                    let status = pages.board.borrow().status.clone();
+                    pages.post_board(Message::Status(status));
+                }
             }
             "search" => {
                 let query = argument_value

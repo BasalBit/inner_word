@@ -82,7 +82,7 @@ use innerword_assistant::{
 };
 use innerword_assistant_quick::{QuickChat, QuickChatEvent};
 use innerword_assistant_ui::{
-    ApplyKind, AssistantPanel, AssistantPanelEvent, AssistantPanelOptions, DocumentRef,
+    ApplyKind, AssistantPanel, AssistantPanelEvent, AssistantPanelOptions, DocumentRef, ItemKind,
     SharedElementNames,
 };
 use innerword_editor::Editor;
@@ -177,29 +177,43 @@ impl BoardNames {
             else {
                 return HashMap::new();
             };
-            scene
-                .listed()
-                .into_iter()
-                .map(|listed| {
-                    // A frame is named by its name, a shape or an arrow by
-                    // its label, a text by its text.
-                    let text = match listed.r#type.as_str() {
-                        "frame" => scene
-                            .element(&listed.id)
-                            .and_then(|element| element.name())
-                            .map(str::to_string),
-                        _ => listed.label.clone().or_else(|| listed.text.clone()),
-                    };
-                    (
-                        listed.id.clone(),
-                        ElementName {
-                            kind: listed.r#type.clone(),
-                            text: text.filter(|text| !text.trim().is_empty()),
-                        },
-                    )
-                })
-                .collect()
+            names_of(&scene)
         })
+    }
+}
+
+/// The names the line of an answer's drawing gives the elements of
+/// `scene`, by id: a frame by its name, a shape or an arrow by its label, a
+/// text by its text.
+pub(crate) fn names_of(scene: &innerword_board::Scene) -> HashMap<String, ElementName> {
+    scene
+        .listed()
+        .into_iter()
+        .map(|listed| {
+            let text = match listed.r#type.as_str() {
+                "frame" => scene
+                    .element(&listed.id)
+                    .and_then(|element| element.name())
+                    .map(str::to_string),
+                _ => listed.label.clone().or_else(|| listed.text.clone()),
+            };
+            (
+                listed.id.clone(),
+                ElementName {
+                    kind: listed.r#type.clone(),
+                    text: text.filter(|text| !text.trim().is_empty()),
+                },
+            )
+        })
+        .collect()
+}
+
+/// [`names_of`] as the host's names.
+pub(crate) struct SceneNames(pub HashMap<String, ElementName>);
+
+impl ElementNames for SceneNames {
+    fn name(&self, id: &str) -> Option<ElementName> {
+        self.0.get(id).cloned()
     }
 }
 
@@ -237,7 +251,21 @@ pub(crate) struct AssistantState {
     pub(super) origins: HashMap<DocumentId, SharedString>,
     /// What the last answer's drawing did, as a scripted run prints it.
     pub(super) last_draw_report: Option<String>,
+    /// The toast of New Whiteboard from Answer with its "Back to" button,
+    /// while it may be up: it goes when its document is opened another
+    /// way, and when the new whiteboard is trashed or deleted.
+    pub(super) back_toast: Option<BackToast>,
     _subscriptions: Vec<Subscription>,
+}
+
+/// The toast with "Back to “Chapter 2”" ([`AssistantState::back_toast`]).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct BackToast {
+    pub toast: innerword_ui::toast::ToastId,
+    /// The document the button opens.
+    pub document: DocumentId,
+    /// The whiteboard the answer made.
+    pub board: DocumentId,
 }
 
 impl AssistantState {
@@ -265,6 +293,7 @@ impl AssistantState {
                 names_scene: None,
                 origins: HashMap::new(),
                 last_draw_report: None,
+                back_toast: None,
                 _subscriptions: Vec::new(),
             };
         };
@@ -380,6 +409,7 @@ impl AssistantState {
             names_scene: None,
             origins: HashMap::new(),
             last_draw_report: None,
+            back_toast: None,
             _subscriptions: subscriptions,
         }
     }
@@ -699,7 +729,13 @@ impl Workspace {
                 self.assistant.origins.remove(&open.id);
             }
             let document = open.as_ref().map(|open| {
+                let kind = match &open.page {
+                    None => ItemKind::Document,
+                    Some(page) if page.board.is_some() => ItemKind::Whiteboard,
+                    Some(_) => ItemKind::Page,
+                };
                 let document = DocumentRef::new(open.id.0, open.title.clone())
+                    .with_kind(kind)
                     .with_drawing(drawing.0, drawing.1.clone());
                 match self.assistant.origins.get(&open.id) {
                     Some(note) => document.with_origin_note(note.clone()),

@@ -949,3 +949,135 @@ fn the_warnings_of_frames_are_said_after_the_move() {
         50.0
     );
 }
+
+// ----- bringing a drawing into view (section 14) ------------------------------------------
+
+fn bounds(x: f64, y: f64, width: f64, height: f64) -> innerword_board::Bounds {
+    innerword_board::Bounds {
+        x,
+        y,
+        width,
+        height,
+    }
+}
+
+/// The acceptance run's canvas: 560 x 740 CSS pixels at 100 %, scrolled a little.
+fn canvas() -> innerword_board::Viewport {
+    innerword_board::Viewport {
+        scroll_x: -5.0,
+        scroll_y: 0.0,
+        zoom: 1.0,
+        width: 560.0,
+        height: 740.0,
+    }
+}
+
+fn islands() -> innerword_board::Insets {
+    innerword_board::Insets {
+        top: 70.0,
+        right: 56.0,
+        bottom: 64.0,
+        left: 16.0,
+    }
+}
+
+/// Where a scene rectangle is drawn in the canvas of `view`.
+fn on_canvas(group: innerword_board::Bounds, view: innerword_board::Viewport) -> [f64; 4] {
+    let z = view.zoom;
+    [
+        (group.x + view.scroll_x) * z,
+        (group.y + view.scroll_y) * z,
+        (group.x + group.width + view.scroll_x) * z,
+        (group.y + group.height + view.scroll_y) * z,
+    ]
+}
+
+fn seen_whole(rect: [f64; 4], view: innerword_board::Viewport) -> bool {
+    let insets = islands();
+    rect[0] >= insets.left - 0.01
+        && rect[1] >= insets.top - 0.01
+        && rect[2] <= view.width - insets.right + 0.01
+        && rect[3] <= view.height - insets.bottom + 0.01
+}
+
+#[test]
+fn what_is_seen_whole_moves_nothing() {
+    let group = bounds(100.0, 80.0, 300.0, 200.0);
+    assert!(seen_whole(on_canvas(group, canvas()), canvas()));
+    assert_eq!(innerword_board::reveal(group, canvas(), islands()), None);
+}
+
+#[test]
+fn a_drawing_under_an_island_is_scrolled_into_view_at_the_same_zoom() {
+    // The ellipse "Postgres" of the acceptance run: its right part under the side bar.
+    let group = bounds(420.0, 80.0, 160.0, 90.0);
+    assert!(!seen_whole(on_canvas(group, canvas()), canvas()));
+    let view = innerword_board::reveal(group, canvas(), islands()).expect("it moves");
+    assert_eq!(view.zoom, 1.0, "the zoom is kept");
+    assert_eq!(view.scroll_y, 0.0, "only the axis that needs it scrolls");
+    let rect = on_canvas(group, view);
+    assert!(seen_whole(rect, view), "{rect:?}");
+    // As little as brings it in: its right edge at the margin.
+    let right = view.width - islands().right - innerword_board::REVEAL_MARGIN;
+    assert!((rect[2] - right).abs() < 1e-9, "{rect:?}");
+    // Under the top bar, the other way.
+    let group = bounds(100.0, -40.0, 100.0, 60.0);
+    let view = innerword_board::reveal(group, canvas(), islands()).expect("it moves");
+    assert_eq!(view.scroll_x, canvas().scroll_x);
+    let rect = on_canvas(group, view);
+    assert!(
+        (rect[1] - (islands().top + innerword_board::REVEAL_MARGIN)).abs() < 1e-9,
+        "{rect:?}"
+    );
+}
+
+#[test]
+fn a_drawing_too_large_for_the_zoom_is_zoomed_out_to_fit_never_in() {
+    let group = bounds(-200.0, 80.0, 900.0, 300.0);
+    let view = innerword_board::reveal(group, canvas(), islands()).expect("it moves");
+    assert!(view.zoom < 1.0, "{view:?}");
+    let rect = on_canvas(group, view);
+    assert!(seen_whole(rect, view), "{rect:?}");
+    // Centred in what is seen.
+    let insets = islands();
+    let middle = (insets.left + view.width - insets.right) / 2.0;
+    assert!(((rect[0] + rect[2]) / 2.0 - middle).abs() < 1e-6);
+    // A small group far away at 50 % is scrolled to, never zoomed in on.
+    let far = innerword_board::Viewport {
+        zoom: 0.5,
+        ..canvas()
+    };
+    let view = innerword_board::reveal(bounds(3000.0, 3000.0, 40.0, 40.0), far, islands())
+        .expect("it moves");
+    assert_eq!(view.zoom, 0.5);
+    // A canvas with no room left is left alone.
+    let tiny = innerword_board::Viewport {
+        width: 60.0,
+        ..canvas()
+    };
+    assert_eq!(innerword_board::reveal(group, tiny, islands()), None);
+}
+
+#[test]
+fn the_elements_to_show_are_what_was_added_and_changed() {
+    let mut scene = innerword_board::Scene::empty();
+    let mut making = innerword_board::HashedMaking::new(&[b"seed"], 1);
+    let first = read(
+        r#"{"add": [{"type": "rectangle", "id": "api", "x": 0, "y": 0, "width": 100, "height": 50},
+                    {"type": "text", "id": "note", "x": 0, "y": 400, "text": "Old"}]}"#,
+    );
+    innerword_board::draw(&mut scene, &first, None, &mut making).unwrap();
+    let second = read(
+        r#"{"add": [{"type": "ellipse", "id": "db", "x": 400, "y": 0, "width": 100, "height": 50, "label": {"text": "DB"}}],
+            "update": [{"id": "api", "dx": 10}], "remove": ["note"]}"#,
+    );
+    let drawn = innerword_board::draw(&mut scene, &second, None, &mut making).unwrap();
+    let shown = drawn.shown_ids();
+    assert!(shown.contains(&"db".to_string()), "{shown:?}");
+    assert!(shown.contains(&"api".to_string()), "{shown:?}");
+    assert!(!shown.contains(&"note".to_string()), "{shown:?}");
+    assert!(shown.len() >= 3, "the label too: {shown:?}");
+    let group = innerword_board::bounds_of_ids(&scene, &shown).unwrap();
+    assert_eq!((group.x, group.y), (10.0, 0.0));
+    assert_eq!(group.x + group.width, 500.0);
+}

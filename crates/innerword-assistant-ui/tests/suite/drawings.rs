@@ -5,15 +5,15 @@
 
 use std::{sync::Arc, time::Duration};
 
-use gpui::{TestAppContext, VisualTestContext, point, px};
+use gpui::{App, TestAppContext, VisualTestContext, point, px};
 use innerword_assistant::{
     DrawingTarget, ElementName, ElementNames, FakeReply, MessageId, answer_drawing,
     side_system_prompt, without_drawings,
 };
 use innerword_assistant_ui::{
     ACTION_COPY, ACTION_DRAW, ACTION_INSERT, ActionState, ApplyKind, AssistantPanelEvent,
-    DRAWING_UNAVAILABLE, DRAWN_ALREADY, DocumentRef, DrawAnswer, MADE_ALREADY, NO_ANSWER_YET,
-    NO_DRAWING, ONLY_A_DRAWING, PanelArea, STILL_WRITTEN,
+    DRAWING_UNAVAILABLE, DRAWN_ALREADY, DocumentRef, DrawAnswer, ItemKind, MADE_ALREADY,
+    NO_ANSWER_YET, NO_DRAWING, ONLY_A_DRAWING, PanelArea, STILL_WRITTEN,
 };
 
 use super::support::{
@@ -414,6 +414,56 @@ fn the_line_names_the_elements_the_host_names(cx: &mut TestAppContext) {
     assert_eq!(answer_text(&ws, id, cx), before);
 }
 
+/// A drawn answer's line reads as it did when it was drawn: what it removed is named as
+/// it was, never said to be missing from the whiteboard (section 14 of the design).
+#[gpui::test]
+fn a_drawn_answers_line_keeps_its_names(cx: &mut TestAppContext) {
+    struct Names(bool);
+    impl ElementNames for Names {
+        fn name(&self, id: &str) -> Option<ElementName> {
+            match id {
+                "api" => Some(ElementName {
+                    kind: "rectangle".into(),
+                    text: Some("API".into()),
+                }),
+                "old" if self.0 => Some(ElementName {
+                    kind: "text".into(),
+                    text: Some("Old note".into()),
+                }),
+                _ => None,
+            }
+        }
+    }
+    const REMOVES: &str = r#"{"update": [{"id": "api", "strokeColor": "red"}], "remove": ["old"]}"#;
+
+    let (ws, cx) = open_panel(cx);
+    open_board(&ws, cx);
+    ws.fake.reply(answer("Tidied.", REMOVES));
+    ws.send("Tidy it", cx);
+    let id = *ws.message_ids(cx).last().unwrap();
+    let before_drawn = Names(true);
+    ws.panel.update(cx, |panel, cx| {
+        panel.set_element_names(Some(Arc::new(Names(true))), cx)
+    });
+    cx.run_until_parked();
+    let line = answer_text(&ws, id, cx);
+    assert!(line.contains("removes the text “Old note”"), "{line}");
+    // The host drew it, keeping the names of the press; the whiteboard has no "old" now.
+    let drawing = innerword_assistant::answer_drawing(&answer("Tidied.", REMOVES))
+        .unwrap()
+        .unwrap();
+    let kept = innerword_assistant::names_the_drawing_uses(&drawing, &before_drawn);
+    ws.panel
+        .update(cx, |panel, cx| panel.mark_drawn(id, kept, cx));
+    ws.panel.update(cx, |panel, cx| {
+        panel.set_element_names(Some(Arc::new(Names(false))), cx)
+    });
+    cx.run_until_parked();
+    let drawn = answer_text(&ws, id, cx);
+    assert_eq!(drawn, line, "the line reads as it did when it was drawn");
+    assert!(!drawn.contains("has no"), "{drawn}");
+}
+
 // ----- drawn before -------------------------------------------------------------------
 
 #[gpui::test]
@@ -428,7 +478,8 @@ fn an_answer_drawn_before_says_so_and_its_key_wants_a_second_press(cx: &mut Test
     assert_eq!(draws(&ws.take_events(cx)).len(), 1);
 
     // The host drew it: the answer says so, and is stored so.
-    ws.panel.update(cx, |panel, cx| panel.mark_drawn(id, cx));
+    ws.panel
+        .update(cx, |panel, cx| panel.mark_drawn(id, Default::default(), cx));
     cx.run_until_parked();
     let stored = ws.stored(7, cx);
     assert!(stored.message(id).unwrap().drawn_at.is_some());
@@ -512,7 +563,8 @@ fn over_a_document_an_answer_makes_a_new_whiteboard(cx: &mut TestAppContext) {
     cx.run_until_parked();
 
     // Made once: its words, and the key's first press.
-    ws.panel.update(cx, |panel, cx| panel.mark_drawn(id, cx));
+    ws.panel
+        .update(cx, |panel, cx| panel.mark_drawn(id, Default::default(), cx));
     cx.run_until_parked();
     assert_eq!(words(&ws, id, cx).0, "New Whiteboard Again");
     ws.panel
@@ -751,6 +803,53 @@ fn over_a_whiteboard_the_empty_chat_says_what_it_is_for(cx: &mut TestAppContext)
         );
         assert!(list.empty_state().unwrap().note.is_empty());
     });
+
+    // A page says "page", in the empty state and the composer alike; and a
+    // whiteboard that cannot be drawn on now is still a whiteboard.
+    let placeholder = |ws: &PanelFixture, cx: &mut VisualTestContext| {
+        ws.panel.read_with(cx, |panel, cx| {
+            let list = panel.messages().read(cx);
+            (
+                list.empty_state().unwrap().title.to_string(),
+                panel
+                    .composer()
+                    .read(cx)
+                    .editor()
+                    .read(cx)
+                    .config()
+                    .placeholder
+                    .to_string(),
+            )
+        })
+    };
+    open_item(
+        &ws,
+        DocumentRef::new(12, "Orbitarium").with_kind(ItemKind::Page),
+        cx,
+    );
+    let (title, words) = placeholder(&ws, cx);
+    assert_eq!(title, "Ask about this page");
+    assert_eq!(words, "Ask about this page");
+    open_item(
+        &ws,
+        DocumentRef::new(13, "Plan")
+            .with_kind(ItemKind::Whiteboard)
+            .with_drawing(DrawingTarget::None, Some("Still loading.".into())),
+        cx,
+    );
+    let (title, words) = placeholder(&ws, cx);
+    assert_eq!(title, "Ask about this whiteboard");
+    assert_eq!(words, "Ask about this whiteboard");
+}
+
+fn ws_last(ws: &PanelFixture, cx: &App) -> MessageId {
+    *ws.panel
+        .read(cx)
+        .transcript()
+        .messages
+        .last()
+        .map(|message| &message.id)
+        .unwrap()
 }
 
 #[gpui::test]
@@ -775,6 +874,33 @@ fn the_host_offers_a_message_and_shows_an_answer(cx: &mut TestAppContext) {
     ws.panel.read_with(cx, |panel, cx| {
         assert_eq!(panel.messages().read(cx).selected(), Some(first));
     });
+    // The mark is drawn although the keyboard is elsewhere, and the key of
+    // a drawing acts on that answer, not on the latest.
+    let mark = bounds("assistant-message-mark", cx);
+    let row = bounds(format!("assistant-message-{}", first.0), cx);
+    assert!(row.contains(&mark.center()), "{mark:?} in {row:?}");
+    ws.take_events(cx);
+    ws.panel
+        .update_in(cx, |panel, window, cx| panel.focus(window, cx));
+    cx.run_until_parked();
+    cx.simulate_keystrokes("cmd-shift-d");
+    assert_eq!(
+        draws(&ws.take_events(cx)),
+        [(first, DrawingTarget::OpenWhiteboard)]
+    );
+    // Marking another message takes the mark shown away.
+    let last = cx.update(|_, cx| ws_last(&ws, cx));
+    ws.panel.update(cx, |panel, cx| {
+        panel
+            .messages()
+            .update(cx, |list, cx| list.select(Some(last), cx))
+    });
+    ws.panel.read_with(cx, |panel, cx| {
+        assert_eq!(panel.messages().read(cx).shown(), None);
+    });
+    ws.editor
+        .update_in(cx, |editor, window, _| editor.focus(window));
+    cx.run_until_parked();
 
     // A message is offered into an empty composer only.
     let offered = ws.panel.update(cx, |panel, cx| {

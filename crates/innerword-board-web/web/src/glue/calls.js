@@ -188,6 +188,13 @@ export const boardCalls = {
       return { zoom: api.getAppState().zoom.value };
     }
     const appState = api.getAppState();
+    if (typeof arg.to === "number" && Number.isFinite(arg.to) && Number.isFinite(arg.scrollX) && Number.isFinite(arg.scrollY)) {
+      // A zoom and a scroll together (the app brings a drawing into view).
+      const zoom = clampZoom(arg.to);
+      api.updateScene({ appState: { scrollX: arg.scrollX, scrollY: arg.scrollY, zoom: { value: zoom } }, captureUpdate: CaptureUpdateAction.NEVER });
+      queueMicrotask(sendStatus);
+      return { zoom };
+    }
     let next = appState.zoom.value;
     if (arg.in) next += 0.1;
     else if (arg.out) next -= 0.1;

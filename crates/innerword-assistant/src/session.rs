@@ -305,10 +305,16 @@ impl ChatSession {
     }
 
     /// Records that answer `id` was drawn at `at` (milliseconds since 1970):
-    /// [`Message::drawn_at`](crate::Message::drawn_at). Returns whether there was such an
-    /// answer.
-    pub fn mark_drawn(&mut self, id: MessageId, at: i64) -> bool {
-        self.transcript.mark_drawn(id, at)
+    /// [`Message::drawn_at`](crate::Message::drawn_at), with the names its line gave
+    /// then ([`Message::drawn_names`](crate::Message::drawn_names)). Returns whether there
+    /// was such an answer.
+    pub fn mark_drawn(
+        &mut self,
+        id: MessageId,
+        at: i64,
+        names: std::collections::BTreeMap<String, crate::ElementName>,
+    ) -> bool {
+        self.transcript.mark_drawn(id, at, names)
     }
 
     /// Attaches a library item. Returns `false` when it was attached already or the

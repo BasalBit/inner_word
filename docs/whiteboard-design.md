@@ -2210,7 +2210,7 @@ open whiteboard) goes through 6.7 like any agent's change.
   (`assistant.conversation.<id>`). The assistant reads other whiteboards with the same
   read-only tools (`read_document` gives the listing).
 - **The quick chat** does not open on a whiteboard (the toast of 6.3).
-- **Built later: the side chat proposes drawings** (`docs/assistant-draws-design.md`): an
+- **Built later, in 0.12.0: the side chat proposes drawings** (`docs/assistant-draws-design.md`): an
   answer may hold a drawing in the agents' formats, which the writer applies with a button,
   `cmd-shift-d` or the palette, on the open whiteboard as one step of Excalidraw's undo
   (the path of 6.5 and 6.7: collect, flush, the drawing on the stored scene, a version, the
@@ -4302,7 +4302,9 @@ person checks. (4) passed with the whiteboard's smoke test; the arm64 disk image
 - Importing `.excalidraw` files, or dropping one on a whiteboard (the drop is left out with
   the toast of a file that is no picture).
 - Comments, spelling, Vim mode, the format bar and the quick chat on a whiteboard; the
-  assistant changing a whiteboard; an assistant answer inserted into one.
+  assistant changing a whiteboard (since 0.12.0 the side chat proposes drawings that the
+  writer applies with a button, `docs/assistant-draws-design.md`; the assistant itself
+  still changes nothing); an assistant answer inserted into one.
 - Elbow arrows and inline shapes (`start: {"type": …}`) from agents; agents changing a
   picture's file (they add pictures, 7.2); a picture from an address on the web; element
   links (`?element=`) from agents, and a line that binds, has arrowheads or a label (7.2);

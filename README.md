@@ -42,8 +42,8 @@ Anyway. "Read Me First.txt" on the disk image has both ways step by step.
 
 - macOS 10.15.7 or later on an Intel Mac.
 - macOS 11 or later on a Mac with Apple silicon.
-- Pages (saved web pages) need macOS 12.3 or later. On an older macOS a page shows its text,
-  and no page can be added.
+- Pages (saved web pages) and whiteboards need macOS 12.3 or later. On an older macOS a page
+  shows its text, a whiteboard the list of its elements, and neither can be added.
 
 ## What it does
 
@@ -58,6 +58,9 @@ Anyway. "Read Me First.txt" on the disk image has both ways step by step.
 - **Pictures** in documents: insert, paste, drop from the Finder, resize, align, describe.
 - **Pages.** A web page (an HTML file or a folder, a claude.ai artifact among them) kept in
   the library and shown in WebKit, offline for good.
+- **Whiteboards.** Excalidraw built into the app and offline: shapes, arrows, text, frames,
+  pictures and Mermaid to drawing, saved as you draw, with versions, the trash and search,
+  exported and printed as a PDF.
 - **Export and print.** Markdown, DOCX, plain text and PDF, of a document or a whole folder.
   Print through the macOS print panel, laid out as page view shows it.
 - **Spell checking** with the macOS spell checker, in the language of each paragraph or one
@@ -76,14 +79,17 @@ Both are optional. Inner Word works fully without either.
   `/Applications/Inner Word.app/Contents/MacOS/innerword`, and the same tool is an MCP server
   (`innerword mcp`). Any agent that can run a command or speak MCP (Claude Code, Codex, Gemini
   CLI and others) can use them to find,
-  read, create, edit, comment on and export documents in your library. They work while the
+  read, create, edit, comment on and export documents in your library, and to draw on
+  whiteboards. They work while the
   app is closed and while it is open: then the app makes the change, keeps a version of the
   document first, and says so in a note with Undo. Inner Word > Agents... installs a skill
   that tells your agents about the tool, and shows the command that adds the MCP server to
   each agent. Nothing is installed until you press a button there, and the app never edits
   an agent's configuration.
 - **The assistant.** A quick chat at the selection (`cmd-j`) and a side chat (`cmd-3`) that
-  advise. An answer changes a document only when you press one of its buttons. The
+  advise. An answer changes a document only when you press one of its buttons. Beside a
+  whiteboard the side chat can answer with a drawing, which Draw (`cmd-shift-d`) puts on
+  the canvas as one step of undo, with a version kept first. The
   assistant runs on Claude Code today, through your own sign-in and plan. Other engines are
   planned. It appears only when Claude Code is installed, and it can be switched off in the
   settings.
@@ -148,7 +154,9 @@ the test commands and the rules for working on the code.
 | `innerword-store` | The SQLite library: folders, documents, settings, search, versions, backups, the bytes of pictures and pages. |
 | `innerword-image` | Image files made into what the library stores (ImageIO). |
 | `innerword-page` | The bundler of pages: an HTML file or folder to the files a page is served from, every piece from the web fetched once. |
-| `innerword-web` | Everything that talks to WebKit: the view of an open page, the offline check, the PDF of a page. |
+| `innerword-board` | A whiteboard's scene in Rust: its stored form, its listing, agents' and the assistant's drawings made into Excalidraw's elements, the merge. |
+| `innerword-board-web` | Excalidraw built offline (`web/`, the committed `dist/`) and the bridge's contract with the app. |
+| `innerword-web` | Everything that talks to WebKit: the view of an open page or a whiteboard, the offline check, the PDF of a page. |
 | `innerword-print` | Printed pages as data, the PDF writer, a PDF reader for tests, the macOS print operation. |
 | `innerword-export` | Markdown, DOCX and plain-text export, and the Markdown importer. |
 | `innerword-vim` | The Vim engine over the editing engine. |
@@ -161,7 +169,7 @@ the test commands and the rules for working on the code.
 | `innerword-library` | The library model and the library sidebar. |
 | `innerword-keymap` | Keyboard shortcuts as data: defaults, the user's changes, conflicts, the shortcuts file. |
 | `innerword-keymap-ui` | The "Keyboard shortcuts" list. |
-| `innerword-assistant` | The assistant's engine: the backend interface, the Claude Code backend, a fake backend, the conversation model. |
+| `innerword-assistant` | The assistant's engine: the backend interface, the Claude Code backend, a fake backend, the conversation model, the drawings in answers. |
 | `innerword-assistant-ui` | The assistant's shared chat components and the side chat. |
 | `innerword-assistant-quick` | The quick chat at the selection. |
 | `innerword-agent` | The command layer for agents: every operation on the library, with a version kept before each change. |

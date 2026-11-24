@@ -400,8 +400,8 @@ never from a test that runs by default.
 An optional writing assistant inside the app, in two chats, running on a terminal agent
 the user has installed and signed in to. Claude Code is the first (and for now the only)
 engine; others will follow, so nothing outside `innerword_assistant::claude` may assume it.
-The assistant advises and the user applies: an answer changes a document only when one of
-its buttons is pressed. Every message spends the user's own plan in the engine.
+The assistant advises and the user applies: an answer changes a document, or draws on a
+whiteboard, only when one of its buttons is pressed. Every message spends the user's own plan in the engine.
 
 - **Whether it is there** (`crates/innerword-app/src/assistant/host.rs`,
   `workspace/assistant.rs`). The engine is looked for in the background, at launch and

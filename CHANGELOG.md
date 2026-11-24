@@ -7,6 +7,63 @@ The Writer.
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-11-24
+
+The assistant draws on whiteboards.
+
+### Added
+
+- The assistant's side chat can answer with a drawing. Beside an open whiteboard, ask it to
+  add, change or take away what is drawn ("add the database the API reads from, and make
+  the API blue"). The answer never shows the drawing's code: one line says what the drawing
+  does ("Drawing: adds an ellipse and an arrow; changes the rectangle “API”."), and the
+  answer has a Draw button.
+- Draw (the button, `cmd-shift-d` in the side chat, the last item of the answer's menu, or
+  "Draw answer on whiteboard" in the palette) puts the drawing on the open whiteboard:
+  elements added, changed and removed, a new drawing placed where the canvas is free and in
+  view, and the view brought to what was drawn when it is out of sight. The whiteboard as
+  it was is kept as a version ("Before the assistant's drawing"), and the whole drawing is
+  one step of undo: `cmd-z` on the canvas or Undo in the note takes it back.
+- Beside a document, an answer with a drawing has New Whiteboard instead ("New whiteboard
+  from answer" in the palette): it makes a whiteboard with the drawing in the document's
+  folder, opens it, and the note has a button back to the document.
+- Nothing is drawn until you press Draw or New Whiteboard. An answer that was drawn says
+  so: its button reads Draw Again (New Whiteboard Again), and the key and the palette need
+  a second press. The assistant still has only its read-only tools; a drawing brings no
+  pictures, reads no file, and links only to `http`, `https` and `mailto` addresses.
+- Insert, Replace and Copy take an answer without its drawing.
+
+### Fixed
+
+- A whiteboard follows the width of its view. When the side chat, the sidebar or the
+  window made the canvas narrower or wider, Excalidraw kept its toolbars laid out for the
+  old width.
+- No dark band where a note at the bottom of the window met a dialog over a whiteboard or a
+  saved web page (the version history with a note open, for example).
+- The side chat over a saved web page says "page" in its empty state and its placeholder,
+  and its note about where your text goes names the open page or whiteboard instead of
+  "the open document".
+
+### Changed
+
+- The list of keyboard shortcuts has one more row, "Draw answer (on the whiteboard, or as a
+  new whiteboard)", in the assistant's chats, and the shortcuts file one more entry.
+- Over a whiteboard or a document the side chat's instructions to the model are about a
+  thousand tokens longer, to teach it how to write a drawing. They are sent with every
+  message of the conversation, as before.
+- Agents: a link on a whiteboard element that starts with `http://` or `https://` and holds
+  a backslash, or names no host (`https:///example.com`), or has `%` or a space in its
+  host, is refused with exit code 2. A browser would open another site than the one such a
+  link seems to name. The assistant's drawings follow the same rule.
+- The library format (schema 5) and the channel between the `innerword` tool and the open
+  app (version 4) are unchanged: a tool of 0.11.0 works with the app of 0.12.0.
+
+### Repository
+
+- The design of the assistant's drawings, with its reviews, is in
+  `docs/assistant-draws-design.md`. `innerword-assistant` depends on `innerword-board`,
+  which reads and applies an answer's drawing.
+
 ## [0.11.0] - 2026-11-23
 
 Whiteboards.
@@ -231,7 +288,8 @@ The first public release of Inner Word.
   comments, Vim mode, find and replace, the command palette, export to Markdown, DOCX and
   plain text, and an ad-hoc signed disk image.
 
-[Unreleased]: https://github.com/BasalBit/inner_word/compare/v0.11.0...HEAD
+[Unreleased]: https://github.com/BasalBit/inner_word/compare/v0.12.0...HEAD
+[0.12.0]: https://github.com/BasalBit/inner_word/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/BasalBit/inner_word/compare/v0.10.1...v0.11.0
 [0.10.1]: https://github.com/BasalBit/inner_word/compare/v0.10.0...v0.10.1
 [0.10.0]: https://github.com/BasalBit/inner_word/compare/v0.9.0...v0.10.0

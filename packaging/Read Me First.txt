@@ -272,6 +272,14 @@ The assistant advises and you apply. Every answer has buttons that put it
 into the text (Replace Selection, Insert Below, Insert at Caret) or copy it,
 and Command-Z takes it back. It never changes a document by itself.
 
+Beside a whiteboard the longer chat can answer with a drawing. The answer
+shows one line that says what the drawing adds, changes and removes, and a
+Draw button (Shift-Command-D). Nothing is drawn until you press it; then
+the whiteboard as it was is kept as a version, and Command-Z on the canvas
+takes the whole drawing back. Beside a document the button is New
+Whiteboard, which makes a whiteboard of the drawing in the document's
+folder.
+
 What you ask goes to Anthropic through your own Claude Code sign-in, and
 every message counts against your Claude Code plan. The small chat sends
 your question and the selected text. The longer chat sends your messages,
@@ -368,7 +376,9 @@ updates and sends no crash reports. It reaches the network only here:
   stored when it was added, and nothing else.
 - A whiteboard is drawn with Excalidraw, which is inside the app, with the
   network blocked as for a page: its fonts, its shape library and Mermaid to
-  drawing work offline, and nothing of a drawing leaves your Mac.
+  drawing work offline, and nothing of a drawing leaves your Mac unless you
+  send a message to the assistant beside it (its elements and their text go
+  with the message).
 - Spelling is your Mac's own spell checker, on your Mac.
 
 

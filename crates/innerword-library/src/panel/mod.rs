@@ -41,8 +41,8 @@ pub use menu::LibraryMenuTarget;
 use menu::MenuExtension;
 use move_picker::MoveDelegate;
 use rows::{
-    Filter, Row, ancestors, build_rows, count_documents, count_folders, item_name, place_of,
-    plural, short, short_path, stored_name,
+    Filter, Row, ancestors, build_rows, count_folders, item_name, items_in,
+    place_of, plural, short, short_path, stored_name,
 };
 use trash::{ROOT_LABEL, TrashRow, build_trash_rows};
 use undo::UndoEntry;
@@ -2252,16 +2252,16 @@ impl LibraryPanel {
         }
     }
 
-    /// What a folder holds, in two words: its documents at any depth ("3 documents"), or its
-    /// subfolders when it has no documents. `None` when it is empty or not in the tree.
+    /// What a folder holds, in two words: its documents, pages and whiteboards at any depth,
+    /// named by kind ("3 documents", "1 page", "4 items"), or its subfolders when it has none
+    /// of those. `None` when it is empty or not in the tree.
     fn folder_contents_brief(&self, folder: FolderId, cx: &App) -> Option<String> {
         let tree = self.library.read(cx).tree();
         let node = tree.find_folder(folder)?;
-        match (count_documents(node), count_folders(node)) {
-            (0, 0) => None,
-            (0, folders) => Some(plural(folders as u64, "subfolder")),
-            (documents, _) => Some(plural(documents as u64, "document")),
-        }
+        items_in(node).or_else(|| match count_folders(node) {
+            0 => None,
+            folders => Some(plural(folders as u64, "subfolder")),
+        })
     }
 
     /// What a folder holds ("3 documents, 1 subfolder"), or `None` when it is empty or not
@@ -2269,11 +2269,8 @@ impl LibraryPanel {
     fn folder_contents(&self, folder: FolderId, cx: &App) -> Option<String> {
         let tree = self.library.read(cx).tree();
         let node = tree.find_folder(folder)?;
-        let (documents, folders) = (count_documents(node), count_folders(node));
-        let mut parts = Vec::new();
-        if documents > 0 {
-            parts.push(plural(documents as u64, "document"));
-        }
+        let folders = count_folders(node);
+        let mut parts: Vec<String> = items_in(node).into_iter().collect();
         if folders > 0 {
             parts.push(plural(folders as u64, "subfolder"));
         }

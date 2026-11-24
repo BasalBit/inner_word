@@ -892,3 +892,18 @@ fn new_elements_go_on_top_in_index_order() {
     assert_eq!(made.elements[0].r#type, "rectangle");
     assert_eq!(ids[5], made.elements[0].with[0]);
 }
+
+#[test]
+fn a_refusal_names_the_type_with_the_right_article() {
+    let cases = [
+        (r#"[{"type":"arrow","y":0,"width":10}]"#, "an arrow needs x"),
+        (r#"[{"type":"ellipse","x":0}]"#, "an ellipse needs y"),
+        (r#"[{"type":"rectangle","y":0}]"#, "a rectangle needs x"),
+        (r#"[{"type":"line","x":0,"y":0}]"#, "a line needs points, or a width and height, or start and end"),
+        (r#"[{"type":"arrow","x":0,"y":0}]"#, "an arrow needs points, or a width and height, or start and end"),
+    ];
+    for (json, sentence) in cases {
+        let text = refused(json).to_string();
+        assert!(text.ends_with(sentence), "{json}: {text}");
+    }
+}

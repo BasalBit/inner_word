@@ -61,7 +61,7 @@ pub const ONLY_GONE: &str = "Nothing was drawn: everything it removes is gone al
 pub const CHANGES_NOTHING: &str = "Nothing was drawn: it changes nothing on the whiteboard.";
 /// After the words about ids that are gone.
 pub const ASK_AGAIN: &str = "Ask again: the assistant is sent the whiteboard as it is now.";
-/// Over a document, a drawing that changes or removes elements.
+/// Over a document or a page, a drawing that changes or removes elements.
 pub const CHANGES_A_WHITEBOARD: &str =
     "This drawing changes elements of a whiteboard: open that whiteboard and ask there.";
 /// The press found no document open for a new whiteboard.

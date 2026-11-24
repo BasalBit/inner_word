@@ -27,7 +27,7 @@ This is the design for three builders working in parallel on fixed interfaces (s
 |---|---|---|
 | 1 | How an answer carries a drawing | One fenced code block with the info string `whiteboard`, holding one JSON object `{"title"?, "add"?, "update"?, "remove"?}` in the agents' formats (a bare JSON array is read as `{"add": [...]}`). Unknown keys, an `image` element, a `type` the converter does not make, an id that is not 1 to 64 of `[A-Za-z0-9_-]` and more than 2,000 entries in a list make it unusable when it is read. |
 | 2 | Several blocks in one answer | Taken together, in order, as one drawing (adds, then changes, then removals; the first `title`). The prompt asks for one block per answer and no alternatives as separate blocks. |
-| 3 | What the chat shows for a block | Never the JSON. Each block is replaced in the shown answer by one line in italics that the app writes, its counts first: "Drawing: adds 2 ellipses and 3 arrows; changes the rectangle “API”; removes a picture; links to example.com." (over a document the title after the counts: "… (new whiteboard “Who serves whom”)."), its problem ("Drawing that cannot be used: …"), or "Drawing…" while it is still being written. Every word of the model's in it (a title, a label, a host) is escaped Markdown. |
+| 3 | What the chat shows for a block | Never the JSON. Each block is replaced in the shown answer by one line in italics that the app writes, its counts first: "Drawing: adds 2 ellipses and 3 arrows; changes the rectangle “API”; removes a picture; links to example.com." (over a document or a page the title after the counts: "… (new whiteboard “Who serves whom”)."), its problem ("Drawing that cannot be used: …"), or "Drawing…" while it is still being written. Every word of the model's in it (a title, a label, a host) is escaped Markdown. |
 | 4 | Streaming | The button is offered only under an answer that is not being written and whose blocks are closed and read. |
 | 5 | Who reads the block | `innerword-board` owns the format (`Drawing`, `Drawing::from_json`, `draw`); `innerword-assistant` finds the blocks and reads them with it (a new edge `assistant → board`: pure, no cycle, already in its build through `mcp → agent → board`); `innerword-assistant-ui` asks `innerword-assistant` only; the app applies with `innerword-board`. |
 | 6 | The prompts | The side chat's system prompt is chosen by the open item: a whiteboard adds the section "Drawing on the open whiteboard", a document "Drawing a new whiteboard", a page the same section in a page's words (section 15), nothing adds nothing. At most 4,600 and 3,600 characters (about 1,150 and 900 tokens, in every request of the conversation, cached), each with one worked example that a test draws on a listing made by `Scene::listing`. The target travels with the item (`DocumentRef`), so each chat starts with its own prompt. |
@@ -136,7 +136,7 @@ each block replaced by one paragraph in italics (`innerword_assistant::shown_mar
 
 | The block | The line |
 |---|---|
-| closed, read, usable | `*Drawing: adds 2 ellipses and 3 arrows; changes the rectangle “API” and db; removes a picture.*` (over a document, with a title: `*Drawing: adds 3 ellipses and 2 arrows (new whiteboard “Who serves whom”).*`) |
+| closed, read, usable | `*Drawing: adds 2 ellipses and 3 arrows; changes the rectangle “API” and db; removes a picture.*` (over a document or a page, with a title: `*Drawing: adds 3 ellipses and 2 arrows (new whiteboard “Who serves whom”).*`) |
 | closed, cannot be used | `*Drawing that cannot be used: it is not JSON (line 3, column 14: expected \`,\` or \`}\`).*` |
 | open, the answer still being written | `*Drawing…*` (everything from the fence to the end of the text) |
 | open, the answer finished (stopped, failed, or the model forgot the fence) | `*Drawing that cannot be used: it was not finished.*` |
@@ -198,7 +198,7 @@ long); the tooltip and the toast have it whole.
 | too large | `it adds more than 2,000 elements` (changes, removes) |
 | not closed | `it was not finished` |
 | several blocks | `its second block is not JSON (…)` (the ordinal before the clause of that block) |
-| over a document, with `update` or `remove` | `it changes elements of a whiteboard: open that whiteboard and ask there` |
+| over a document or a page, with `update` or `remove` | `it changes elements of a whiteboard: open that whiteboard and ask there` |
 
 ## 3. The prompts
 
@@ -1447,13 +1447,15 @@ cannot do:
 - `without_drawings` and `shown_markdown` (finished, unusable, streaming, not closed after
   the end; a last line "\`\`\`whi" while streaming is left out, and comes back as text when
   it ends as no fence); `drawing_sentence` (plurals, "a"/"an", three ids then "and N
-  more", the counts before the title, the title only for `NewWhiteboard`, names from an
+  more", the counts before the title, the title only for a new whiteboard (`NewWhiteboard`,
+  `NewWhiteboardBesidePage`), names from an
   `ElementNames` with "a picture", links by host, `"link": null`)
 - `escape_markdown` puts a backslash before each of its characters and makes line ends
   spaces (the importer's side of it is B's test, 9.3)
 - `answer_drawing` reads a closed block once across many calls (the cache)
-- prompts: the section of each target is in `side_system_prompt` and only there (a page,
-  nothing, the quick prompt: none), with and without tools; `side_system_prompt(t,
+- prompts: the section of each target is in `side_system_prompt` and only there (a page
+  gets the page's words of "Drawing a new whiteboard", section 15; nothing and the quick
+  prompt: none), with and without tools; `side_system_prompt(t,
   DrawingTarget::None)` is exactly today's text; the budget (4,600 and 3,600 characters);
   **the examples in the prompts draw** and the whiteboard section contains
   `Scene::listing` of the example scene verbatim (3.5); the existing tests still hold

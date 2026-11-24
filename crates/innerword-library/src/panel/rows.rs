@@ -139,6 +139,32 @@ pub(super) fn count_documents(node: &FolderNode) -> usize {
     node.documents.len() + node.folders.iter().map(count_documents).sum::<usize>()
 }
 
+/// What lives in a folder's whole subtree besides its folders, in one count named by
+/// kind: "3 documents", "1 page", "2 whiteboards", or "4 items" when they are of more than
+/// one kind. `None` when there is nothing.
+pub(super) fn items_in(node: &FolderNode) -> Option<String> {
+    fn kinds(node: &FolderNode, seen: &mut Vec<DocumentKind>) -> usize {
+        for document in &node.documents {
+            if !seen.contains(&document.kind) {
+                seen.push(document.kind);
+            }
+        }
+        node.documents.len()
+            + node
+                .folders
+                .iter()
+                .map(|folder| kinds(folder, seen))
+                .sum::<usize>()
+    }
+    let mut seen = Vec::new();
+    let count = kinds(node, &mut seen) as u64;
+    match seen.as_slice() {
+        [] => None,
+        [kind] => Some(plural(count, kind.noun())),
+        _ => Some(plural(count, "item")),
+    }
+}
+
 /// Subfolders in a folder's whole subtree.
 pub(super) fn count_folders(node: &FolderNode) -> usize {
     node.folders.len() + node.folders.iter().map(count_folders).sum::<usize>()

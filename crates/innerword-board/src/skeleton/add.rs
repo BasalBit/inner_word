@@ -6,7 +6,7 @@ use serde_json::{Map, Value};
 
 use super::fields::{
     ARROWHEADS, At, FILL_FIELDS, FILL_STYLES, NEVER_FROM_AGENTS, STROKE_STYLES, STYLE_FIELDS,
-    normalize_angle, sorted_keys,
+    normalize_angle, sorted_keys, with_article,
 };
 use super::make::{
     self, DEFAULT_DIMENSION, FRAME_PADDING, Snap, TextStyle, add_bound, bump,
@@ -570,7 +570,10 @@ fn plan(
             {
                 return Err(at.invalid(
                     "points",
-                    format!("an {kind} needs points, or a width and height, or start and end"),
+                    format!(
+                        "{} needs points, or a width and height, or start and end",
+                        with_article(&kind)
+                    ),
                 ));
             }
             if kind == "arrow" {

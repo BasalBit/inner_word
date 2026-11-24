@@ -150,7 +150,7 @@ impl At {
         field: &str,
         kind: &str,
     ) -> Result<f64, BoardError> {
-        value.ok_or_else(|| self.invalid(field, format!("a {kind} needs {field}")))
+        value.ok_or_else(|| self.invalid(field, format!("{} needs {field}", with_article(kind))))
     }
 
     pub(crate) fn string<'m>(
@@ -495,4 +495,15 @@ pub fn link_host(link: &str) -> String {
         return String::new();
     }
     host.to_lowercase()
+}
+
+/// A type of element with "a" or "an" before it, as a sentence names it: "an arrow", "an
+/// ellipse", "a line", "a rectangle". Every type the converter makes starts with a letter
+/// that is said as it is written.
+pub(crate) fn with_article(kind: &str) -> String {
+    let an = kind
+        .chars()
+        .next()
+        .is_some_and(|first| "aeiouAEIOU".contains(first));
+    format!("{} {kind}", if an { "an" } else { "a" })
 }

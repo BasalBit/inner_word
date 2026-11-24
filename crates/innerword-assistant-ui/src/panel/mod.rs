@@ -145,6 +145,21 @@ impl ItemKind {
             ItemKind::Whiteboard => OpenKind::Board,
         }
     }
+
+    /// The icon of its chip in the context row, as the library's row has it: a page's
+    /// globe, a whiteboard's own icon.
+    pub fn icon(self) -> innerword_ui::IconName {
+        match self {
+            ItemKind::Document => innerword_ui::IconName::Page,
+            ItemKind::Page => innerword_ui::IconName::Globe,
+            ItemKind::Whiteboard => innerword_ui::IconName::Whiteboard,
+        }
+    }
+
+    /// What it is called in a sentence: "document", "page", "whiteboard".
+    pub fn noun(self) -> &'static str {
+        self.open_kind().noun()
+    }
 }
 
 /// The document that is open beside the side chat: whose conversation is

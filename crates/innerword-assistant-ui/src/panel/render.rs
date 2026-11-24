@@ -376,26 +376,33 @@ impl AssistantPanel {
         let add_marked = focused && self.context_index >= attachments.len();
 
         let document_chip = {
-            let (title, tooltip, known): (SharedString, SharedString, bool) = match &self.document {
-                Some(document) => (
-                    if document.title.trim().is_empty() {
-                        "Untitled".into()
-                    } else {
-                        document.title.clone().into()
-                    },
-                    "The open document goes with every message, as it is at that moment".into(),
-                    true,
-                ),
-                None => (
-                    "No document open".into(),
-                    "Open a document to ask about it".into(),
-                    false,
-                ),
-            };
+            let (title, tooltip, known, icon): (SharedString, SharedString, bool, IconName) =
+                match &self.document {
+                    Some(document) => (
+                        if document.title.trim().is_empty() {
+                            "Untitled".into()
+                        } else {
+                            document.title.clone().into()
+                        },
+                        format!(
+                            "The open {} goes with every message, as it is at that moment",
+                            document.kind.noun()
+                        )
+                        .into(),
+                        true,
+                        document.kind.icon(),
+                    ),
+                    None => (
+                        "No document open".into(),
+                        "Open a document to ask about it".into(),
+                        false,
+                        IconName::Page,
+                    ),
+                };
             chip(
                 "assistant-context-document",
                 "assistant-context-document".to_string(),
-                IconName::Page,
+                icon,
                 title,
                 known,
                 false,

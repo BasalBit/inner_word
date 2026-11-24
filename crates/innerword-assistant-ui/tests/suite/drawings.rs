@@ -1011,3 +1011,16 @@ fn the_host_offers_a_message_and_shows_an_answer(cx: &mut TestAppContext) {
     });
     assert_eq!(ws.focus(cx), Focus::Text);
 }
+
+/// The chip of the open item has the icon the library's row has, and its
+/// tooltip names the item by what it is.
+#[test]
+fn the_open_item_s_chip_has_the_icon_of_its_kind() {
+    use innerword_ui::IconName;
+    assert_eq!(ItemKind::Document.icon(), IconName::Page);
+    assert_eq!(ItemKind::Page.icon(), IconName::Globe);
+    assert_eq!(ItemKind::Whiteboard.icon(), IconName::Whiteboard);
+    assert_eq!(ItemKind::Document.noun(), "document");
+    assert_eq!(ItemKind::Page.noun(), "page");
+    assert_eq!(ItemKind::Whiteboard.noun(), "whiteboard");
+}

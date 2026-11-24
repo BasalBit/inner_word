@@ -2214,7 +2214,8 @@ open whiteboard) goes through 6.7 like any agent's change.
   answer may hold a drawing in the agents' formats, which the writer applies with a button,
   `cmd-shift-d` or the palette, on the open whiteboard as one step of Excalidraw's undo
   (the path of 6.5 and 6.7: collect, flush, the drawing on the stored scene, a version, the
-  save compare-and-swap, `adopt`), or as a new whiteboard beside the open document. The
+  save compare-and-swap, `adopt`), or as a new whiteboard beside the open document (and,
+  since 0.12.1, beside the open page). The
   assistant still changes nothing itself and keeps the read-only tools.
 
 ### 6.7 An agent's change to the open whiteboard

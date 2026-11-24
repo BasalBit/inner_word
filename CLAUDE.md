@@ -36,7 +36,7 @@ names ("Working rules", "Saved names keep their old spelling").
 | `crates/innerword-vim-mode` | GPUI | Glue that attaches the `innerword-vim` engine to an `Editor` (key interception, caret style, command line, status). |
 | `crates/innerword-comments` | GPUI | Comments panel: threads, composer, replies, resolve, navigation. |
 | `crates/innerword-spell` | GPUI | Spell checking: the spell service behind a trait (the macOS system checker `NSSpellChecker`, and a fake built from word lists for the tests of every crate) and the `SpellChecker` entity that attaches to an `Editor` and keeps its spelling marks current (what is on screen first, the rest in slices while idle, one paragraph per edit), with the rows for the context menu, the actions and the queries the Vim keys need. |
-| `crates/innerword-library` | GPUI | `Library` model (the single owner of the store, emits change events; `Library::change_outside` is the one way for code that works on the store itself, the app carrying out an agent's request, to make a change and have the same events emitted; `put_image` and `touch_image` store and keep the bytes of images and tell nobody; `create_page`, `save_page` and `put_file` for pages; `create_board` and `save_board`, compare-and-swap, for whiteboards) and the library sidebar panel (rows, the trash and the drag ghost carry the item's `DocumentKind`: a page's row has a globe, a whiteboard's its own icon, `item_icon`; files dropped on the panel are `LibraryPanelEvent::DropPaths` with the folder under them; New Whiteboard in the library's menu, its + menu and a folder row's, named in place, once the app gave it the scene of an empty one, `set_new_board_content`; `NewBoard`, `new_board_command` and `TREE_KEY_CONTEXT` for its row in the list of shortcuts). |
+| `crates/innerword-library` | GPUI | `Library` model (the single owner of the store, emits change events; `Library::change_outside` is the one way for code that works on the store itself, the app carrying out an agent's request, to make a change and have the same events emitted; `put_image` and `touch_image` store and keep the bytes of images and tell nobody; `create_page`, `save_page` and `put_file` for pages; `create_board` and `save_board`, compare-and-swap, for whiteboards) and the library sidebar panel (rows, the trash and the drag ghost carry the item's `DocumentKind`: a page's row has a globe, a whiteboard's its own icon, `item_icon`; the toast of a folder trashed or duplicated counts what it holds by kind, "1 page", "2 whiteboards", "3 items" when mixed, `rows::items_in`; files dropped on the panel are `LibraryPanelEvent::DropPaths` with the folder under them; New Whiteboard in the library's menu, its + menu and a folder row's, named in place, once the app gave it the scene of an empty one, `set_new_board_content`; `NewBoard`, `new_board_command` and `TREE_KEY_CONTEXT` for its row in the list of shortcuts). |
 | `crates/innerword-keymap` | pure Rust | The keyboard shortcuts as data: keystroke text in one normal form (a key bound in two spellings is one key), the defaults in order, the user's changes as the one stored value, the keymap to install in an order that keeps precedence, guard rails and conflicts as a typed verdict about the rows the app lists (two rows under one place name are in one place; the commands of a part of the app that is not shown hold no key), the shortcuts file (export, and an import plan that says what is wrong with a key it cannot read). |
 | `crates/innerword-keymap-ui` | GPUI | "Keyboard shortcuts" as it is seen (`KeymapView`): the list of every key grouped by place, the search by name, by place and by key, changing a key (it waits for the next keystroke), the verdict in words, the row menu, the import preview. It shows and asks; the app does. |
 | `crates/innerword-app` | GPUI bin `inner-word` | Window and workspace shell, command palette, quick open, library search, settings (the app's and the open document's), version history, the keymap (the defaults every crate bound, the user's changes installed over them, their storage, the rows of "Keyboard shortcuts", the export and import of the shortcuts file), status bar, autosave, export flow (with the PDF export, `pdf_export.rs`: a document or a folder made of the pages Print makes, written into the file chosen first), the zoom of the text (its commands, where it is kept, life size, the pinch), Print (the command, the pages made in slices, where a job goes: the macOS print panel, a recorder in a test, a directory in a scripted run; the same job of pages makes a PDF export), images (the provider the editor gets over the library, with its own connection to `images.db` so that nothing large is read or written on the main thread; the app's look at the system pasteboard; the pictures for the exporters and for a print; the collector of bytes nothing names), the native menu bar, the menus of the title and the status bar, the single-instance guard, the spelling settings and the language picker, the Agents panel, agents that write while the app is open (the listener of `innerword-agent`'s channel, and what a request does in the window), the assistant in the app (whether it is there, its settings, its two chats mounted, what they are given and what is applied to the text, an answer's drawing on the open whiteboard or as a new whiteboard, `workspace/assistant_draw.rs`), pages (an open page is a second kind of open item: WebKit's view above GPUI's view, its focus, keys, overlays, find, zoom, theme, print and export; the page engine, WebKit or the fake of the tests; File > Import Page… and drops, with the note, Cancel and the report), whiteboards (the web item's other half, `PageSession::item`, `WebItem::Board`: Excalidraw in the same view with its bridge, the autosave compare-and-swap, the page asked at every deliberate end, `end_then` and `quit::request`, the recovery file, the shape library, the Add commands and Mermaid, its keys and the fixed bindings that keep GPUI off Excalidraw's, its PDF, Print and its pages in a folder's PDF, an agent's change taken in by the base rule; `boards.rs`, `workspace/board.rs`, `workspace/board_pdf.rs`, `board_steps.rs`). Mounts everything above. |
@@ -350,7 +350,7 @@ the side chat over a whiteboard in `assistant.rs`, New Whiteboard in `context_me
 `mouse.rs` and `keybindings.rs`; an answer's drawing is in `boards.rs` (`mod drawings`: on
 the open whiteboard, its undo, the keyboard, the version, the ids, placement, the palette,
 the answer's menu and button) and `assistant.rs` (`mod drawings`: a new whiteboard from an
-answer over a document, each item's prompt), an agents' run that loses its Undo to one in
+answer over a document and over a page, each item's prompt), an agents' run that loses its Undo to one in
 `live.rs`.
 
 **Tests never ask the Mac's dictionary** (its answers differ between macOS versions, and
@@ -457,10 +457,13 @@ whiteboard, only when one of its buttons is pressed. Every message spends the us
   and its system prompt says what such an item is. A page too long to send whole goes as
   its beginning and its end (it has no headings to make an outline of). `cmd-3` and the
   side chat's commands work over a page (`Workspace::open_item_id`); Insert at Caret and
-  Replace Selection are off (no caret, no selection), Copy works; the conversation is the
-  page's own (`assistant.conversation.<id>`); its empty state and its composer say "Ask
-  about this page" (`DocumentRef::with_kind`, `ItemKind`), as a whiteboard's say
-  "whiteboard". The quick chat does not open on a page: its key says so in a toast and
+  Replace Selection are off (no caret, no selection), Copy works, and New Whiteboard makes
+  an answer's drawing into a new whiteboard beside the page, as over a document
+  ("Drawings." below); the conversation is the page's own (`assistant.conversation.<id>`);
+  its empty state and its composer say "Ask about this page" (`DocumentRef::with_kind`,
+  `ItemKind`), as a whiteboard's say "whiteboard", and the chip of the open item in the
+  context row has the icon of its kind (`ItemKind::icon`: the globe of a page, the
+  whiteboard's icon) and a tooltip that names the kind. The quick chat does not open on a page: its key says so in a toast and
   names the side chat's key.
 - **Whiteboards.** With a whiteboard open the side chat is sent the listing of its elements
   (one per line with its id, position, size and text, `Scene::listing`) in place of the
@@ -494,7 +497,7 @@ whiteboard, only when one of its buttons is pressed. Every message spends the us
   again"), an unknown key and more than 2,000 entries make it unusable when it is read.
   **The chat never shows the JSON**: each block is one italic line the app writes from
   it, the counts first ("Drawing: adds an ellipse and an arrow; changes the rectangle
-  “API”."; over a document "… (new whiteboard “Who serves whom”)."; "Drawing that cannot be
+  “API”."; over a document or a page "… (new whiteboard “Who serves whom”)."; "Drawing that cannot be
   used: …"; "Drawing…" while it is written; a second block's line ends "Drawn together with
   the drawing above."; with the open whiteboard's names, "…; the whiteboard has no api." for
   an id of a change or a removal it does not have; **an answer that was drawn reads as it
@@ -508,11 +511,13 @@ whiteboard, only when one of its buttons is pressed. Every message spends the us
   elsewhere). The
   system prompt follows the open item (`DrawingTarget`, on the panel's `DocumentRef`, so each
   item's conversation starts with its own prompt): a whiteboard adds "Drawing on the open
-  whiteboard", a document "Drawing a new whiteboard" (draw only when asked), a page, nothing
-  open or no page engine nothing. Insert, Replace and Copy take the answer without its
+  whiteboard", a document "Drawing a new whiteboard" (draw only when asked), a page the
+  same section in a page's words (`DrawingTarget::NewWhiteboardBesidePage`: "beside the
+  page; the page itself stays as it is", never "the document", with a worked example of
+  its own that a test draws), nothing open or no page engine nothing. Insert, Replace and Copy take the answer without its
   blocks. **The writer applies it**: the first button under the answer and the last item of
   its menu, `cmd-shift-d` in the side chat (the marked answer, else the latest), the palette
-  ("New whiteboard from answer" over a document, "Draw answer on whiteboard" while a
+  ("New whiteboard from answer" over a document or a page, "Draw answer on whiteboard" while a
   whiteboard is open, and in the list of shortcuts "Draw answer (on the whiteboard, or as a
   new whiteboard)", `DRAW_ANSWER_TITLE`, which "draw" finds; left
   out where nothing can be drawn; with the side chat closed or behind the comments the first
@@ -555,22 +560,26 @@ whiteboard, only when one of its buttons is pressed. Every message spends the us
     the flush itself started (a stale save merged) makes the press "The whiteboard is taking
     in another change." too. The converter's refusal is "Nothing was drawn: …", naming the
     list of the entry ("the element at index 1 of add (id): …", "the change at index 0 of
-    update (label): …", `DrawError::Entry`), and offers the empty composer "Your drawing
+    update (label): …", `DrawError::Entry`; a type with its article, "an arrow needs x",
+    `with_article` in `innerword-board`'s `skeleton/fields.rs`), and offers the empty composer "Your drawing
     could not be used: … Please write it again."
-  - **Over a document** ("New Whiteboard"; only a drawing that only adds): a new whiteboard
-    in the document's folder (at the root when the document or a folder above it is in the
-    trash), titled with the block's `title`, else "<document title> (drawing)", else
-    "Drawing", opened with the keyboard on its canvas and fitted to the drawing; its own chat
-    says "Drawn from an answer about “Chapter 2”." until its first message; the toast "Made
-    the whiteboard “Who serves whom” in Part one from the answer." has **Back to “Chapter
-    2”** (the keyboard's way back is Quick Open; the toast goes when the document is opened
-    any way, or the new whiteboard is trashed or deleted, `back_toast_follows`). No version,
-    no Undo (Trash removes it).
+  - **Over a document or a page** ("New Whiteboard"; only a drawing that only adds; a page
+    since 0.12.1): a new whiteboard at the end of the folder of the document or the page (at
+    the root when it or a folder above it is in the trash, or the folder is gone), titled
+    with the block's `title`, else "<its title> (drawing)", else "Drawing", opened with the
+    keyboard on its canvas and fitted to the drawing; its own chat says "Drawn from an
+    answer about “Chapter 2”." until its first message; the toast "Made the whiteboard “Who
+    serves whom” in Part one from the answer." has **Back to “Chapter 2”**, which reopens
+    the document or the page (the keyboard's way back is Quick Open; the toast goes when the
+    item is opened any way, `open_document` and `open_page`, or the new whiteboard is
+    trashed or deleted, `back_toast_follows`). No version, no Undo (Trash removes it). The
+    page is never changed.
   - **What a drawing cannot do**: change anything but the open whiteboard or make one new
     whiteboard, happen without the writer's press, bring a picture, read a path, fetch an
     address, or link anything but `http`, `https` and `mailto`; the assistant keeps its twelve
-    read-only tools. Over a page, with nothing open, without a page engine or on a whiteboard
-    that cannot be drawn on there is no button and the key says why.
+    read-only tools. With nothing open, without a page engine or on a whiteboard that
+    cannot be drawn on there is no button and the key says why ("Open a document or a page
+    to make a whiteboard from the answer." where nothing is open).
   - **Scripted runs**: a run with `INNER_WORD_AUTOMATION` prints one line per drawing,
     `[automation] draw: 2 added, 1 changed, 0 removed, version kept, placed as written (it
     names what is there), change 1.3 ms, window 0.3 ms, adopt answered in 5 ms, keyboard to
@@ -1270,7 +1279,7 @@ replaces the selection with it, `cmd-enter` inserts it (below the selection in t
 chat, at the caret from the side chat). In the side chat also `cmd-opt-n` (new chat),
 `cmd-opt-k` (clear), `cmd-shift-a` (add a document or a folder as context) and
 `cmd-shift-d` (draw the answer: on the open whiteboard, or as a new whiteboard beside the
-open document; "Drawings" in "The assistant").
+open document or page; "Drawings" in "The assistant").
 
 `cmd-opt-c` has a second meaning in one place: inside the find bar it switches "case
 sensitive" (the bar shows the hint), and `cmd-opt-w` "whole word".
@@ -2627,8 +2636,8 @@ the shape library, closing and quitting), `workspace/board_pdf.rs` (its PDF),
   `.excalidraw` and `.excalidrawlib` files, a library per whiteboard, agents and the shape
   library, exports other than one PDF, a dark PDF, a whiteboard in a Markdown, DOCX or
   plain-text export, a picture in an answer's drawing, a drawing for another whiteboard
-  than the open one, the quick chat's drawings, an answer's drawing over a page, elbow
-  arrows, inline shapes,
+  than the open one, the quick chat's drawings, an answer's drawing on a page itself (over
+  a page it makes a new whiteboard), elbow arrows, inline shapes,
   element links and a line that binds from agents, kerning in the converter's text widths
   (a shape fitted to a short kerned label is a few pixels too wide until Excalidraw
   measures again; design 7.1), a picture from an address on the web, a zoom of the app's kept for a

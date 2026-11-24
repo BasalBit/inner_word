@@ -89,7 +89,8 @@ Both are optional. Inner Word works fully without either.
 - **The assistant.** A quick chat at the selection (`cmd-j`) and a side chat (`cmd-3`) that
   advise. An answer changes a document only when you press one of its buttons. Beside a
   whiteboard the side chat can answer with a drawing, which Draw (`cmd-shift-d`) puts on
-  the canvas as one step of undo, with a version kept first. The
+  the canvas as one step of undo, with a version kept first. Beside a document or a saved
+  web page, New Whiteboard makes the drawing into a new whiteboard. The
   assistant runs on Claude Code today, through your own sign-in and plan. Other engines are
   planned. It appears only when Claude Code is installed, and it can be switched off in the
   settings.

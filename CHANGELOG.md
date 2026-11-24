@@ -7,6 +7,30 @@ The Writer.
 
 ## [Unreleased]
 
+## [0.12.1] - 2026-11-24
+
+The assistant's drawings beside a saved web page, and a side chat whose message wraps at
+the width of its field.
+
+### Added
+
+- Beside a saved web page, an answer with a drawing has New Whiteboard, as beside a
+  document (`cmd-shift-d` in the side chat, or "New whiteboard from answer" in the
+  palette): it makes a whiteboard with the drawing in the page's folder and opens it, and
+  the note has a button back to the page. The page itself is never changed.
+
+### Fixed
+
+- In the assistant's side chat, a message that runs onto more lines now wraps at the width
+  of the field, and the field grows to show every line. Before, the text wrapped at about
+  half the field and its last lines were drawn below it.
+- Trashing or duplicating a folder names what it holds by kind ("1 page", "2 whiteboards",
+  "3 items" when they are mixed). Before, a page or a whiteboard was counted as a document.
+- When the assistant's drawing or an agent's element is refused, the reason says "an
+  arrow", "an ellipse" and "an image" where it said "a arrow", "a ellipse" and "a image".
+- In the side chat, the chip of the open item has the icon of its kind (a globe for a page,
+  the whiteboard icon for a whiteboard), and its tooltip names the kind.
+
 ## [0.12.0] - 2026-11-24
 
 The assistant draws on whiteboards.
@@ -288,7 +312,8 @@ The first public release of Inner Word.
   comments, Vim mode, find and replace, the command palette, export to Markdown, DOCX and
   plain text, and an ad-hoc signed disk image.
 
-[Unreleased]: https://github.com/BasalBit/inner_word/compare/v0.12.0...HEAD
+[Unreleased]: https://github.com/BasalBit/inner_word/compare/v0.12.1...HEAD
+[0.12.1]: https://github.com/BasalBit/inner_word/compare/v0.12.0...v0.12.1
 [0.12.0]: https://github.com/BasalBit/inner_word/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/BasalBit/inner_word/compare/v0.10.1...v0.11.0
 [0.10.1]: https://github.com/BasalBit/inner_word/compare/v0.10.0...v0.10.1

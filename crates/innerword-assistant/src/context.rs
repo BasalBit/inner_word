@@ -90,7 +90,7 @@ impl OpenKind {
     }
 
     /// What the item is called in a sentence: "document", "page", "whiteboard".
-    fn noun(&self) -> &'static str {
+    pub fn noun(&self) -> &'static str {
         match self {
             OpenKind::Text => "document",
             OpenKind::Page { .. } => "page",

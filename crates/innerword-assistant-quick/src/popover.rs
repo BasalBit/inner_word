@@ -9,7 +9,7 @@ use gpui::{
 };
 use innerword_assistant::{
     AssistantEvent, Availability, Backend, BackendInfo, Catalog, ChatSession, MessageId, Mode,
-    Role, Selection, Transcript,
+    OpenKind, Role, Selection, Transcript,
 };
 use innerword_assistant_ui::{
     AnswerAction, AnswerStyle, ChatKeys, ChooseEffort, ChooseModel, Composer, ComposerEvent,
@@ -422,7 +422,7 @@ impl QuickChat {
         if self.privacy_notice && notices.is_empty() {
             notices.push((
                 QuickNotice::Privacy,
-                Notice::privacy(&self.info, Mode::Quick),
+                Notice::privacy(&self.info, Mode::Quick, &OpenKind::Text),
             ));
         }
         if let Some(text) = self.open.as_ref().and_then(|open| open.session.notice()) {

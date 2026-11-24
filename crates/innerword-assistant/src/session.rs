@@ -541,13 +541,20 @@ impl std::fmt::Debug for ChatSession {
 }
 
 /// What the user is told once, before the first message is sent: where the text goes
-/// and what it costs. `info` is the backend's.
-pub fn privacy_notice(info: &crate::backend::BackendInfo, mode: Mode) -> String {
+/// and what it costs. `info` is the backend's; `open` is the item open beside the side
+/// chat, which it names ("the open page"), since the side chat sends it with every
+/// message. The quick chat sends the selection alone, and names nothing open.
+pub fn privacy_notice(
+    info: &crate::backend::BackendInfo,
+    mode: Mode,
+    open: &crate::context::OpenKind,
+) -> String {
     let what = match mode {
-        Mode::Quick => "Your question and the text you have selected are",
-        Mode::Side => {
-            "Your messages, the open document and what the assistant reads from your library are"
-        }
+        Mode::Quick => "Your question and the text you have selected are".to_string(),
+        Mode::Side => format!(
+            "Your messages, the open {} and what the assistant reads from your library are",
+            open.noun()
+        ),
     };
     format!(
         "{what} sent to {vendor} through your {name} sign-in, and each message counts \

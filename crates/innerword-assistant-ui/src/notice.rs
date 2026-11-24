@@ -16,7 +16,7 @@
 //! what to do.
 
 use gpui::{App, ClickEvent, Div, SharedString, Window, div, prelude::*, px};
-use innerword_assistant::{AssistantError, BackendInfo, Mode, privacy_notice};
+use innerword_assistant::{AssistantError, BackendInfo, Mode, OpenKind, privacy_notice};
 use innerword_ui::{
     Icon, IconName,
     theme::{RADIUS_MD, SPACE_1, SPACE_2, ThemeColors, UI_TEXT_SM},
@@ -106,9 +106,10 @@ impl Notice {
     }
 
     /// What the user is told once, before the first message: where the
-    /// text goes and what it costs.
-    pub fn privacy(info: &BackendInfo, mode: Mode) -> Self {
-        Self::info("Where your text goes", privacy_notice(info, mode)).action("OK")
+    /// text goes and what it costs. `open` is the item open beside the side
+    /// chat, which it names (the quick chat names nothing open).
+    pub fn privacy(info: &BackendInfo, mode: Mode, open: &OpenKind) -> Self {
+        Self::info("Where your text goes", privacy_notice(info, mode, open)).action("OK")
     }
 
     /// Both sentences as one line (what tests and scripted runs read).

@@ -539,13 +539,23 @@ fn closing_and_dropping_a_chat_end_its_conversation() {
 #[test]
 fn the_first_notice_says_where_the_text_goes() {
     let fake = FakeBackend::new();
-    let quick = privacy_notice(&fake.info(), Mode::Quick);
+    let quick = privacy_notice(&fake.info(), Mode::Quick, &OpenKind::Board);
     assert_eq!(
         quick,
         "Your question and the text you have selected are sent to Fake Vendor through your Fake Agent \
          sign-in, and each message counts against your Fake Agent plan. Nothing is sent before you send a message."
     );
-    let side = privacy_notice(&fake.info(), Mode::Side);
-    assert!(side.contains("the open document"));
+    let side = privacy_notice(&fake.info(), Mode::Side, &OpenKind::Text);
+    assert!(side.contains("Your messages, the open document and"));
     assert!(side.contains("what the assistant reads from your library"));
+    // The side chat names what is open: it sends that with every message.
+    let page = OpenKind::Page { source_url: None };
+    assert!(
+        privacy_notice(&fake.info(), Mode::Side, &page)
+            .contains("Your messages, the open page and")
+    );
+    assert!(
+        privacy_notice(&fake.info(), Mode::Side, &OpenKind::Board)
+            .contains("Your messages, the open whiteboard and")
+    );
 }

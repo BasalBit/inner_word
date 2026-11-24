@@ -64,8 +64,8 @@ use gpui::{
 };
 use innerword_assistant::{
     Attachment, AttachmentKind, Availability, Backend, BackendInfo, Catalog, ChatSession, Drawing,
-    DrawingProblem, DrawingTarget, MessageId, Mode, OpenDocument, Role, Selection, ToolServer,
-    Transcript, answer_drawing, drawing_blocks, drawing_fits, without_drawings,
+    DrawingProblem, DrawingTarget, MessageId, Mode, OpenDocument, OpenKind, Role, Selection,
+    ToolServer, Transcript, answer_drawing, drawing_blocks, drawing_fits, without_drawings,
 };
 use innerword_ui::{Toast, toast::show_toast};
 
@@ -134,6 +134,17 @@ pub enum ItemKind {
     Page,
     /// A whiteboard.
     Whiteboard,
+}
+
+impl ItemKind {
+    /// The engine's kind of the item, for the words that name it.
+    fn open_kind(self) -> OpenKind {
+        match self {
+            ItemKind::Document => OpenKind::Text,
+            ItemKind::Page => OpenKind::Page { source_url: None },
+            ItemKind::Whiteboard => OpenKind::Board,
+        }
+    }
 }
 
 /// The document that is open beside the side chat: whose conversation is
@@ -655,7 +666,7 @@ impl AssistantPanel {
         if self.privacy_notice && notices.is_empty() {
             notices.push((
                 PanelNotice::Privacy,
-                Notice::privacy(&self.info, Mode::Side),
+                Notice::privacy(&self.info, Mode::Side, &self.item_kind().open_kind()),
             ));
         }
         if let Some(text) = self.chat.session.notice() {
@@ -1616,17 +1627,23 @@ impl AssistantPanel {
         cx.notify();
     }
 
-    /// What an empty conversation shows, and the composer's placeholder, for
-    /// the open item.
-    fn sync_empty_state(&mut self, cx: &mut Context<Self>) {
-        let kind = match &self.document {
+    /// What the open item is, for the words that name it: the empty state,
+    /// the composer's placeholder, the note about where the text goes.
+    fn item_kind(&self) -> ItemKind {
+        match &self.document {
             // A whiteboard is one also where its host did not say so.
             Some(_) if self.drawing_target() == DrawingTarget::OpenWhiteboard => {
                 ItemKind::Whiteboard
             }
             Some(document) => document.kind,
             None => ItemKind::Document,
-        };
+        }
+    }
+
+    /// What an empty conversation shows, and the composer's placeholder, for
+    /// the open item.
+    fn sync_empty_state(&mut self, cx: &mut Context<Self>) {
+        let kind = self.item_kind();
         let note = self
             .document
             .as_ref()

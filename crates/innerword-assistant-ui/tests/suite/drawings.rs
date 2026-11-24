@@ -13,7 +13,7 @@ use innerword_assistant::{
 use innerword_assistant_ui::{
     ACTION_COPY, ACTION_DRAW, ACTION_INSERT, ActionState, ApplyKind, AssistantPanelEvent,
     DRAWING_UNAVAILABLE, DRAWN_ALREADY, DocumentRef, DrawAnswer, ItemKind, MADE_ALREADY,
-    NO_ANSWER_YET, NO_DRAWING, ONLY_A_DRAWING, PanelArea, STILL_WRITTEN,
+    NO_ANSWER_YET, NO_DRAWING, ONLY_A_DRAWING, PanelArea, PanelNotice, STILL_WRITTEN,
 };
 
 use super::support::{
@@ -804,8 +804,24 @@ fn over_a_whiteboard_the_empty_chat_says_what_it_is_for(cx: &mut TestAppContext)
         assert!(list.empty_state().unwrap().note.is_empty());
     });
 
-    // A page says "page", in the empty state and the composer alike; and a
-    // whiteboard that cannot be drawn on now is still a whiteboard.
+    // A page says "page", in the empty state, the composer and the note about
+    // where the text goes alike; and a whiteboard that cannot be drawn on now
+    // is still a whiteboard.
+    ws.panel
+        .update(cx, |panel, cx| panel.set_privacy_notice(true, cx));
+    let sent = |ws: &PanelFixture, cx: &mut VisualTestContext| {
+        ws.panel.read_with(cx, |panel, _| {
+            let notices = panel.notices();
+            assert_eq!(notices[0].0, PanelNotice::Privacy);
+            let advice = notices[0].1.advice.to_string();
+            advice
+                .split(" and what the assistant reads")
+                .next()
+                .unwrap_or_default()
+                .to_string()
+        })
+    };
+    assert_eq!(sent(&ws, cx), "Your messages, the open document");
     let placeholder = |ws: &PanelFixture, cx: &mut VisualTestContext| {
         ws.panel.read_with(cx, |panel, cx| {
             let list = panel.messages().read(cx);
@@ -830,6 +846,7 @@ fn over_a_whiteboard_the_empty_chat_says_what_it_is_for(cx: &mut TestAppContext)
     let (title, words) = placeholder(&ws, cx);
     assert_eq!(title, "Ask about this page");
     assert_eq!(words, "Ask about this page");
+    assert_eq!(sent(&ws, cx), "Your messages, the open page");
     open_item(
         &ws,
         DocumentRef::new(13, "Plan")
@@ -840,6 +857,7 @@ fn over_a_whiteboard_the_empty_chat_says_what_it_is_for(cx: &mut TestAppContext)
     let (title, words) = placeholder(&ws, cx);
     assert_eq!(title, "Ask about this whiteboard");
     assert_eq!(words, "Ask about this whiteboard");
+    assert_eq!(sent(&ws, cx), "Your messages, the open whiteboard");
 }
 
 fn ws_last(ws: &PanelFixture, cx: &App) -> MessageId {

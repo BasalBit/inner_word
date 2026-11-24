@@ -8,8 +8,9 @@ it:
 
 - over an open **whiteboard**: "Draw on Whiteboard" adds shapes, arrows, text and frames,
   changes elements by id and removes elements by id, as one step of Excalidraw's undo;
-- over a text **document**: "New Whiteboard from Answer" makes a new whiteboard beside the
-  document, in its folder, with the drawing on it.
+- over a text **document** or a **page**: "New Whiteboard from Answer" makes a new
+  whiteboard beside it, in its folder, with the drawing on it (over a page since 0.12.1,
+  section 15).
 
 What does not change: the assistant advises and the writer applies (nothing happens until
 a button, its key or its command); the assistant keeps the twelve read-only tools and no
@@ -29,11 +30,11 @@ This is the design for three builders working in parallel on fixed interfaces (s
 | 3 | What the chat shows for a block | Never the JSON. Each block is replaced in the shown answer by one line in italics that the app writes, its counts first: "Drawing: adds 2 ellipses and 3 arrows; changes the rectangle “API”; removes a picture; links to example.com." (over a document the title after the counts: "… (new whiteboard “Who serves whom”)."), its problem ("Drawing that cannot be used: …"), or "Drawing…" while it is still being written. Every word of the model's in it (a title, a label, a host) is escaped Markdown. |
 | 4 | Streaming | The button is offered only under an answer that is not being written and whose blocks are closed and read. |
 | 5 | Who reads the block | `innerword-board` owns the format (`Drawing`, `Drawing::from_json`, `draw`); `innerword-assistant` finds the blocks and reads them with it (a new edge `assistant → board`: pure, no cycle, already in its build through `mcp → agent → board`); `innerword-assistant-ui` asks `innerword-assistant` only; the app applies with `innerword-board`. |
-| 6 | The prompts | The side chat's system prompt is chosen by the open item: a whiteboard adds the section "Drawing on the open whiteboard", a document "Drawing a new whiteboard", a page and nothing add nothing. At most 4,600 and 3,600 characters (about 1,150 and 900 tokens, in every request of the conversation, cached), each with one worked example that a test draws on a listing made by `Scene::listing`. The target travels with the item (`DocumentRef`), so each chat starts with its own prompt. |
+| 6 | The prompts | The side chat's system prompt is chosen by the open item: a whiteboard adds the section "Drawing on the open whiteboard", a document "Drawing a new whiteboard", a page the same section in a page's words (section 15), nothing adds nothing. At most 4,600 and 3,600 characters (about 1,150 and 900 tokens, in every request of the conversation, cached), each with one worked example that a test draws on a listing made by `Scene::listing`. The target travels with the item (`DocumentRef`), so each chat starts with its own prompt. |
 | 7 | Applying on an open whiteboard | As a restored version is applied (6.5 of the whiteboard design): marked "under way" at the press, collect, then in one update everything checked again, flush, `innerword_board::draw` on the stored scene, and only when it changes something: a version labelled "Before the assistant's drawing" and the save compare-and-swap in one closure (the version deleted again when the save fails), `adopt` the delta with `undoable: true` (one step of Excalidraw's undo, the base rule against a gesture made meanwhile); the keyboard goes to the canvas and the toast with Undo comes **when the view answered** that adopt. |
 | 8 | Ids that are gone | A removal of an element that is gone is left out (it is gone). A change of a gone element, or an element that names one (an arrow's end, a frame's child, in `add` or in `update`), draws nothing and the toast names the ids. An id the answer gives a new element that the whiteboard has is renamed (`api` → `api-2`, free against everything, at most 64 characters) with its references inside `add`. A change that sets what an element has is left out (the agents' rule, moved into `innerword-board`); a drawing left with nothing draws nothing and says so. |
 | 9 | Placement | As written, except a drawing that stands on its own (only `add`, naming nothing on the whiteboard): when it would cover the drawing or lie outside the view, it is moved as a whole to the free place in view nearest to where it was written; when no place in view is free, beside the drawn area, and the view zooms to fit. The view is the page's status (scroll and zoom) and the page element's size. |
-| 10 | New Whiteboard from Answer | In the document's folder (the root when the document or its folder is in the trash), titled with the block's `title` (else "<document title> (drawing)", "Drawing" for an untitled document), opened with the keyboard on its canvas; the document's conversation stays the document's, and the toast has "Back to “Chapter 2”". Offered only for a drawing that only adds; `update` or `remove` over a document disable the button with a reason. |
+| 10 | New Whiteboard from Answer | Over a document, and over a page in the same way (section 15). In the document's folder (the root when the document or its folder is in the trash), titled with the block's `title` (else "<document title> (drawing)", "Drawing" for an untitled document), opened with the keyboard on its canvas; the document's conversation stays the document's, and the toast has "Back to “Chapter 2”". Offered only for a drawing that only adds; `update` or `remove` over a document disable the button with a reason. |
 | 11 | Keys and commands | One action `assistant::DrawAnswer`, key `cmd-shift-d` in the side chat (`AssistantPanel` only; the marked answer, else the latest). Button "Draw" (tooltip "Draw on Whiteboard") over a whiteboard, "New Whiteboard" (tooltip "New Whiteboard from Answer") over a document, first in the button row and last in the answer's menu (so `enter enter` on a marked answer stays Insert at Caret); palette "New whiteboard from answer", renamed "Draw answer on whiteboard" while a whiteboard is open, and left out where no drawing can be applied; with the side chat not shown the palette command only brings it with the answer marked, and the next one draws; no menu bar item (Insert, Replace and Copy have none either). The list of shortcuts gains one row "In the assistant's chats" and the shortcuts file one entry; C derives the counts in a scripted run (expected 443 rows, 412 without the assistant, 425 entries). |
 | 12 | Insert, Replace, Copy | Take the answer without its drawing blocks; disabled under an answer that is nothing but a drawing. |
 | 12a | An answer drawn before | Recorded in the stored conversation (`Message::drawn_at`). Its button reads "Draw Again" ("New Whiteboard Again"), with a tooltip that says what a second time does; the key and the command say so in a toast at the first press and draw at a second press of the same answer within five seconds. |
@@ -211,7 +212,8 @@ item offers, and the system prompt follows it:
 |---|---|---|---|
 | a whiteboard | yes | `OpenWhiteboard` | "Drawing on the open whiteboard" (3.3) |
 | a document | yes | `NewWhiteboard` | "Drawing a new whiteboard" (3.4) |
-| a page, nothing, or any item without a page engine | | `None` | none |
+| a page | yes | `NewWhiteboardBesidePage` | "Drawing a new whiteboard" (3.4) in a page's words (section 15) |
+| nothing, or any item without a page engine | | `None` | none |
 
 `ChatSession` holds the target (`with_drawing_target`, `set_drawing_target`), builds the
 system prompt from it when it starts a conversation (`prompts::side_system_prompt(tools,
@@ -588,13 +590,16 @@ pub const DRAWING_INFO: &str = "whiteboard";
 /// What drawings a side chat offers, by its open item (section 3.1).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum DrawingTarget {
-    /// None: the open item is a page, nothing is open, or whiteboards cannot be shown.
+    /// None: nothing is open, or whiteboards cannot be shown.
     #[default]
     None,
     /// The open item is a whiteboard: a drawing adds to it, changes and removes elements.
     OpenWhiteboard,
     /// The open item is a document: a drawing that only adds makes a new whiteboard.
     NewWhiteboard,
+    /// The open item is a page: as `NewWhiteboard`, with the prompt in a page's words
+    /// (section 15; added in 0.12.1).
+    NewWhiteboardBesidePage,
 }
 
 impl DrawingTarget {
@@ -1011,7 +1016,7 @@ pub const DRAW_AGAIN_WITHIN: Duration = Duration::from_secs(5);
   with a drawing it only brings the chat, as `NewChat` does.
 - **`workspace/mod.rs`** (the palette, `toggle_command_palette`): after the existing
   arms, one more: `if self.drawing_target_now(cx).0 == DrawingTarget::None {
-  left_out.push(gpui::Action::name(&DrawAnswer)) }`. That covers a page, nothing open
+  left_out.push(gpui::Action::name(&DrawAnswer)) }`. That covers nothing open
   (the existing code has no arm of its own for nothing open: with no item
   `commands_not_for_the_open_page` leaves nothing out, and this line does), no page
   engine, and a whiteboard that cannot be drawn on. `board_title_of` names it "Draw answer
@@ -1281,7 +1286,8 @@ elements near the view.
 
 `Workspace::new_board_from_answer(drawing)`:
 
-1. The open item is a document (`session`), whiteboards can be shown (`pages::engine`), and
+1. The open item is a document (`session`) or, since 0.12.1, a page (`page`, not a
+   whiteboard; section 15), whiteboards can be shown (`pages::engine`), and
    the drawing has no changes (`has_changes()` false: the panel offers it only so, and the
    app checks again: "This drawing changes elements of a whiteboard: open that whiteboard
    and ask there.").
@@ -1322,7 +1328,7 @@ disabled with the reason (2.4).
 
 ## 7. Keyboard and mouse
 
-| Way | Over a whiteboard | Over a document |
+| Way | Over a whiteboard | Over a document or a page |
 |---|---|---|
 | The button under an answer with a drawing (first in the row; on the latest answer always, on older ones under the pointer and on the marked one) | "Draw", tooltip "Draw on Whiteboard" ("Draw Again" once drawn) | "New Whiteboard", tooltip "New Whiteboard from Answer" ("New Whiteboard Again") |
 | The answer's menu (right-click on the answer; `enter`, `ctrl-enter`, `shift-f10` on the marked message) | "Draw on Whiteboard" with its key, last in the menu | "New Whiteboard from Answer" with its key, last |
@@ -1330,10 +1336,10 @@ disabled with the reason (2.4).
 | Palette (category "Assistant") | "Draw answer on whiteboard": with the side chat shown it draws; with the chat closed or behind the comments the first run brings it with the answer marked and says to run it again, the second draws | "New whiteboard from answer", the same |
 | Menu bar | none (as Insert, Replace and Copy) | none |
 
-- **Over a page, with nothing open, without a page engine, or on a whiteboard that cannot
-  be drawn on**: no button, the palette leaves the command out, and the key says the
-  host's reason (`board_not_ready_sentence` on such a whiteboard) or "Open a whiteboard
-  or a document to draw the answer."
+- **With nothing open, without a page engine, or on a whiteboard that cannot be drawn
+  on**: no button, the palette leaves the command out, and the key says the host's reason
+  (`board_not_ready_sentence` on such a whiteboard) or "Open a whiteboard, a document or a
+  page to draw the answer." (Over a page as over a document since 0.12.1, section 15.)
 - **One action**, `assistant::DrawAnswer`: its meaning follows the open item, as "Rename
   document" is "Rename whiteboard" on a whiteboard. The list of shortcuts shows the base
   title "New whiteboard from answer" (keywords "draw", "whiteboard"), as it shows "Rename
@@ -1563,7 +1569,8 @@ cannot do:
 - `insert_at_caret_leaves_the_drawing_out`
 - `the_side_chat_is_told_the_drawing_format_of_its_open_item` (`last_started` per kind: a
   document, a whiteboard, a page)
-- the palette: the title per item, left out over a page; `commands_of_the_assistant` counts
+- the palette: the title per item ("New whiteboard from answer" over a page too, since
+  0.12.1); `commands_of_the_assistant` counts
   one more by itself
 
 `tests/suite/keybindings.rs` and `pages.rs`: the counts of 7, the row's place, and
@@ -1747,7 +1754,8 @@ by calling `changes_that_change` from `innerword-board` (A2).
 
 - **Not in this version**: a picture in an answer's drawing (not even one the whiteboard
   has, as a new element; moving or resizing an existing picture by id works); a drawing for
-  another whiteboard than the open one; drawings over a page and in the quick chat; a
+  another whiteboard than the open one; drawings in the quick chat (over a page they make a
+  new whiteboard since 0.12.1, section 15; a page is never drawn on); a
   drawing that updates a whiteboard from a document's chat; selecting the drawn elements
   after an adopt (the glue's `adopt` does not select; `insertElements` does, without
   removals or the base rule); scrolling the view to a drawing without changing the zoom
@@ -1879,3 +1887,67 @@ The acceptance run's screenshots showed six things; each was fixed and has a tes
 - **Over a page the side chat says "page"**: "Ask about this page" in its empty state and
   its composer (`DocumentRef::with_kind`, `ItemKind`); a whiteboard that cannot be drawn on
   now is still a whiteboard there.
+
+## 15. Over a page (0.12.1)
+
+A page (a saved web page, `kind = 'page'`) is read by the side chat and cannot be changed.
+From 0.12.1 an answer's drawing over a page makes a new whiteboard beside it, exactly as
+over a document (section 6): the page is never drawn on and never changed.
+
+- **The target**: `DrawingTarget::NewWhiteboardBesidePage`, which `DrawingTarget::of` gives
+  a page where whiteboards can be shown (`Workspace::drawing_target_now`: the open page,
+  not a whiteboard, with a page engine; without one `None` with
+  `boards::not_shown_sentence`). It behaves as `NewWhiteboard` everywhere
+  (`DrawingTarget::makes_a_new_whiteboard`: `drawing_fits` refuses `update` and `remove`,
+  the line has the title, "New Whiteboard" and its menu item, `cmd-shift-d`, the palette's
+  "New whiteboard from answer", "New Whiteboard Again", the state line's `draw=new`); a
+  variant rather than a flag, so the target that travels with the item (`DocumentRef`)
+  says which words the prompt has, and a page's conversation starts with its own prompt.
+- **The prompt**: the section of 3.4 in a page's words (`prompts::page_section`; the
+  document's and the page's share `new_whiteboard_section`, the document's text is
+  unchanged). It says what may be drawn as "something that the page shows or describes
+  (its steps, its parts and how they fit together, a timeline, who does what)", where the
+  whiteboard goes as "a new whiteboard beside the page; the page itself stays as it is",
+  and never says "document" (a test holds that). Its example is a page's steps: "Getting
+  started", three labelled rectangles joined by two arrows, which a test reads with
+  `answer_drawing` and draws with `innerword_board::draw` on an empty scene ("Drawing: adds
+  3 rectangles and 2 arrows (new whiteboard “Getting started”)."). 3,488 characters, within
+  the 3,600 of the document's section (3.5). The base prompt's two clauses change as for a
+  document: its sentences about a page ("It cannot be changed: you are given the text it
+  showed … do not offer text to put into it.") stay true, since a drawing makes a
+  whiteboard and changes nothing of the page.
+- **The app** (`Workspace::new_board_from_answer`): the item is the open document or else
+  the open page (`self.page`, not a whiteboard: there a drawing goes on it). Everything of
+  section 6 holds with "the page" for "the document": its folder at its end, the root when
+  the page or a folder above it is in the trash or its folder is gone; the drawing's
+  title, else "<page title> (drawing)", else "Drawing" for a page shown "Untitled"; opened
+  with the keyboard on its canvas, fitted; the origin note "Drawn from an answer about
+  “Harbour guide”."; the toast "Made the whiteboard “…” in Part one from the answer." with
+  "Back to “Harbour guide”", which reopens the page with its conversation. **The toast
+  goes when the page is opened any way**: `Workspace::open_page` calls
+  `back_toast_follows` (opening a page returned before the call in `open_document`). No
+  version, no Undo.
+- **Words**: "Open a document or a page to make a whiteboard from the answer."
+  (`OPEN_A_DOCUMENT`), "Open a whiteboard, a document or a page to draw the answer."
+  (`DRAWING_UNAVAILABLE`), "a drawing can be used only over a whiteboard, a document or a
+  page" (`DrawingProblem::NotHere`).
+- **What does not change**: nothing happens without the writer's press; no picture, no
+  path read, no address fetched; links only `http`, `https`, `mailto`; the twelve
+  read-only tools; the quick chat does not open on a page. No command was added: the list
+  of shortcuts has 443 rows with the assistant (counted in a scripted run, `keys:cmd-/;
+  state` with `INNER_WORD_ASSISTANT_FAKE=ready`), 412 without it (`pages.rs` holds that
+  count), and the file's entries are unchanged.
+- **Tests**: `innerword-assistant` (`DrawingTarget::of` a page, `drawing_fits` and the
+  line beside a page, the page's section in its prompt only, never "document", its budget,
+  its example drawn, a page's chat started with its prompt); `innerword-assistant-ui`
+  (`over_a_page_an_answer_makes_a_new_whiteboard`: the button, the menu item, the key, the
+  event's target, the prompt); `innerword-app` (`tests/suite/assistant.rs`, `mod drawings`:
+  `an_answer_over_a_page_makes_a_new_whiteboard_in_its_folder`,
+  `the_back_to_toast_goes_when_the_page_is_opened_another_way`,
+  `a_page_in_the_trash_makes_its_whiteboard_at_the_root`,
+  `over_a_page_only_a_drawing_that_adds_is_made`,
+  `over_a_page_without_a_page_engine_no_drawing_is_offered`, the page in
+  `each_item_starts_its_chat_with_its_own_prompt` and in
+  `the_palette_names_the_command_by_the_open_item`). A scripted run over an imported page
+  with the fake engine: `draw: new board:3 “Getting started” in the library, 5 added`, the
+  whiteboard open with `focus=board`.

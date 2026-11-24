@@ -1202,7 +1202,8 @@ grown by `m`:
    rectangles that meet the view grown by `m` are tested.
 3. Otherwise (the group is larger than the view, or the view is full): where it was
    written when that is free, else beside the drawn area (`x = drawn.right + gap`, `y =
-   drawn.top`); `in_view: false`, and the app zooms to fit (5.1).
+   drawn.top`); `in_view: false`, and the view is brought to it after the adopt (section
+   14: scrolled, zoomed out only when it cannot be seen whole).
 
 Without a view (unknown; a new whiteboard): step 1's "in the view" is dropped and steps 2
 are skipped: as written when free, else beside the drawn area, `in_view: false`, and no
@@ -1831,3 +1832,50 @@ Two reviewers read the built feature. What changed:
 - **An id the whiteboard does not have** is said in the line before the press, with the
   names the host gives: "…; the whiteboard has no api." (2.3).
 - **With no answer yet** the key says "There is no answer to draw yet." (`NO_ANSWER_YET`).
+
+### After the acceptance run
+
+The acceptance run's screenshots showed six things; each was fixed and has a test.
+
+- **A drawn answer's line reads as it did when it was drawn.** The line was worked out
+  against the live scene, so after Draw removed "Old note" it read "…; removes old; the
+  whiteboard has no old." The press keeps the names the line gives what the drawing
+  changes, removes or takes a link from, as the whiteboard had them before the drawing
+  (`names_the_drawing_uses` over the flushed scene), with the answer
+  (`Message::drawn_names`, stored with the conversation); the line of a drawn answer reads
+  them first, then the live names (`NamesWhenDrawn`). An id that was not on the whiteboard
+  at the press is still said to be missing. After `cmd-z` the line keeps the names of the
+  press. The history note is unchanged (2.3, 3.5).
+- **What a drawing added and changed is brought into view.** A drawing that names what is
+  there stays where it was written (5.3), and "Postgres" landed under Excalidraw's side bar,
+  half outside the canvas. After the adopt (the page runs its calls in order) the app asks
+  `innerword_board::reveal` whether the bounds of `Drawn::shown_ids` (what was added with
+  its labels, and what was changed) are seen whole in the canvas less Excalidraw's islands
+  (`EXCALIDRAW_ISLANDS`: 72 at the top, 52 at the right, 64 at the bottom, 12 at the left, CSS
+  pixels, measured in the run's window with a little room), and when not, sends the zoom
+  call with a scroll (`calls::Zoom::View`, `{"to", "scrollX", "scrollY"}`; the glue's
+  `zoom` sets the three in one `updateScene`, `dist/` rebuilt): at the same zoom as little
+  as brings it in, `REVEAL_MARGIN` (24) from the edges, and only a drawing that cannot be
+  seen whole at the zoom zooms out, to fit, centred; never in. The elements never move for
+  it, and the toast and its Undo are as before. This replaces the zoom to fit of a drawing
+  put beside the drawing (5.3, step 3): that one zooms out to the new elements only.
+- **The black band over a modal on a whiteboard was holes that overlap.** The view's
+  mask (`WebPage::set_holes`) is a path of the view's bounds and every hole, filled
+  even-odd: a point two holes share is not cut. The toast "Drew on “Plan”…" stood over the
+  version history's footer, its hole met the modal's, and the covered view (dimmed, dark)
+  showed in the band where they met; it stayed there at 1 s (a scripted run on a whiteboard,
+  a toast, a second toast, then the version history), so it was not a stale hole. The holes
+  are made disjoint before the path is built (`frame::disjoint`: bands between their edges,
+  the spans in each merged). Pages had the same mask and are fixed with it.
+- **The toast with "Back to “Chapter 2”" goes when it has nothing more to do**: when the
+  document is opened any way (`Workspace::open_document`, which quick open, the library and
+  the button all go through) and when the new whiteboard is trashed (also with its folder)
+  or deleted (`back_toast_follows`, `AssistantState::back_toast`).
+- **The palette's first run marks the answer where it is seen.** The mark of the message
+  list was drawn only while the keyboard was in the list. `MessageList::mark_shown` (what
+  `AssistantPanel::show_answer` does) draws it while the keyboard stays where it was (on
+  the canvas), and the key and the command draw that answer, until another message is
+  marked or a new one comes; drawing it takes the mark away (7).
+- **Over a page the side chat says "page"**: "Ask about this page" in its empty state and
+  its composer (`DocumentRef::with_kind`, `ItemKind`); a whiteboard that cannot be drawn on
+  now is still a whiteboard there.

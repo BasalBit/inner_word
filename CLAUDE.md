@@ -458,8 +458,10 @@ its buttons is pressed. Every message spends the user's own plan in the engine.
   its beginning and its end (it has no headings to make an outline of). `cmd-3` and the
   side chat's commands work over a page (`Workspace::open_item_id`); Insert at Caret and
   Replace Selection are off (no caret, no selection), Copy works; the conversation is the
-  page's own (`assistant.conversation.<id>`). The quick chat does not open on a page: its
-  key says so in a toast and names the side chat's key.
+  page's own (`assistant.conversation.<id>`); its empty state and its composer say "Ask
+  about this page" (`DocumentRef::with_kind`, `ItemKind`), as a whiteboard's say
+  "whiteboard". The quick chat does not open on a page: its key says so in a toast and
+  names the side chat's key.
 - **Whiteboards.** With a whiteboard open the side chat is sent the listing of its elements
   (one per line with its id, position, size and text, `Scene::listing`) in place of the
   Markdown, after `innerword_assistant::BOARD_PREFACE` ("The open item is a whiteboard: a
@@ -495,7 +497,11 @@ its buttons is pressed. Every message spends the user's own plan in the engine.
   “API”."; over a document "… (new whiteboard “Who serves whom”)."; "Drawing that cannot be
   used: …"; "Drawing…" while it is written; a second block's line ends "Drawn together with
   the drawing above."; with the open whiteboard's names, "…; the whiteboard has no api." for
-  an id of a change or a removal it does not have), every word of the model's in it escaped
+  an id of a change or a removal it does not have; **an answer that was drawn reads as it
+  did when it was drawn**: the names of what it changed and removed, as the whiteboard had
+  them before the drawing, are kept with it, `Message::drawn_names`, stored, read first by
+  `NamesWhenDrawn`, so it never says "removes old; the whiteboard has no old"), every word
+  of the model's in it escaped
   (the note an older drawing becomes in the history is plain text: ids as written). A link
   is named by its host as the converter reads it (`innerword_board::link_host`; it refuses
   an `http(s)` link with a backslash or without a host, which a browser would open
@@ -510,7 +516,10 @@ its buttons is pressed. Every message spends the user's own plan in the engine.
   whiteboard is open, and in the list of shortcuts "Draw answer (on the whiteboard, or as a
   new whiteboard)", `DRAW_ANSWER_TITLE`, which "draw" finds; left
   out where nothing can be drawn; with the side chat closed or behind the comments the first
-  run only brings it with the answer marked and says to run it again); no menu bar item. An
+  run only brings it with the answer marked and says to run it again: the mark is drawn
+  while the keyboard stays where it was, and the key and the second run draw that answer,
+  `MessageList::mark_shown`, until another message is marked or a new one comes); no menu
+  bar item. An
   answer drawn before (`Message::drawn_at`, stored) reads "Draw Again", and its key and
   command draw at a second press within 5 s.
   - **On the open whiteboard** ("Draw"): one drawing at a time (`drawing_pending`, an adopt
@@ -521,8 +530,8 @@ its buttons is pressed. Every message spends the user's own plan in the engine.
     nothing and names the ids; an id the whiteboard has is renamed `api-2`; a change that sets
     what an element has is left out; a drawing that stands on its own, only `add` and naming
     nothing on the whiteboard, is moved as a whole to the free place in view nearest to where
-    it was written, else beside the drawing and the view zooms to fit; the view is the page's
-    scroll and zoom and the page element's size, `board_view_bounds`), and only when it
+    it was written, else beside the drawing; the view is the page's scroll and zoom and the
+    page element's size, `board_view_bounds`), and only when it
     changes something a version "Before the assistant's drawing" and the save
     compare-and-swap are one outcome (the version is deleted again when the save fails), the
     answer is marked drawn, an agents' run on the whiteboard loses its Undo
@@ -532,6 +541,12 @@ its buttons is pressed. Every message spends the user's own plan in the engine.
     answered that adopt** (`PendingDrawing`, answered from `board_adopted`,
     `board_adopt_failed` and `forget_adopt`), when it is still in the side chat or on the
     canvas: `cmd-z` right after takes the whole drawing out, never the writer's last gesture.
+    **What it added and changed is brought into view** when some of it lies past the canvas
+    or under Excalidraw's own islands (`EXCALIDRAW_ISLANDS`: the tool bar, the side bar, the
+    bottom bar): the zoom call with a scroll after the adopt (`calls::Zoom::View`,
+    `innerword_board::reveal` over `Drawn::shown_ids`), at the same zoom as little as brings
+    it in, zoomed out (never in) only when it cannot be seen whole; the elements never move
+    for it.
     The toast: "Drew on “Plan”: 2 elements added, 1 changed. The whiteboard as it was is kept
     as a version.", with what was gone already, the conflicts the view reports, the
     converter's warnings and where it was put, and **Undo** (one step, while the canvas has
@@ -548,7 +563,9 @@ its buttons is pressed. Every message spends the user's own plan in the engine.
     "Drawing", opened with the keyboard on its canvas and fitted to the drawing; its own chat
     says "Drawn from an answer about “Chapter 2”." until its first message; the toast "Made
     the whiteboard “Who serves whom” in Part one from the answer." has **Back to “Chapter
-    2”** (the keyboard's way back is Quick Open). No version, no Undo (Trash removes it).
+    2”** (the keyboard's way back is Quick Open; the toast goes when the document is opened
+    any way, or the new whiteboard is trashed or deleted, `back_toast_follows`). No version,
+    no Undo (Trash removes it).
   - **What a drawing cannot do**: change anything but the open whiteboard or make one new
     whiteboard, happen without the writer's press, bring a picture, read a path, fetch an
     address, or link anything but `http`, `https` and `mailto`; the assistant keeps its twelve
@@ -2298,7 +2315,9 @@ page), `workspace/page_import.rs` and `page_report.rs` (adding pages in the app)
   fields), so no page command can be given a bare letter. GPUI draws under the view, so
   what it draws over the page is seen through **holes** in the view (drawn and hit-tested:
   a click on a toast's button reaches GPUI), where the last frame drew it: toasts, and a
-  modal or a context menu. A modal or a context menu also **covers** the view
+  modal or a context menu. The view's mask is filled even-odd, so the holes are made
+  disjoint first (`innerword_web` `frame::disjoint`): where a toast's hole met a modal's,
+  0.11.0 showed the covered view as a dark band over the modal. A modal or a context menu also **covers** the view
   (`WebPage::set_cover`): it stays shown and live, under the modal's backdrop drawn
   natively (none for a menu), and takes no event (`hitTest:` nil, no pointer move, no key
   equivalent, `_setIgnoresAllEvents:`), so a press outside the overlay reaches GPUI and

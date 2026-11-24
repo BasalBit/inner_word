@@ -221,7 +221,8 @@ impl WebPage {
     }
 
     /// In the view's own points, top left origin; empty: no mask. A hole is not drawn
-    /// (a layer mask with the even-odd rule) and not hit (`hitTest:` answers nil
+    /// (a layer mask with the even-odd rule, over the holes made disjoint first, so a
+    /// toast's hole over a modal's is cut too) and not hit (`hitTest:` answers nil
     /// inside it, so AppKit asks GPUI's view, which lies under it).
     pub fn set_holes(&self, holes: &[Rect]) {
         {
@@ -328,7 +329,7 @@ impl WebPage {
             let flipped: BOOL = msg_send![self.web_view, isFlipped];
             let path = CGPathCreateMutable();
             CGPathAddRect(path, std::ptr::null(), bounds);
-            for hole in &holes {
+            for hole in &frame::disjoint(&holes) {
                 let mut rect = frame::to_appkit(*hole, bounds.size.height, flipped != NO);
                 rect.origin.x += bounds.origin.x;
                 rect.origin.y += bounds.origin.y;

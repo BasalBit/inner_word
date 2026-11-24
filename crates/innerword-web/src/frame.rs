@@ -31,6 +31,61 @@ pub(crate) fn in_a_hole(holes: &[Rect], x: f64, y: f64) -> bool {
     })
 }
 
+/// The area the holes cover together, as rectangles that do not overlap: the mask is
+/// filled with the even-odd rule, under which a point two holes share is not a hole (a
+/// toast over a modal showed the covered view in a band where the two met). Bands from
+/// one edge of a rectangle to the next, each cut where the holes in it begin and end;
+/// empty rectangles are left out.
+pub(crate) fn disjoint(holes: &[Rect]) -> Vec<Rect> {
+    let holes: Vec<&Rect> = holes
+        .iter()
+        .filter(|hole| hole.width > 0. && hole.height > 0.)
+        .collect();
+    if holes.len() < 2 {
+        return holes.into_iter().copied().collect();
+    }
+    let mut edges: Vec<f64> = holes
+        .iter()
+        .flat_map(|hole| [hole.y, hole.y + hole.height])
+        .collect();
+    edges.sort_by(f64::total_cmp);
+    edges.dedup();
+    let mut out: Vec<Rect> = Vec::new();
+    for band in edges.windows(2) {
+        let (top, bottom) = (band[0], band[1]);
+        let mut spans: Vec<(f64, f64)> = holes
+            .iter()
+            .filter(|hole| hole.y <= top && hole.y + hole.height >= bottom)
+            .map(|hole| (hole.x, hole.x + hole.width))
+            .collect();
+        spans.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let mut merged: Vec<(f64, f64)> = Vec::new();
+        for (start, end) in spans {
+            match merged.last_mut() {
+                Some(last) if start <= last.1 => last.1 = last.1.max(end),
+                _ => merged.push((start, end)),
+            }
+        }
+        for (start, end) in merged {
+            // The same span as the band above: one rectangle grows down.
+            if let Some(above) = out
+                .iter_mut()
+                .find(|r| r.x == start && r.x + r.width == end && r.y + r.height == top)
+            {
+                above.height = bottom - above.y;
+            } else {
+                out.push(Rect {
+                    x: start,
+                    y: top,
+                    width: end - start,
+                    height: bottom - top,
+                });
+            }
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -67,5 +122,49 @@ mod tests {
         // An empty rectangle holds nothing.
         assert!(!in_a_hole(&holes, 0., 0.));
         assert!(!in_a_hole(&[], 1., 1.));
+    }
+
+    /// How many of `rects` hold the point: the even-odd mask cuts where it is odd.
+    fn count(rects: &[Rect], x: f64, y: f64) -> usize {
+        rects
+            .iter()
+            .filter(|r| x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height)
+            .count()
+    }
+
+    #[test]
+    fn holes_that_overlap_are_cut_once_where_they_meet() {
+        // A modal and a toast over its footer (the black band of 0.11.0's cover).
+        let modal = rect(160., 90., 820., 560.);
+        let toast = rect(270., 620., 500., 60.);
+        let second = rect(270., 690., 500., 40.);
+        let holes = [modal, toast, second, rect(5., 5., 0., 10.)];
+        let cut = disjoint(&holes);
+        for (x, y) in [
+            (300., 630.), // the toast over the modal
+            (300., 670.), // the toast below the modal
+            (200., 100.), // the modal alone
+            (300., 700.), // the second toast
+        ] {
+            assert_eq!(count(&cut, x, y), 1, "({x}, {y}) in {cut:?}");
+            assert!(in_a_hole(&holes, x, y));
+        }
+        for (x, y) in [(100., 630.), (300., 685.), (5., 6.), (990., 300.)] {
+            assert_eq!(count(&cut, x, y), 0, "({x}, {y}) in {cut:?}");
+        }
+        // No two rectangles share a point, and none is empty.
+        for (i, a) in cut.iter().enumerate() {
+            assert!(a.width > 0. && a.height > 0.);
+            for b in &cut[i + 1..] {
+                let apart = a.x + a.width <= b.x
+                    || b.x + b.width <= a.x
+                    || a.y + a.height <= b.y
+                    || b.y + b.height <= a.y;
+                assert!(apart, "{a:?} and {b:?}");
+            }
+        }
+        // One hole, or holes apart, are as they came.
+        assert_eq!(disjoint(&[toast]), vec![toast]);
+        assert_eq!(disjoint(&[toast, second]).len(), 2);
     }
 }
